@@ -1,0 +1,25 @@
+[package]
+name = "rift-diff"
+description = "Diff text files of any size under a hard memory limit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rift"
+path = "src/main.rs"
+
+[dependencies]
+rift-core = { path = "../rift-core" }
+clap.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

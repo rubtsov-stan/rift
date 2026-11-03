@@ -1,0 +1,15 @@
+[package]
+name = "rift-tui"
+description = "Terminal interface for Rift"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rift-core = { path = "../rift-core" }
+
+[lints]
+workspace = true

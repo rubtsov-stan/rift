@@ -1,0 +1,15 @@
+[package]
+name = "rift-gen"
+description = "Deterministic test data generator for Rift"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "rift-core"
+description = "Memory-bounded line diff engine for very large files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+memchr.workspace = true
+xxhash-rust.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+divan.workspace = true
+
+[lints]
+workspace = true
