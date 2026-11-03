@@ -1,7 +1,7 @@
 //! Command-line entry point for Rift.
 #![deny(unsafe_code)]
 
-mod file_source;
+mod source;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -9,8 +9,12 @@ use std::process::ExitCode;
 use anyhow::Context;
 use clap::Parser;
 use rift_core::Source;
+use rift_core::alloc::CountingAlloc;
 
-use crate::file_source::FileSource;
+use crate::source::FileSource;
+
+#[global_allocator]
+static ALLOC: CountingAlloc = CountingAlloc;
 
 /// Diff text files of any size under a hard memory limit.
 #[derive(Debug, Parser)]

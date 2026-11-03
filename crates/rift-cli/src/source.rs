@@ -5,7 +5,7 @@ use std::io;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
-use rift_core::Source;
+use rift_core::{ByteOffset, Bytes, Source};
 
 /// A file opened for positional reads.
 ///
@@ -33,12 +33,12 @@ impl FileSource {
 }
 
 impl Source for FileSource {
-    fn len(&self) -> u64 {
-        self.len
+    fn len(&self) -> Bytes {
+        Bytes(self.len)
     }
 
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
-        self.file.read_at(buf, offset)
+    fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
+        self.file.read_at(buf, offset.0)
     }
 }
 
@@ -80,10 +80,10 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         tmp.write_all(b"line one\nline two\n").unwrap();
         let src = FileSource::open(tmp.path()).unwrap();
-        assert_eq!(src.len(), 18);
+        assert_eq!(src.len(), Bytes(18));
         let mut buf = [0u8; 8];
-        assert_eq!(src.read_at(&mut buf, 9).unwrap(), 8);
+        assert_eq!(src.read_at(&mut buf, ByteOffset(9)).unwrap(), 8);
         assert_eq!(&buf, b"line two");
-        assert_eq!(src.read_at(&mut buf, 18).unwrap(), 0);
+        assert_eq!(src.read_at(&mut buf, ByteOffset(18)).unwrap(), 0);
     }
 }
