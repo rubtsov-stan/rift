@@ -340,12 +340,24 @@ impl Diff<'_> {
         if pairs.is_empty() {
             return None;
         }
-        pairs.sort_unstable_by_key(|p| p[0]);
+        // Into A order by scattering over the dead records, cheaper than
+        // a sort: `scratch[ia] = ib`.
+        let (slots, rest) = self.ws.scratch.split_at_mut(a.len());
+        slots.fill(NONE);
+        for pr in pairs.iter() {
+            slots[pr[0] as usize] = pr[1];
+        }
+        pairs.clear();
+        for (ia, &ib) in slots.iter().enumerate() {
+            if ib != NONE {
+                pairs.push([ia as u32, ib]);
+            }
+        }
 
         // Patience sorting: `tails[k]` is the pair ending the shortest
         // increasing chain of length k+1, `prev` links each pair back.
         let p = pairs.len();
-        let (prev, rest) = self.ws.scratch.split_at_mut(p);
+        let (prev, rest) = rest.split_at_mut(p);
         let tails = &mut rest[..p];
         let mut len = 0;
         for (i, pr) in pairs.iter().enumerate() {
