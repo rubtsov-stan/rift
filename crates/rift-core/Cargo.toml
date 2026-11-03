@@ -8,15 +8,23 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+## Install-able global allocator that tracks current and peak heap.
+counting-alloc = []
+
 [dependencies]
 memchr.workspace = true
 xxhash-rust.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
+bumpalo.workspace = true
+itoa.workspace = true
+crossbeam-utils.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 divan.workspace = true
+imara-diff.workspace = true
 
 [lints]
 workspace = true
