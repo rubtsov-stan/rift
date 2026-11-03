@@ -321,7 +321,7 @@ impl Diff<'_> {
         for (r, (j, &h)) in recs[a.len()..].iter_mut().zip(b.iter().enumerate()) {
             *r = rec(h, j, 1);
         }
-        recs.sort_unstable_by_key(|r| (r[1], r[0]));
+        recs.sort_unstable_by_key(|r| u64::from(r[1]) << 32 | u64::from(r[0]));
 
         let pairs = &mut self.ws.pairs;
         pairs.clear();
