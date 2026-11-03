@@ -23,6 +23,7 @@ use std::sync::{Mutex, PoisonError};
 use std::thread;
 
 use memchr::memchr_iter;
+use rayon::slice::ParallelSliceMut;
 use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
@@ -270,7 +271,9 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
     for s in &mut samples {
         s.line += base(s.offset);
     }
-    samples.sort_unstable_by_key(|s| s.line);
+    // Workers append in arbitrary chunk order, so the runs interleave; a
+    // serial sort costs more than the parallel pass on small pairs.
+    samples.par_sort_unstable_by_key(|s| s.line);
 
     let interval = shared.interval.load(Ordering::Relaxed);
     let mut checkpoints = shared

@@ -31,10 +31,10 @@ fn sql_lines(size: usize) -> Vec<u8> {
     out
 }
 
-fn config(threads: usize) -> ScanConfig {
+fn config(threads: usize, level: u32) -> ScanConfig {
     ScanConfig {
-        level: 7,
-        sample_cap: 1 << 20,
+        level,
+        sample_cap: 1 << 21,
         checkpoint_interval: 2048,
         checkpoint_cap: 1 << 16,
         chunk: Bytes::mib(4),
@@ -42,11 +42,14 @@ fn config(threads: usize) -> ScanConfig {
     }
 }
 
-#[divan::bench(args = [1, 4, 8], sample_count = 10)]
-fn scan_threads(bencher: Bencher, threads: usize) {
+/// `(threads, stratum)`. Stratum 7 matches the spike table; stratum 0
+/// samples every line, the case of a small pair, where the final sort
+/// shows.
+#[divan::bench(args = [(1, 7), (4, 7), (8, 7), (1, 0), (8, 0)], sample_count = 10)]
+fn scan_threads(bencher: Bencher, (threads, level): (usize, u32)) {
     let data = sql_lines(SIZE);
     let budget = Budget::new(Bytes::mib(512));
-    let cfg = config(threads);
+    let cfg = config(threads, level);
     bencher
         .counter(BytesCount::new(data.len()))
         .bench(|| scan(&data[..], &budget, &cfg).unwrap());
