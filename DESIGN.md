@@ -150,6 +150,74 @@ benchmarks.
 `unsafe` is not needed for the MVP. It is allowed only where a profile proves
 the gain, with a `// SAFETY:` comment.
 
+## Module contracts
+
+Shared types live in `rift-core` and are frozen before parallel work starts.
+Every module below meets the others only through these types.
+
+**`LineNo`, `ByteOffset`, `Bytes`** (`types`). Zero-based line number,
+byte position and byte count, each a `u64` newtype so the compiler catches
+a mix-up. `LineHash` is the 64-bit xxh3 of a full line, terminator included:
+`a\n`, `a\r\n` and an unterminated `a` are three different lines, as in
+GNU diff.
+
+**`Source`** (`source`). Positional reads with a known length, modelled on
+`pread`: `read_at(buf, ByteOffset)` may return short, zero means end. The
+only way the core sees bytes. Implemented for `[u8]` in the core and for
+`File` in `rift-cli`.
+
+**`LineAccess`, `LineBuf`, `MemLines`** (`lines`). `read_lines(range, buf)`
+fills a caller-owned `LineBuf` with the bytes of consecutive lines,
+terminators included, reusing its two vectors, so a loop over lines
+allocates nothing after the first call. `MemLines` indexes a byte slice for
+tests. A trailing unterminated line counts as a line; an empty input has
+none.
+
+**`Budget`, `Half`, `Reservation`** (`budget`). The memory invariant as a
+type. `Budget::new(total)` gives each half `total / 2`. `try_reserve(half,
+bytes)` either returns a `Reservation` or `BudgetExceeded` with the bytes
+still available, and the counter never reads above the capacity, not even
+transiently. A reservation can `grow` and `shrink` and gives everything
+back on drop. Allocation on the data path happens only after a reservation.
+
+**`Sample`** (`sample`). `(hash, line, offset)`, 24 bytes, pinned by a
+const assertion. A 128 MiB half holds 5.6 million.
+
+**`Segment`, `SegmentStatus`** (`segment`). A pair of line ranges with the
+same meaning in both files. Consecutive segments tile both files without
+gaps or overlap; either range may be empty, never both. `Equal` means
+confirmed byte by byte, `Differs` means an exact local diff is possible,
+`Approx` means the local diff was cut short.
+
+**`Edit`, `Hunk`** (`edit`). `Equal { a, b, len }`, `Delete { a, len }`,
+`Insert { b, len }` in absolute line numbers. A hunk's edits are ordered
+and contiguous: walking them visits every A line of the segment once
+through `Equal` and `Delete`, every B line once through `Equal` and
+`Insert`, both in increasing order. Replaying them against A yields B. An
+`approx` hunk is still exact in that sense, only not minimal.
+
+**`DiffView`, `HunkState`, `Progress`** (`view`). What a front end sees:
+line counts, the segment list, `hunk(i)` returning `Ready`, `Pending` or
+`Approx` without blocking, a `done / total` progress, and `set_visible`
+with the A lines on screen so the scheduler can prioritize.
+
+**`Error`** (`error`). One enum for the crate: I/O, budget exceeded, line
+too long for its buffer, line out of range, invalid edit script.
+
+**Counting allocator** (`alloc`, feature `counting-alloc`). A wrapper over
+the system allocator with current and peak counters. `rift-cli` installs it
+as the global allocator; tests and `--summary` read the peak.
+
+### Sizing notes from the spike
+
+- The starting stratum `L` is chosen from file size with a pessimistic
+  bytes-per-line guess, and the scanner relies on in-place thinning when the
+  guess is wrong. At 82 bytes per line a 10 GiB pair already needs `L = 6`
+  for samples alone and `L = 7` once the anchor table and index share the
+  half.
+- Thread count is sized by per-line hashing cost, about 70 ns per short
+  line on one thread, not by disk bandwidth.
+
 ## Spike results
 
 Measured on 2026-11-03. Hardware: Apple M1 (4 performance + 4 efficiency
