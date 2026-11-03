@@ -349,7 +349,13 @@ impl Diff<'_> {
         let tails = &mut rest[..p];
         let mut len = 0;
         for (i, pr) in pairs.iter().enumerate() {
-            let k = tails[..len].partition_point(|&t| pairs[t as usize][1] < pr[1]);
+            // Nearly every pair extends the chain on real data, so test the
+            // tail first and binary search only when it does not.
+            let k = if len > 0 && pairs[tails[len - 1] as usize][1] < pr[1] {
+                len
+            } else {
+                tails[..len].partition_point(|&t| pairs[t as usize][1] < pr[1])
+            };
             prev[i] = if k > 0 { tails[k - 1] } else { NONE };
             tails[k] = i as u32;
             if k == len {
