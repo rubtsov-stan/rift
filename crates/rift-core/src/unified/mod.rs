@@ -1,0 +1,1 @@
+//! Streaming unified diff writer.
