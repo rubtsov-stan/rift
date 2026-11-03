@@ -149,3 +149,102 @@ benchmarks.
 
 `unsafe` is not needed for the MVP. It is allowed only where a profile proves
 the gain, with a `// SAFETY:` comment.
+
+## Spike results
+
+Measured on 2026-11-03. Hardware: Apple M1 (4 performance + 4 efficiency
+cores), 16 GiB RAM, internal SSD, macOS 27.0.1, rustc 1.97.1, release
+profile from the workspace, no `target-cpu=native`. The spike code is
+`crates/rift-core/examples/spike.rs`; data sets and derived files live
+outside the repository.
+
+### Data sets
+
+| Pair | Source | Lines | Bytes | B derived by |
+|---|---|---|---|---|
+| pagila | Pagila `pagila-data.sql` + `pagila-insert-data.sql` (pg_dump) | 245 628 | 32.6 MB | `spike mutate` seed 1, ratio 0.001 |
+| tlc | NYC TLC yellow taxi 2015-01, parquet converted to CSV with pyarrow | 12 741 036 | 1.32 GB | same |
+| gh | GH Archive 2024-01-15 hours 10 to 13, NDJSON | 1 054 597 | 3.74 GB | same |
+| gen-csv | `rift-gen --seed 1 --size 1G --profile csv` | 13 101 706 | 1.07 GB | generator manifest |
+| gen-sql | `rift-gen --seed 2 --size 1G --profile sql` | 13 287 347 | 1.07 GB | generator manifest |
+
+`spike mutate` applies insert, delete and modify in rotation at a given
+per-line probability, so the real pairs have 0.1% changed lines.
+
+### H1: anchor coverage
+
+Command: `spike anchors a b`. Stratum `L` keeps hashes whose low `L` bits
+are zero. A gap is the region between consecutive anchors after the longest
+increasing subsequence; its refinement is assumed to need 32 bytes per line
+of A plus B.
+
+Share of lines unique within one file, and unique in both:
+
+| Pair | unique in A | unique in both |
+|---|---|---|
+| pagila | 0.9954 | 0.9948 |
+| tlc | 1.0000 | 0.9993 |
+| gh | 1.0000 | 0.9994 |
+| gen-csv | 0.9936 | 0.9865 |
+| gen-sql | 0.9931 | 0.9859 |
+
+Anchors and gap sizes at the stratum a 256 MiB budget would force on a
+10 GiB pair (`L = 6`, see below), and at a far coarser one:
+
+| Pair | L | sample size (both files) | anchors in LIS | gap lines p50 / p99 / max | largest gap bytes |
+|---|---|---|---|---|---|
+| pagila | 6 | 0.2 MiB | 3 801 | 86 / 577 / 964 | 0.2 MiB |
+| tlc | 6 | 9.1 MiB | 198 584 | 86 / 591 / 1 536 | 0.1 MiB |
+| gh | 6 | 0.8 MiB | 16 498 | 88 / 578 / 1 206 | 2.6 MiB |
+| gen-csv | 6 | 9.3 MiB | 201 085 | 88 / 612 / 1 703 | 2.0 MiB |
+| gen-sql | 6 | 9.8 MiB | 204 968 | 88 / 608 / 1 720 | 1.9 MiB |
+| tlc | 14 | 0.04 MiB | 761 | 26 817 / 145 313 / 246 841 | 12.4 MiB |
+| gh | 14 | 0.00 MiB | 68 | 20 482 / 130 102 / 136 317 | 238.9 MiB |
+
+On every pair and every `L` from 0 to 14, 100% of lines fall in gaps whose
+refinement fits 16 MiB, let alone the 128 MiB half budget. The largest gap
+at `L = 14` is 246 841 lines, about 7.5 MiB of refinement memory. The
+generated pairs have 1 000-line gaps already at `L = 0`: those are the
+duplicated and low-uniqueness runs the generator plants on purpose.
+
+Budget check for the milestone target. The 10 GiB generated SQL pair has
+131.6 million lines per file. With 24-byte samples, `L = 6` gives
+4.1 million samples for both files, 99 MiB, under the 128 MiB skeleton half
+with room for the line index. `L = 7` gives 49 MiB.
+
+H1 holds on these data sets. The caveat: every set has a unique id per row,
+so this says nothing about dumps without one. The blind spot stays as
+described above, and shingle anchors stay after the MVP.
+
+### H2: scan throughput
+
+Command: `spike scan file`. Each line is found with `memchr` and hashed with
+xxh3-64. The parallel variant splits the file into 8 MiB chunks aligned to
+line ends. Baseline is `cat file > /dev/null` timed with `/usr/bin/time -p`.
+
+`purge` needs root, so the cold-cache run used eviction instead: the 10 GiB
+file was read after reading the other 10 GiB file of the pair twice, on a
+machine with 16 GiB of RAM. The two `cat` runs agree, which is consistent
+with both being cold.
+
+Cold page cache, 10 GiB generated SQL, 131.6 million lines of 82 bytes:
+
+| Run | Time | Throughput |
+|---|---|---|
+| cat | 3.30 s, 3.54 s | 3.25, 3.03 GB/s |
+| scan, 1 thread | 9.24 s | 1.16 GB/s |
+| scan, 2 threads | 5.67 s | 1.89 GB/s |
+| scan, 4 threads | 3.24 s | 3.32 GB/s |
+| scan, 8 threads | 3.13 s | 3.43 GB/s |
+
+Warm page cache:
+
+| File | cat | 1 thread | 8 threads |
+|---|---|---|---|
+| tlc, 104 bytes per line, 1.32 GB | 6.31 GB/s | 2.64 GB/s | 6.91, 8.23 GB/s |
+| gh, 3.5 KB per line, 3.74 GB | 5.59 GB/s | 5.17 GB/s | 7.64, 6.90 GB/s |
+
+H2 holds for the parallel scanner: with four or more threads it reads at
+disk speed. A single thread is CPU-bound on short lines at about 70 ns per
+line, 14 million lines per second, so the scanner must be parallel, as
+planned.
