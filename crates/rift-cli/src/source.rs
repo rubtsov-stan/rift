@@ -86,4 +86,51 @@ mod tests {
         assert_eq!(&buf, b"line two");
         assert_eq!(src.read_at(&mut buf, ByteOffset(18)).unwrap(), 0);
     }
+
+    #[test]
+    fn scans_a_file_like_memory() {
+        use rift_core::scan::{ScanConfig, scan};
+        use rift_core::{Budget, Half, LineAccess, LineBuf, MemLines};
+
+        let data: Vec<u8> = (0..5000)
+            .flat_map(|i| format!("row {i} {}\n", i % 97).into_bytes())
+            .collect();
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(&data).unwrap();
+        let src = FileSource::open(tmp.path()).unwrap();
+        let budget = Budget::new(Bytes::mib(64));
+        let cfg = ScanConfig {
+            level: 2,
+            sample_cap: 1 << 12,
+            checkpoint_interval: 64,
+            checkpoint_cap: 1 << 10,
+            chunk: Bytes(4096),
+            threads: 3,
+        };
+        let from_file = scan(&src, &budget, &cfg).unwrap();
+        let from_mem = scan(&data[..], &budget, &cfg).unwrap();
+        assert_eq!(from_file.index().line_count(), 5000);
+        assert_eq!(from_file.samples(), from_mem.samples());
+        assert_eq!(
+            from_file.index().checkpoints(),
+            from_mem.index().checkpoints()
+        );
+
+        let access = rift_core::index::IndexedLines::new(
+            &src,
+            from_file.index(),
+            &budget,
+            Half::Refine,
+            Bytes(4096),
+        )
+        .unwrap();
+        let mem = MemLines::new(&data);
+        let mut buf = LineBuf::new();
+        access
+            .read_lines(rift_core::LineNo(4321)..rift_core::LineNo(4325), &mut buf)
+            .unwrap();
+        for (k, line) in buf.iter().enumerate() {
+            assert_eq!(line, mem.line(4321 + k as u64).unwrap());
+        }
+    }
 }

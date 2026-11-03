@@ -28,3 +28,7 @@ imara-diff.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "scan"
+harness = false
