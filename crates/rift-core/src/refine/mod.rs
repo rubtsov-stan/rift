@@ -44,7 +44,7 @@ const MAX_DEPTH: usize = 32;
 /// Lines per side read in one `read_lines` call while verifying matches.
 /// The line buffers hold one block, so this times the longest line a
 /// reader returns whole bounds them.
-const VERIFY_LINES: usize = 64;
+pub(crate) const VERIFY_LINES: usize = 64;
 
 /// Not reached, in `u32` index arrays.
 const NONE: u32 = u32::MAX;
@@ -124,13 +124,13 @@ impl Refiner {
     ///
     /// Panics if the slice lengths do not match the segment ranges or a
     /// side has `u32::MAX` lines or more.
-    pub fn refine<L: LineAccess + ?Sized>(
+    pub fn refine<L: LineAccess + ?Sized, M: LineAccess + ?Sized>(
         &mut self,
         seg: &Segment,
         a: &[LineHash],
         b: &[LineHash],
         lines_a: &L,
-        lines_b: &L,
+        lines_b: &M,
         reservation: &mut Reservation,
     ) -> Result<Hunk> {
         assert_eq!(
@@ -408,11 +408,11 @@ impl Diff<'_> {
 /// bytes differ as a one-line replacement. That leaves the script valid
 /// and possibly not minimal without `approx`, which means cost: a 64-bit
 /// hash collision is a `2^-64` event.
-fn verify<L: LineAccess + ?Sized>(
+fn verify<L: LineAccess + ?Sized, M: LineAccess + ?Sized>(
     ws: &mut Workspace,
     seg: &Segment,
     lines_a: &L,
-    lines_b: &L,
+    lines_b: &M,
     buf_a: &mut LineBuf,
     buf_b: &mut LineBuf,
 ) -> Result<()> {
