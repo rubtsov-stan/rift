@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Progress, Segment, SegmentStatus};
 
-use crate::app::{App, Mode, Pos, Scratch, rows_in};
+use crate::app::{App, Mode, Pos, Scratch, anchor_at, row_of, rows_in};
 use crate::cache::LineCache;
 use crate::hidden_table::HIDDEN;
 use crate::minimap;
@@ -367,6 +367,17 @@ impl App<'_> {
         let mut first =
             (segs[start_seg].status != SegmentStatus::Equal).then(|| view.hunk(start_seg));
         let rows_here = rows_in(&segs[start_seg], first.as_ref());
+        // A refined hunk at the top shows the anchored line, and the
+        // anchor follows the top row from then on; a pending one keeps it
+        // until it is refined.
+        if let Some(HunkState::Ready(h) | HunkState::Approx(h)) = &first {
+            if let Some(off) = self.anchor.and_then(|a| row_of(h, a)) {
+                self.pos.off = off;
+            }
+            self.anchor = Some(anchor_at(h, self.pos.off.min(rows_here - 1)));
+        } else if first.is_none() {
+            self.anchor = None;
+        }
         self.pos.off = self.pos.off.min(rows_here - 1);
         let (len_a, len_b) = (view.len_a(), view.len_b());
         self.scratch.cache.begin();

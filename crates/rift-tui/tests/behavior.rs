@@ -528,3 +528,93 @@ fn a_failed_read_is_kept_for_the_window_and_retried_when_it_moves() {
     draw(&mut app, &mut term);
     assert_eq!(attempts(), 2, "retried once after the window moved away");
 }
+
+/// The screen as text, one string per row.
+fn rows_of(term: &Terminal<TestBackend>) -> Vec<String> {
+    let buf = term.backend().buffer();
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+        .collect()
+}
+
+/// Equal 0..40, a changed segment of A lines 40..55 (5 deleted, 10
+/// shared, 3 inserted) that starts pending, equal 55..110.
+fn pending_mock() -> Mock {
+    Mock::build(
+        &[
+            Spec::Equal(40),
+            Spec::Diff {
+                del: 5,
+                mid: 10,
+                ins: 3,
+            },
+            Spec::Equal(55),
+        ],
+        false,
+    )
+}
+
+#[test]
+fn rows_below_a_pending_hunk_stay_put_when_it_is_refined() {
+    let m = pending_mock();
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    draw(&mut app, &mut term);
+    // Top at A line 64, then a page up (9 rows) ends on the pending row,
+    // with line 56 under it.
+    chars(&mut app, "g64\nb");
+    draw(&mut app, &mut term);
+    let before = rows_of(&term);
+    assert!(before[3].contains("pending"), "{before:#?}");
+    assert!(before[4].contains(" 56 "), "{before:#?}");
+    while m.view.refine_next() {}
+    draw(&mut app, &mut term);
+    let after = rows_of(&term);
+    assert_eq!(after[4], before[4], "{after:#?}");
+}
+
+#[test]
+fn go_to_a_line_inside_a_pending_hunk_lands_on_it_once_refined() {
+    let m = pending_mock();
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    draw(&mut app, &mut term);
+    chars(&mut app, "g50\n");
+    draw(&mut app, &mut term);
+    assert!(rows_of(&term)[3].contains("pending"));
+    while m.view.refine_next() {}
+    draw(&mut app, &mut term);
+    let top = &rows_of(&term)[3];
+    assert!(top.contains(" 50 "), "{top}");
+    assert_eq!(last_visible(&m).start, 49);
+}
+
+#[test]
+fn an_evicted_hunk_comes_back_at_the_same_row() {
+    let m = Mock::build(
+        &[
+            Spec::Equal(40),
+            Spec::Diff {
+                del: 5,
+                mid: 10,
+                ins: 3,
+            },
+            Spec::Equal(55),
+        ],
+        true,
+    );
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    chars(&mut app, "g50\n");
+    draw(&mut app, &mut term);
+    let before = rows_of(&term)[3].clone();
+    assert!(before.contains(" 50 "), "{before}");
+    m.view.evict(1);
+    draw(&mut app, &mut term);
+    while m.view.refine_next() {}
+    draw(&mut app, &mut term);
+    assert_eq!(rows_of(&term)[3], before);
+}

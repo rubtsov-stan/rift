@@ -27,6 +27,19 @@ pub(crate) struct Pos {
     pub off: u64,
 }
 
+/// The line the top row should show inside a changed segment, kept across
+/// changes of the hunk's state: a pending hunk is one row and a refined
+/// one many, so a row offset alone would point elsewhere once it changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Anchor {
+    /// A line of A, 0-based: an equal or deleted row.
+    A(u64),
+    /// A line of B, 0-based: an inserted row.
+    B(u64),
+    /// The last row: the top was reached by scrolling up from below.
+    Last,
+}
+
 #[derive(Debug)]
 pub(crate) enum Mode {
     Normal,
@@ -51,6 +64,8 @@ pub struct App<'a> {
     pub(crate) a: &'a dyn LineAccess,
     pub(crate) b: &'a dyn LineAccess,
     pub(crate) pos: Pos,
+    /// What `pos.off` stands for when `pos.seg` is a changed segment.
+    pub(crate) anchor: Option<Anchor>,
     pub(crate) mode: Mode,
     pub(crate) message: &'static str,
     /// Segments that are not Equal, and the minimap weight of all segments.
@@ -79,6 +94,7 @@ impl<'a> App<'a> {
             a,
             b,
             pos: Pos::default(),
+            anchor: None,
             mode: Mode::Normal,
             message: "",
             diff_total,
@@ -124,6 +140,7 @@ impl<'a> App<'a> {
                 KeyCode::Enter => {
                     self.mode = Mode::Normal;
                     if let Some(line) = n {
+                        self.anchor = None;
                         self.goto_line(line);
                     }
                 }
@@ -133,12 +150,24 @@ impl<'a> App<'a> {
             return Action::Continue;
         }
         let page = u64::from(self.rows.max(2) - 1);
+        if matches!(
+            key.code,
+            KeyCode::Char('n' | 'p' | 'N' | ' ' | 'b') | KeyCode::PageDown | KeyCode::PageUp
+        ) {
+            self.anchor = None;
+        }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
             KeyCode::Char('n') => self.next_diff(),
             KeyCode::Char('p' | 'N') => self.prev_diff(),
             KeyCode::PageDown | KeyCode::Char(' ') => self.page_down(page),
-            KeyCode::PageUp | KeyCode::Char('b') => self.scroll_up(page),
+            KeyCode::PageUp | KeyCode::Char('b') => {
+                let from = self.pos.seg;
+                self.scroll_up(page);
+                if self.pos.seg < from && self.pending(self.pos.seg) {
+                    self.anchor = Some(Anchor::Last);
+                }
+            }
             KeyCode::Char('g' | ':') => self.mode = Mode::Goto(None),
             _ => {}
         }
@@ -170,6 +199,12 @@ impl<'a> App<'a> {
             Some(seg) => self.pos = Pos { seg, off: 0 },
             None => self.message = "no previous difference",
         }
+    }
+
+    /// Whether `seg` is a changed segment whose hunk is not ready.
+    fn pending(&self, seg: usize) -> bool {
+        self.view.segments()[seg].status != SegmentStatus::Equal
+            && matches!(self.view.hunk(seg), HunkState::Pending)
     }
 
     /// Rows a segment occupies. O(edits) for a refined hunk.
@@ -258,27 +293,56 @@ impl<'a> App<'a> {
         let s = &segs[seg];
         let off = if s.status == SegmentStatus::Equal {
             want.saturating_sub(s.a.start.0)
-        } else if let HunkState::Ready(h) | HunkState::Approx(h) = self.view.hunk(seg) {
-            let mut rows = 0;
-            let mut found = None;
-            for e in &h.edits {
-                match *e {
-                    rift_core::Edit::Equal { a, len, .. } | rift_core::Edit::Delete { a, len } => {
-                        if (a.0..a.0 + len).contains(&want) {
-                            found = Some(rows + (want - a.0));
-                            break;
-                        }
-                        rows += len;
-                    }
-                    rift_core::Edit::Insert { len, .. } => rows += len,
-                }
-            }
-            found.unwrap_or(0)
         } else {
+            // Resolved by the next frame, now or once the hunk is ready.
+            self.anchor = Some(Anchor::A(want));
             0
         };
         self.pos = Pos { seg, off };
     }
+}
+
+/// The row of a refined hunk that shows `anchor`, if any.
+pub(crate) fn row_of(h: &rift_core::Hunk, anchor: Anchor) -> Option<u64> {
+    let mut rows = 0;
+    for e in &h.edits {
+        let (side_a, start, len) = match *e {
+            rift_core::Edit::Equal { a, len, .. } | rift_core::Edit::Delete { a, len } => {
+                (true, a.0, len)
+            }
+            rift_core::Edit::Insert { b, len } => (false, b.0, len),
+        };
+        let line = match anchor {
+            Anchor::A(l) if side_a => Some(l),
+            Anchor::B(l) if !side_a => Some(l),
+            _ => None,
+        };
+        if let Some(l) = line
+            && (start..start + len).contains(&l)
+        {
+            return Some(rows + (l - start));
+        }
+        rows += len;
+    }
+    (anchor == Anchor::Last).then(|| rows.saturating_sub(1))
+}
+
+/// What row `off` of a refined hunk shows.
+pub(crate) fn anchor_at(h: &rift_core::Hunk, off: u64) -> Anchor {
+    let mut rows = 0;
+    for e in &h.edits {
+        let (len, anchor) = match *e {
+            rift_core::Edit::Equal { a, len, .. } | rift_core::Edit::Delete { a, len } => {
+                (len, Anchor::A(a.0 + off.saturating_sub(rows)))
+            }
+            rift_core::Edit::Insert { b, len } => (len, Anchor::B(b.0 + off.saturating_sub(rows))),
+        };
+        if off < rows + len {
+            return anchor;
+        }
+        rows += len;
+    }
+    Anchor::Last
 }
 
 /// Rows of a segment given its hunk state (`None` for an Equal segment). A
