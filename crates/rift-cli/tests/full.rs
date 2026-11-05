@@ -46,6 +46,15 @@ fn patchers() -> Vec<&'static str> {
 /// result is `b`.
 fn patch_gives_b(a: &Path, b: &Path, diff: &[u8]) {
     let want = fs::read(b).unwrap();
+    if diff.is_empty() {
+        // Nothing to apply; the system patch would not even write the
+        // output file.
+        assert!(
+            fs::read(a).unwrap() == want,
+            "empty diff of different files"
+        );
+        return;
+    }
     let found = patchers();
     assert!(!found.is_empty(), "no patch binary");
     for patcher in found {
@@ -262,4 +271,48 @@ fn a_single_1gib_line() {
         .status()
         .unwrap();
     assert!(same.success(), "patched A differs from B");
+}
+
+/// Lines a unified diff adds or removes, headers excluded.
+fn changed_lines(diff: &[u8]) -> u64 {
+    diff.split(|&c| c == b'\n')
+        .filter(|l| {
+            (l.starts_with(b"+") && !l.starts_with(b"+++"))
+                || (l.starts_with(b"-") && !l.starts_with(b"---"))
+        })
+        .count() as u64
+}
+
+/// Against `git diff --no-index --patience` on a corpus of small generated
+/// pairs: every rift diff patches A into B, and rift changes at most 10%
+/// more lines than git in total. Patience diff is not minimal either, and
+/// rift's anchors are a sample, so the scripts differ in detail.
+#[test]
+fn differential_against_git_patience() {
+    let (mut ours, mut git) = (0u64, 0u64);
+    let profiles = [Profile::Sql, Profile::Csv, Profile::Ndjson, Profile::Text];
+    for seed in 0..40u64 {
+        let profile = profiles[usize::try_from(seed).unwrap() % profiles.len()];
+        let p = generated(100 + seed, 64 << 10, profile, None);
+        let out = rift(&[], &p.a, &p.b);
+        assert!(out.status.code().is_some_and(|c| c <= 1), "{out:?}");
+        patch_gives_b(&p.a, &p.b, &out.stdout);
+        ours += changed_lines(&out.stdout);
+        let reference = Command::new("git")
+            .args([
+                "diff",
+                "--no-index",
+                "--patience",
+                "--no-color",
+                "--no-ext-diff",
+            ])
+            .arg(&p.a)
+            .arg(&p.b)
+            .output()
+            .unwrap();
+        assert!(reference.status.code().is_some_and(|c| c <= 1));
+        git += changed_lines(&reference.stdout);
+    }
+    eprintln!("changed lines: rift {ours}, git --patience {git}");
+    assert!(ours * 10 <= git * 11, "rift {ours} against git {git}");
 }
