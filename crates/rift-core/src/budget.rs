@@ -93,7 +93,7 @@ impl Inner {
         let counter = &self.used[half as usize];
         let mut used = counter.load(Ordering::Relaxed);
         loop {
-            if used + n > self.cap {
+            if used.checked_add(n).is_none_or(|total| total > self.cap) {
                 return Err(BudgetExceeded {
                     half,
                     requested: Bytes(n),
@@ -181,6 +181,16 @@ mod tests {
         b.try_reserve(Half::Refine, Bytes(100)).unwrap();
         drop(r);
         assert_eq!(b.used(Half::Skeleton), Bytes(0));
+    }
+
+    #[test]
+    fn a_request_that_overflows_u64_is_refused() {
+        let b = Budget::new(Bytes(100));
+        let _held = b.try_reserve(Half::Skeleton, Bytes(10)).unwrap();
+        let err = b.try_reserve(Half::Skeleton, Bytes(u64::MAX)).unwrap_err();
+        assert_eq!(err.requested, Bytes(u64::MAX));
+        assert_eq!(err.available, Bytes(40));
+        assert_eq!(b.used(Half::Skeleton), Bytes(10));
     }
 
     #[test]
