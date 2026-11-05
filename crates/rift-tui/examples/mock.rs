@@ -17,7 +17,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use rift_core::MemLines;
-use rift_tui::{App, Latency, crossterm_events, run};
+use rift_tui::{App, crossterm_events, run};
 
 const SEGMENTS: usize = 50_000;
 
@@ -68,7 +68,8 @@ fn bench_keys(app: &mut App<'_>, n: usize) -> io::Result<()> {
     )?;
     let script = ['n', ' ', 'n', 'p', 'b', 'n', ' ', ' '];
     let mut sent = 0;
-    let mut lat = Latency::with_capacity(n);
+    let mut samples: Vec<Duration> = Vec::with_capacity(n);
+    let mut record = |d| samples.push(d);
     run(
         &mut term,
         app,
@@ -81,15 +82,17 @@ fn bench_keys(app: &mut App<'_>, n: usize) -> io::Result<()> {
             };
             Ok(Some(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))))
         },
-        Some(&mut lat),
+        Some(&mut record),
     )?;
+    samples.sort_unstable();
+    let rank = |p: usize| samples[(samples.len() * p).div_ceil(100).max(1) - 1];
     let us = |d: Duration| d.as_secs_f64() * 1e6;
     println!(
         "{} keys, 200x50: p50 {:.0} us, p99 {:.0} us, max {:.0} us",
-        lat.len(),
-        us(lat.percentile(50.0).unwrap()),
-        us(lat.percentile(99.0).unwrap()),
-        us(lat.percentile(100.0).unwrap()),
+        samples.len(),
+        us(rank(50)),
+        us(rank(99)),
+        us(rank(100)),
     );
     Ok(())
 }

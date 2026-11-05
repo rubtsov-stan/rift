@@ -9,61 +9,6 @@ use ratatui::backend::Backend;
 
 use crate::app::{Action, App};
 
-/// Key-to-frame durations, measured from the moment the loop receives a key
-/// until `Terminal::draw` has flushed the frame.
-///
-/// Excludes the time the key spent in the terminal and the kernel before the
-/// loop saw it.
-#[derive(Debug)]
-pub struct Latency {
-    samples: Vec<Duration>,
-}
-
-impl Latency {
-    /// Room for `n` samples, so recording never allocates inside the loop.
-    #[must_use]
-    pub fn with_capacity(n: usize) -> Self {
-        Self {
-            samples: Vec::with_capacity(n),
-        }
-    }
-
-    /// Number of samples recorded.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.samples.len()
-    }
-
-    /// Whether nothing was recorded.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.samples.is_empty()
-    }
-
-    fn record(&mut self, d: Duration) {
-        self.samples.push(d);
-    }
-
-    /// Nearest-rank percentile, `p` in `0.0..=100.0`. Sorts in place.
-    /// `None` when empty.
-    #[must_use]
-    pub fn percentile(&mut self, p: f64) -> Option<Duration> {
-        if self.samples.is_empty() {
-            return None;
-        }
-        self.samples.sort_unstable();
-        let n = self.samples.len();
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            reason = "rank is within 1..=n, n far below 2^52"
-        )]
-        let rank = ((p / 100.0 * n as f64).ceil() as usize).clamp(1, n);
-        Some(self.samples[rank - 1])
-    }
-}
-
 /// Event source for a real terminal: waits up to `timeout` for an event.
 ///
 /// # Errors
@@ -81,8 +26,9 @@ pub fn crossterm_events(timeout: Duration) -> io::Result<Option<Event>> {
 ///
 /// `next_event(tick)` returns the next event, or `None` after `tick` without
 /// one. On every tick the frame is redrawn if refinement progressed or a
-/// pending hunk is on screen. If `latency` is given, each handled key adds
-/// one sample.
+/// pending hunk is on screen. If `on_key_frame` is given, it receives, once per
+/// handled key, the time from the loop receiving the key until its frame was
+/// flushed (not counting the time the key spent in the terminal).
 ///
 /// # Errors
 ///
@@ -91,7 +37,7 @@ pub fn run<B: Backend>(
     term: &mut Terminal<B>,
     app: &mut App<'_>,
     mut next_event: impl FnMut(Duration) -> Result<Option<Event>, B::Error>,
-    mut latency: Option<&mut Latency>,
+    mut on_key_frame: Option<&mut dyn FnMut(Duration)>,
 ) -> Result<(), B::Error> {
     const TICK: Duration = Duration::from_millis(100);
     term.draw(|f| app.draw(f))?;
@@ -103,8 +49,8 @@ pub fn run<B: Backend>(
                     return Ok(());
                 }
                 term.draw(|f| app.draw(f))?;
-                if let Some(l) = latency.as_deref_mut() {
-                    l.record(t0.elapsed());
+                if let Some(report) = on_key_frame.as_deref_mut() {
+                    report(t0.elapsed());
                 }
             }
             Some(Event::Resize(..)) => {

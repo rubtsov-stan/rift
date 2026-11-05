@@ -11,7 +11,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use rift_core::MemLines;
-use rift_tui::{Action, App, Latency, run};
+use rift_tui::{Action, App, run};
 
 fn key(c: KeyCode) -> KeyEvent {
     KeyEvent::new(c, KeyModifiers::NONE)
@@ -212,7 +212,8 @@ fn event_loop_records_one_sample_per_key_and_redraws_on_progress() {
         Some(Event::Key(key(KeyCode::Char('q')))),
     ]
     .into();
-    let mut lat = Latency::with_capacity(16);
+    let mut samples = Vec::new();
+    let mut record = |d| samples.push(d);
     let mut ticks = 0;
     run(
         &mut term,
@@ -226,15 +227,13 @@ fn event_loop_records_one_sample_per_key_and_redraws_on_progress() {
             }
             Ok(e)
         },
-        Some(&mut lat),
+        Some(&mut record),
     )
     .unwrap();
     assert_eq!(ticks, 1);
-    assert_eq!(lat.len(), 2, "q quits before drawing and records nothing");
-    assert!(lat.percentile(50.0).unwrap() <= lat.percentile(99.0).unwrap());
-}
-
-#[test]
-fn no_samples_no_percentile() {
-    assert!(Latency::with_capacity(0).percentile(99.0).is_none());
+    assert_eq!(
+        samples.len(),
+        2,
+        "q quits before drawing and records nothing"
+    );
 }

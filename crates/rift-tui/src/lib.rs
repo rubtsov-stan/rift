@@ -16,4 +16,4 @@ mod render;
 mod run;
 
 pub use app::{Action, App};
-pub use run::{Latency, crossterm_events, run};
+pub use run::{crossterm_events, run};
