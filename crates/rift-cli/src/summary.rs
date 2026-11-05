@@ -52,11 +52,15 @@ pub fn run<A: Source, B: Source>(a: &A, b: &B, mem: Bytes) -> anyhow::Result<Exi
     if differing.peek().is_some() {
         println!("first differing ranges (0-based, end exclusive):");
     }
-    for s in differing.take(SHOWN_RANGES) {
+    for s in differing.by_ref().take(SHOWN_RANGES) {
         println!(
             "  a {}..{}  b {}..{}",
             s.a.start, s.a.end, s.b.start, s.b.end
         );
+    }
+    let more = differing.count();
+    if more > 0 {
+        println!("  ... and {more} more");
     }
     println!(
         "peak heap {:.1} MiB of {:.1} MiB",

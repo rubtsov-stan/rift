@@ -81,3 +81,28 @@ fn mem_takes_the_same_sizes_as_the_generator() {
         assert_eq!(rift(&a, &b, mem).status.code(), Some(2), "--mem {mem:?}");
     }
 }
+
+#[test]
+fn ranges_past_the_first_ten_are_counted() {
+    let a = text(2000);
+    let mut b = a.clone();
+    for at in (50..b.len()).step_by(500) {
+        b[at] = b'#';
+    }
+    let (_dir, pa, pb) = files(&a, &b);
+    let stdout = String::from_utf8(rift(&pa, &pb, "16M").stdout).unwrap();
+    let differs: usize = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("differs  "))
+        .and_then(|l| l.split(' ').next())
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(differs > 10, "{stdout}");
+    assert_eq!(stdout.lines().filter(|l| l.starts_with("  a ")).count(), 10);
+    assert!(
+        stdout.contains(&format!("  ... and {} more\n", differs - 10)),
+        "{stdout}"
+    );
+    assert!(stdout.contains("approx   0 segments"), "{stdout}");
+}
