@@ -470,3 +470,53 @@ fn ctrl_and_alt_letters_do_not_trigger_plain_actions() {
     // Moved to the first difference, and Shift-N found nothing before it.
     assert_eq!(last_visible(&m).start, 40);
 }
+
+/// Line 1 always fails to read; counts the attempts.
+struct Flaky<'a> {
+    inner: MemLines<'a>,
+    attempts: std::sync::atomic::AtomicUsize,
+}
+
+impl LineAccess for Flaky<'_> {
+    fn line_count(&self) -> u64 {
+        self.inner.line_count()
+    }
+    fn read_lines(&self, range: std::ops::Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
+        self.inner.read_lines(range, buf)
+    }
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
+        if line.0 == 1 {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(std::io::Error::other("disk on fire").into());
+        }
+        self.inner.read_line_prefix(line, max, buf)
+    }
+}
+
+#[test]
+fn a_failed_read_is_kept_for_the_window_and_retried_when_it_moves() {
+    let mut data = Vec::new();
+    for i in 0..40 {
+        data.extend_from_slice(format!("line {i}\n").as_bytes());
+    }
+    let lines = Flaky {
+        inner: MemLines::new(&data),
+        attempts: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let m = Mock::build(&[Spec::Equal(40)], true);
+    let mut app = App::new(&m.view, &lines, &lines);
+    let mut term = Terminal::new(TestBackend::new(70, 8)).unwrap();
+    let attempts = || lines.attempts.load(std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..50 {
+        draw(&mut app, &mut term);
+    }
+    assert_eq!(attempts(), 1);
+    assert!(format!("{:?}", term.backend().buffer()).contains("disk on fire"));
+    app.handle_key(key(KeyCode::PageDown));
+    draw(&mut app, &mut term);
+    app.handle_key(key(KeyCode::PageUp));
+    draw(&mut app, &mut term);
+    draw(&mut app, &mut term);
+    assert_eq!(attempts(), 2, "retried once after the window moved away");
+}

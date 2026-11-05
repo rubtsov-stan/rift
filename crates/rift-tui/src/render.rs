@@ -128,16 +128,15 @@ impl Painter<'_> {
             let mut left = room;
             let sc = &mut *self.scratch;
             let txt = &mut sc.text;
-            match sc
+            let e = sc
                 .cache
-                .get(file, side, first + i, room * 4 + 2, &mut sc.lines)
-            {
-                Ok(e) => sanitize(sc.cache.bytes(&e), LineCache::is_cut(&e), txt, &mut left),
-                Err(e) => {
-                    sc.err.clear();
-                    let _ = write!(sc.err, "<{e}>");
-                    push_clean(txt, &sc.err, &mut left);
-                }
+                .get(file, side, first + i, room * 4 + 2, &mut sc.lines);
+            let bytes = sc.cache.bytes(&e);
+            if e.failed {
+                // Built from a `String` by the cache.
+                push_clean(txt, &String::from_utf8_lossy(bytes), &mut left);
+            } else {
+                sanitize(bytes, LineCache::is_cut(&e), txt, &mut left);
             }
             let y = self.row + u16::try_from(i).expect("rows fit the screen");
             let (x, _) = buf.set_stringn(self.x, y, &self.scratch.prefix, self.width.into(), style);

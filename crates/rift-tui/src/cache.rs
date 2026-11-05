@@ -5,7 +5,7 @@
 //! frame, each cut to the bytes a row can show: at most rows times that cap
 //! in bytes. A line that leaves the screen is dropped.
 
-use rift_core::{Bytes, LineAccess, LineBuf, LineNo, Result};
+use rift_core::{Bytes, LineAccess, LineBuf, LineNo};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Entry {
@@ -16,6 +16,8 @@ pub(crate) struct Entry {
     max: usize,
     /// Length of the whole line, terminator included.
     pub full: u64,
+    /// The bytes are the error message, not line text.
+    pub failed: bool,
     start: usize,
     end: usize,
 }
@@ -47,10 +49,12 @@ impl LineCache {
         line: u64,
         max: usize,
         scratch: &mut LineBuf,
-    ) -> Result<Entry> {
+    ) -> Entry {
         let start = self.cur_bytes.len();
         let hit = self.prev.iter().find(|e| {
-            e.side == side && e.line == line && (e.full <= (e.end - e.start) as u64 || e.max >= max)
+            e.side == side
+                && e.line == line
+                && (e.failed || e.full <= (e.end - e.start) as u64 || e.max >= max)
         });
         let entry = if let Some(e) = hit {
             self.cur_bytes
@@ -61,19 +65,33 @@ impl LineCache {
                 ..*e
             }
         } else {
-            let full = file.read_line_prefix(LineNo(line), Bytes(max as u64), scratch)?;
-            self.cur_bytes.extend_from_slice(scratch.line(0));
-            Entry {
+            let mut entry = Entry {
                 side,
                 line,
                 max,
-                full: full.0,
+                full: 0,
+                failed: false,
                 start,
-                end: self.cur_bytes.len(),
+                end: start,
+            };
+            match file.read_line_prefix(LineNo(line), Bytes(max as u64), scratch) {
+                Ok(full) => {
+                    entry.full = full.0;
+                    self.cur_bytes.extend_from_slice(scratch.line(0));
+                }
+                Err(e) => {
+                    // Kept like a line: retrying every frame would repeat a
+                    // slow failing read. Allocates, but only on this path.
+                    entry.failed = true;
+                    self.cur_bytes
+                        .extend_from_slice(format!("<{e}>").as_bytes());
+                }
             }
+            entry.end = self.cur_bytes.len();
+            entry
         };
         self.cur.push(entry);
-        Ok(entry)
+        entry
     }
 
     /// The bytes of an entry returned by `get` this frame.
