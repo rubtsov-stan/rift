@@ -103,8 +103,9 @@ marked with `~`.
 - An approximate region is a whole replacement: correct, but coarse. It
   happens in large regions without any line unique in both files, such
   as long runs of identical or repetitive lines.
-- Rows that moved as a block (a dump in a different order) are a
-  deletion and an insertion, as in any line-based diff.
+- A block of rows that moved, such as a dump written in a different
+  order, shows as a deletion and an insertion, as in any line-based
+  diff.
 - Only the heap is bounded by `--mem`. The resident set also holds the
   binary, thread stacks and whatever page cache the kernel counts
   against the process.
