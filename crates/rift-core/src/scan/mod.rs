@@ -192,7 +192,7 @@ impl Scanned {
 }
 
 /// Drops spare capacity and gives those bytes back to the reservation.
-fn release_slack<T>(v: &mut Vec<T>, reservation: &mut Reservation) {
+pub(crate) fn release_slack<T>(v: &mut Vec<T>, reservation: &mut Reservation) {
     let before = v.capacity();
     v.shrink_to_fit();
     reservation.shrink(Bytes(((before - v.capacity()) * size_of::<T>()) as u64));
