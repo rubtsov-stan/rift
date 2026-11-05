@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/rubtsov-stan/rift/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml"><img src="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/rubtsov-stan/rift/releases/latest"><img src="https://img.shields.io/github/v/release/rubtsov-stan/rift" alt="Release"></a>
 </p>
 
