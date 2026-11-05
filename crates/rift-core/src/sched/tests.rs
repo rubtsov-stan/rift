@@ -648,15 +648,20 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
 fn without_background_only_the_window_and_requests_are_refined() {
     let n = 12;
     let (started, starts) = channel();
+    let (open, gate) = channel();
     let job = Fake {
         started: Some(started),
+        gate: Some(Mutex::new(gate)),
         ..Fake::new()
     };
     let s = Scheduler::new(job, segments(n, |_| false), &budget(n, 64), 1).unwrap();
+    // Background is on until the switch, so hold the worker inside its
+    // first job until then; otherwise it may take more segments first.
+    assert_eq!(starts.recv().unwrap(), 0);
     s.set_background(false);
-    // The worker may have taken segment 0 before the switch.
-    let first = starts.recv_timeout(std::time::Duration::from_millis(200));
-    assert!(matches!(first, Ok(0) | Err(_)));
+    for _ in 0..n {
+        open.send(()).unwrap();
+    }
     s.set_visible(lines(6));
     let mut got: Vec<usize> = (0..9).map(|_| starts.recv().unwrap()).collect();
     got.sort_unstable();
