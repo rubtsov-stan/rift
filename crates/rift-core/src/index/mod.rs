@@ -108,21 +108,84 @@ pub struct IndexedLines<S, I> {
     _reservation: Reservation,
 }
 
-/// The read buffer, and the line start the last read reached.
+/// The read buffer, the line start the last read reached, and the one
+/// the caller last pointed to with `seek`.
 #[derive(Debug)]
 struct Scratch {
     buf: Vec<u8>,
     memo: Option<Checkpoint>,
+    hint: Option<Checkpoint>,
 }
 
-/// Where a forward scan for `line` starts: the checkpoint before it, or
-/// the remembered line start when that is between the two.
-fn scan_start(index: &LineIndex, memo: Option<Checkpoint>, line: LineNo) -> Option<Checkpoint> {
-    let cp = index.checkpoint_before(line)?;
-    Some(match memo {
-        Some(m) if m.line <= line && m.line > cp.line => m,
-        _ => cp,
-    })
+/// Lines a reader steps back from the remembered line start instead of
+/// scanning forward from a checkpoint: the context before a change, which
+/// the unified writer reads right before the change it has sought to.
+const BACK_LINES: u64 = 16;
+
+/// Where a forward scan for `line` starts: the closest known line start
+/// at or before it, among the checkpoint before it and the remembered
+/// ones, or, when a remembered start is a few lines after `line` and
+/// closer than that, the start of `line` itself, found by reading backward.
+fn scan_start<S: Source>(
+    source: &S,
+    index: &LineIndex,
+    known: [Option<Checkpoint>; 2],
+    line: LineNo,
+    scratch: &mut [u8],
+) -> Result<Option<Checkpoint>> {
+    let Some(cp) = index.checkpoint_before(line) else {
+        return Ok(None);
+    };
+    let known = known.into_iter().flatten();
+    let before = known
+        .clone()
+        .filter(|m| m.line <= line)
+        .max_by_key(|m| m.line);
+    let start = before.filter(|m| m.line > cp.line).unwrap_or(cp);
+    let after = known.filter(|m| m.line > line).min_by_key(|m| m.line);
+    if let Some(m) = after
+        && m.line - line <= BACK_LINES.min(line - start.line)
+        && let Some(found) = back_from(source, m, line, scratch)?
+    {
+        return Ok(Some(found));
+    }
+    Ok(Some(start))
+}
+
+/// The start of `line`, found by reading at most two buffers backward from
+/// the line start `m` after it; `None` when it is further back than that.
+fn back_from<S: Source>(
+    source: &S,
+    m: Checkpoint,
+    line: LineNo,
+    scratch: &mut [u8],
+) -> Result<Option<Checkpoint>> {
+    // The newline ending line `line - 1` is the (d + 1)-th before `m`.
+    let mut need = m.line - line + 1;
+    let mut end = m.offset.0;
+    for _ in 0..2 {
+        if end == 0 {
+            break;
+        }
+        let from = end.saturating_sub(scratch.len() as u64);
+        let buf = &mut scratch[..Bytes(end - from).as_usize()];
+        source.read_exact_at(buf, ByteOffset(from))?;
+        for nl in memchr::memrchr_iter(b'\n', buf) {
+            need -= 1;
+            if need == 0 {
+                return Ok(Some(Checkpoint {
+                    line,
+                    offset: ByteOffset(from + nl as u64 + 1),
+                }));
+            }
+        }
+        end = from;
+    }
+    // Only line 0 starts without a newline before it.
+    Ok((end == 0 && need == 1).then_some(Checkpoint {
+        line,
+        offset: ByteOffset(0),
+    }))
 }
 
 impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
@@ -143,6 +206,7 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
             scratch: Mutex::new(Scratch {
                 buf: vec![0; scratch.as_usize()],
                 memo: None,
+                hint: None,
             }),
             _reservation: reservation,
         })
@@ -167,9 +231,19 @@ impl<S: Source, I: Borrow<LineIndex> + Sync> LineAccess for IndexedLines<S, I> {
             return Ok(());
         }
         let mut guard = self.scratch.lock().unwrap_or_else(PoisonError::into_inner);
-        let Scratch { buf: scratch, memo } = &mut *guard;
-        let start = scan_start(self.index.borrow(), *memo, range.start)
-            .expect("range.start < line_count, so a checkpoint at or before it exists");
+        let Scratch {
+            buf: scratch,
+            memo,
+            hint,
+        } = &mut *guard;
+        let start = scan_start(
+            &self.source,
+            self.index.borrow(),
+            [*memo, *hint],
+            range.start,
+            scratch,
+        )?
+        .expect("range.start < line_count, so a checkpoint at or before it exists");
         let cap = scratch.len();
         let mut line = start.line.0;
         let mut pos = start.offset.0;
@@ -279,6 +353,17 @@ impl<S: Source, I: Borrow<LineIndex> + Sync> LineAccess for IndexedLines<S, I> {
 }
 
 impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
+    /// Tells the reader that `line` starts at byte `offset`, so reads at
+    /// or after `line`, or a few lines before it, start there whenever that
+    /// is closer than what the reader knows. The caller vouches for the
+    /// pair: the skeleton knows where each segment starts from its
+    /// anchors.
+    pub fn seek(&self, line: LineNo, offset: ByteOffset) {
+        debug_assert!(line.0 <= self.index.borrow().line_count());
+        let mut scratch = self.scratch.lock().unwrap_or_else(PoisonError::into_inner);
+        scratch.hint = Some(Checkpoint { line, offset });
+    }
+
     /// Reads up to `max` bytes of the line starting at file offset `start`,
     /// from `from` bytes into it, into `buf` through `scratch`. True when
     /// the piece ends the line: it holds the terminator, or the file ends.
@@ -319,8 +404,14 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
     fn line_start(&self, line: LineNo, scratch: &mut Scratch) -> Result<u64> {
         let index = self.index.borrow();
         let count = index.line_count();
-        let start =
-            scan_start(index, scratch.memo, line).ok_or(Error::LineOutOfRange { line, count })?;
+        let start = scan_start(
+            &self.source,
+            index,
+            [scratch.memo, scratch.hint],
+            line,
+            &mut scratch.buf,
+        )?
+        .ok_or(Error::LineOutOfRange { line, count })?;
         let found = Self::scan_to(&self.source, start, line, &mut scratch.buf)?;
         scratch.memo = Some(Checkpoint {
             line,
@@ -598,6 +689,48 @@ mod tests {
                 .read_line_prefix(LineNo(r.end - 1), Bytes(3), &mut buf)
                 .unwrap();
             assert_eq!(len.0, mem.line(r.end - 1).unwrap().len() as u64);
+        }
+    }
+
+    #[test]
+    fn reads_just_before_a_sought_line_step_back_from_it() {
+        let data: Vec<u8> = (0..300)
+            .flat_map(|i| format!("{}\n", "w".repeat(i % 11)).into_bytes())
+            .collect();
+        let mem = MemLines::new(&data);
+        let offset = |l: u64| ByteOffset((0..l).map(|i| mem.line(i).unwrap().len() as u64).sum());
+        let index = index_of(&data, 1000);
+        let budget = Budget::new(Bytes::mib(1));
+        for scratch in [12u64, 64, 4096] {
+            let access =
+                IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch))
+                    .unwrap();
+            let mut buf = LineBuf::new();
+            for (at, from) in [
+                (250u64, 247u64),
+                (250, 234),
+                (5, 0),
+                (1, 0),
+                (200, 199),
+                (299, 290),
+            ] {
+                access.seek(LineNo(at), offset(at));
+                access
+                    .read_lines(LineNo(from)..LineNo(at + 1), &mut buf)
+                    .unwrap();
+                for (k, line) in buf.iter().enumerate() {
+                    assert_eq!(
+                        line,
+                        mem.line(from + k as u64).unwrap(),
+                        "scratch {scratch} {from}..={at}"
+                    );
+                }
+                access.seek(LineNo(at), offset(at));
+                let len = access
+                    .read_line_prefix(LineNo(from), Bytes(64), &mut buf)
+                    .unwrap();
+                assert_eq!(len.0, mem.line(from).unwrap().len() as u64);
+            }
         }
     }
 

@@ -41,7 +41,7 @@ use crate::script::{LINES_PER_READ, PIECE, for_each_piece};
 use crate::segment::{Segment, SegmentStatus};
 use crate::skeleton::build_pair;
 use crate::source::Source;
-use crate::types::{Bytes, LineHash, LineNo};
+use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 use crate::unified::{Options, Verdict, write_diff};
 use crate::view::{DiffView, HunkState, Progress};
 
@@ -85,6 +85,8 @@ fn estimate(n: u64, m: u64) -> Bytes {
 #[derive(Debug)]
 pub struct Diff<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> {
     sched: Scheduler<RefineJob<A, B>>,
+    /// Where each segment starts in both files; in the skeleton half.
+    starts: Arc<[[ByteOffset; 2]]>,
     lines_a: Reader<A>,
     lines_b: Reader<B>,
     threads: usize,
@@ -121,7 +123,8 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         let (level, anchors) = (skeleton.level(), skeleton.anchors());
         let (index_a, held_a) = scan_a.into_index();
         let (index_b, held_b) = scan_b.into_index();
-        let (segments, held_map) = skeleton.into_parts();
+        let (segments, starts, held_map) = skeleton.into_parts();
+        let starts: Arc<[[ByteOffset; 2]]> = starts.into();
         let (index_a, index_b) = (Arc::new(index_a), Arc::new(index_b));
 
         let front = budget.try_reserve(
@@ -173,11 +176,13 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         let lines_b = IndexedLines::new(b, index_b, budget, Half::Refine, FRONT_SCRATCH)?;
         let job = RefineJob {
             workers: Mutex::new(workers),
+            starts: Arc::clone(&starts),
             _pool: pool,
         };
         let sched = Scheduler::new(job, segments, budget, threads)?;
         Ok(Self {
             sched,
+            starts,
             lines_a,
             lines_b,
             threads,
@@ -252,7 +257,19 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             }
             Ok(Some(h))
         };
-        let verdict = write_diff(&self.lines_a, &self.lines_b, hunk, opts, out)?;
+        let lines_a = Sought {
+            lines: &self.lines_a,
+            segs,
+            starts: &self.starts,
+            side: 0,
+        };
+        let lines_b = Sought {
+            lines: &self.lines_b,
+            segs,
+            starts: &self.starts,
+            side: 1,
+        };
+        let verdict = write_diff(&lines_a, &lines_b, hunk, opts, out)?;
         let (approx_segments, approx_lines) = approx.get();
         Ok(Written {
             verdict,
@@ -290,6 +307,67 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     }
 }
 
+/// A front-end reader that, before each read, points the reader at the
+/// start of the segment holding the first line asked for, or of the next
+/// segment when that starts a few lines later. The unified writer reads
+/// near segment starts, and without this every read would scan from the
+/// checkpoint before it, mostly through bytes no worker has read since the
+/// skeleton was built, so they come from the disk.
+struct Sought<'d, S: Source + ?Sized> {
+    lines: &'d Reader<S>,
+    segs: &'d [Segment],
+    starts: &'d [[ByteOffset; 2]],
+    /// 0 for A, 1 for B.
+    side: usize,
+}
+
+impl<S: Source + Send + ?Sized> Sought<'_, S> {
+    fn aim(&self, line: LineNo) {
+        let first = |s: &Segment| if self.side == 0 { s.a.start } else { s.b.start };
+        let next = self.segs.partition_point(|s| first(s) <= line);
+        let k = match self.segs.get(next) {
+            Some(s) if first(s) - line <= AIM_BACK => next,
+            _ if next > 0 => next - 1,
+            _ => return,
+        };
+        self.lines
+            .seek(first(&self.segs[k]), self.starts[k][self.side]);
+    }
+}
+
+/// How far before a segment's start a read still aims at it: the context
+/// lines the writer prints before a change.
+const AIM_BACK: u64 = 8;
+
+impl<S: Source + Send + ?Sized> LineAccess for Sought<'_, S> {
+    fn line_count(&self) -> u64 {
+        self.lines.line_count()
+    }
+
+    fn read_lines(&self, range: Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
+        if !range.is_empty() {
+            self.aim(range.start);
+        }
+        self.lines.read_lines(range, buf)
+    }
+
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
+        self.aim(line);
+        self.lines.read_line_prefix(line, max, buf)
+    }
+
+    fn read_line_part(
+        &self,
+        line: LineNo,
+        from: Bytes,
+        max: Bytes,
+        buf: &mut LineBuf,
+    ) -> Result<bool> {
+        self.aim(line);
+        self.lines.read_line_part(line, from, max, buf)
+    }
+}
+
 /// Per-thread state of the refinement job.
 #[derive(Debug)]
 struct Worker<A: ?Sized, B: ?Sized> {
@@ -304,6 +382,9 @@ struct Worker<A: ?Sized, B: ?Sized> {
 #[derive(Debug)]
 struct RefineJob<A: ?Sized, B: ?Sized> {
     workers: Mutex<Vec<Worker<A, B>>>,
+    /// Where each segment starts in both files, so a worker reads it
+    /// without scanning from a checkpoint; in the skeleton half.
+    starts: Arc<[[ByteOffset; 2]]>,
     /// The workers' line buffers, which grow on use.
     _pool: Reservation,
 }
@@ -348,42 +429,71 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> J
 
     fn run(
         &self,
-        _index: usize,
+        index: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
     ) -> Result<Hunk> {
         let mut lease = self.lease();
         let w = lease.worker.as_mut().expect("leased");
-        refine(w, segment.a.clone(), segment.b.clone(), reservation, cancel)
+        let start = Some((segment, self.starts[index]));
+        refine(
+            w,
+            segment.a.clone(),
+            segment.b.clone(),
+            start,
+            reservation,
+            cancel,
+        )
     }
 
     fn too_large(
         &self,
-        _index: usize,
+        index: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
     ) -> Result<Hunk> {
         let mut lease = self.lease();
         let w = lease.worker.as_mut().expect("leased");
+        seek(w, segment, self.starts[index]);
         resample::refine_large(w, segment, reservation.bytes(), cancel)
     }
 }
 
+/// Points both readers of `w` at the start of `segment`.
+fn seek<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
+    w: &Worker<A, B>,
+    segment: &Segment,
+    start: [ByteOffset; 2],
+) {
+    w.a.seek(segment.a.start, start[0]);
+    w.b.seek(segment.b.start, start[1]);
+}
+
 /// Refines A lines `ra` against B lines `rb` within `reservation`, which
-/// should hold [`estimate`] of their lengths.
+/// should hold [`estimate`] of their lengths. `start` gives the byte
+/// offsets of a segment that begins there, when known.
 fn refine<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     w: &mut Worker<A, B>,
     ra: Range<LineNo>,
     rb: Range<LineNo>,
+    start: Option<(&Segment, [ByteOffset; 2])>,
     reservation: &mut Reservation,
     cancel: &Cancel,
 ) -> Result<Hunk> {
+    // Hashing reads the segment forward and leaves the readers at its end;
+    // verification starts over from its first line.
+    if let Some((seg, at)) = start {
+        seek(w, seg, at);
+    }
     let ha = hashes(&w.a, ra.clone(), &mut w.buf)?;
     let hb = hashes(&w.b, rb.clone(), &mut w.buf)?;
     if cancel.is_set() {
         return Ok(Hunk::default());
+    }
+    if let Some((seg, at)) = start {
+        seek(w, seg, at);
     }
     let seg = Segment {
         a: ra,

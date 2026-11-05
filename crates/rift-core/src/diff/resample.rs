@@ -124,7 +124,7 @@ fn split<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     let small = n < u64::from(u32::MAX) && m < u64::from(u32::MAX);
     if small && need <= inner.available(Half::Refine) {
         let mut reservation = inner.try_reserve(Half::Refine, need)?;
-        let hunk = refine(w, ra, rb, &mut reservation, cancel)?;
+        let hunk = refine(w, ra, rb, None, &mut reservation, cancel)?;
         drop(reservation);
         out.approx |= hunk.approx;
         for e in hunk.edits {

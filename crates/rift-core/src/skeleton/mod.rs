@@ -21,7 +21,8 @@
 //! the anchor table and candidates (see [`anchors`]), then 8 bytes per
 //! candidate during the subsequence search, then two buffers of at most
 //! 1 MiB per pool thread and a bit per gap during the comparison, and
-//! 40 bytes per segment for the result.
+//! 56 bytes per segment for the result: the segment and the byte offsets
+//! where it starts.
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,7 +44,8 @@ use crate::types::{ByteOffset, Bytes, LineNo};
 const MAX_BUF: u64 = 1 << 20;
 /// Smallest comparison buffer, per file.
 const MIN_BUF: u64 = 4 << 10;
-const SEGMENT_BYTES: u64 = size_of::<Segment>() as u64;
+/// A segment and the byte offsets where it starts in both files.
+const SEGMENT_BYTES: u64 = (size_of::<Segment>() + size_of::<[ByteOffset; 2]>()) as u64;
 const SAMPLE_BYTES: u64 = size_of::<Sample>() as u64;
 /// The skeleton half a map needs at the coarsest stratum, with no anchors:
 /// a one-slot table, one segment, two bitmap words and one lane of the
@@ -57,6 +59,7 @@ const NO_PREV: u32 = u32::MAX;
 #[derive(Debug)]
 pub struct Skeleton {
     segments: Vec<Segment>,
+    starts: Vec<[ByteOffset; 2]>,
     anchors: usize,
     level: u32,
     reservation: Reservation,
@@ -84,10 +87,18 @@ impl Skeleton {
         self.level
     }
 
-    /// The segment list and the skeleton-half bytes it holds.
+    /// Byte offsets where each segment starts in A and in B, known from
+    /// the anchors, so a reader can go there without scanning.
     #[must_use]
-    pub fn into_parts(self) -> (Vec<Segment>, Reservation) {
-        (self.segments, self.reservation)
+    pub fn starts(&self) -> &[[ByteOffset; 2]] {
+        &self.starts
+    }
+
+    /// The segment list, the start offsets and the skeleton-half bytes
+    /// they hold.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<Segment>, Vec<[ByteOffset; 2]>, Reservation) {
+        (self.segments, self.starts, self.reservation)
     }
 
     /// Whether the files are identical: every segment is `Equal`.
@@ -225,6 +236,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     let cap = gaps.min(2 * differing + 1);
     reservation.shrink(Bytes((gaps - cap) as u64 * SEGMENT_BYTES));
     let mut segments = Vec::with_capacity(cap);
+    let mut starts = Vec::with_capacity(cap);
     for g in 0..gaps {
         let status = if differs(g) {
             SegmentStatus::Differs
@@ -232,7 +244,10 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
             SegmentStatus::Equal
         };
         let (a, b) = bounds.lines(g, g + 1);
-        push(&mut segments, a, b, status, verdicts.false_anchor(g));
+        if push(&mut segments, a, b, status, verdicts.false_anchor(g)) {
+            let (pa, pb) = bounds.at(g);
+            starts.push([ByteOffset(pa.offset), ByteOffset(pb.offset)]);
+        }
     }
     debug_assert!(segments.len() <= cap);
     let false_anchors = (0..gaps).filter(|&g| verdicts.false_anchor(g)).count();
@@ -242,6 +257,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         anchors: bounds.chain.len() - false_anchors,
         level: scan_a.level(),
         segments,
+        starts,
         reservation,
     })
 }
@@ -518,15 +534,16 @@ impl Bounds<'_> {
 /// Appends a segment, merging it into an `Equal` predecessor when it is
 /// `Equal` too, or into a `Differs` one when `join` says the boundary
 /// between them is a false anchor. A segment empty on both sides is dropped.
+/// Returns whether a new segment was added.
 fn push(
     segments: &mut Vec<Segment>,
     a: Range<LineNo>,
     b: Range<LineNo>,
     status: SegmentStatus,
     join: bool,
-) {
+) -> bool {
     if a.is_empty() && b.is_empty() {
-        return;
+        return false;
     }
     if let Some(last) = segments.last_mut()
         && last.status == status
@@ -534,9 +551,10 @@ fn push(
     {
         last.a.end = a.end;
         last.b.end = b.end;
-        return;
+        return false;
     }
     segments.push(Segment { a, b, status });
+    true
 }
 
 /// Bytes read from each file when confirming a line, before the rest of

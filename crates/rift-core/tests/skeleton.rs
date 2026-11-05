@@ -24,6 +24,16 @@ fn map_at(a: &[u8], b: &[u8], level: u32) -> Skeleton {
     let mut sb = scan(b, &budget, &config(level)).unwrap();
     let map = build(a, b, &mut sa, &mut sb, &budget).unwrap();
     check(a, b, map.segments());
+    let (ma, mb) = (MemLines::new(a), MemLines::new(b));
+    assert_eq!(map.starts().len(), map.segments().len());
+    for (s, start) in map.segments().iter().zip(map.starts()) {
+        let at = |m: &MemLines<'_>, l: LineNo| bytes(m, &(LineNo(0)..l)).len() as u64;
+        assert_eq!(
+            [start[0].0, start[1].0],
+            [at(&ma, s.a.start), at(&mb, s.b.start)],
+            "{s:?}"
+        );
+    }
     map
 }
 
