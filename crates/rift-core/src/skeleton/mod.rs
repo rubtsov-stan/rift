@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::anchors::{self, Anchors, Pair};
-use crate::budget::{Budget, Half, Reservation};
+use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::sample::Sample;
 use crate::scan::{ScanConfig, Scanned, scan};
@@ -43,6 +43,11 @@ const MAX_BUF: u64 = 1 << 20;
 /// Smallest comparison buffer, per file.
 const MIN_BUF: u64 = 4 << 10;
 const SEGMENT_BYTES: u64 = size_of::<Segment>() as u64;
+const SAMPLE_BYTES: u64 = size_of::<Sample>() as u64;
+/// The skeleton half a map needs at the coarsest stratum, with no anchors:
+/// a one-slot table, one segment, two bitmap words and one lane of the
+/// smallest comparison buffers.
+const COARSEST_MAP_BYTES: u64 = 16 + SEGMENT_BYTES + 16 + 2 * MIN_BUF;
 /// Marks the first element of a chain in the subsequence search.
 const NO_PREV: u32 = u32::MAX;
 
@@ -116,7 +121,8 @@ pub fn build_pair<A: Source + ?Sized, B: Source + ?Sized>(
 /// # Errors
 ///
 /// [`Error::Budget`] if the skeleton half cannot hold the map even at the
-/// coarsest stratum; [`Error::Io`] from either source.
+/// coarsest stratum, at once and without reading when releasing every
+/// sample would not be enough; [`Error::Io`] from either source.
 pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
@@ -124,6 +130,19 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     scan_b: &mut Scanned,
     budget: &Budget,
 ) -> Result<Skeleton> {
+    // Thinning can release the samples and nothing else. If even that
+    // leaves too little for the map at the coarsest stratum, say so before
+    // reading anything.
+    let releasable = (scan_a.samples().len() + scan_b.samples().len()) as u64 * SAMPLE_BYTES;
+    let available = budget.available(Half::Skeleton).0;
+    if available + releasable < COARSEST_MAP_BYTES {
+        return Err(BudgetExceeded {
+            half: Half::Skeleton,
+            requested: Bytes(COARSEST_MAP_BYTES),
+            available: Bytes(available),
+        }
+        .into());
+    }
     let mut level = scan_a.level().max(scan_b.level());
     loop {
         scan_a.thin(level);
@@ -160,17 +179,22 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         },
     };
     let gaps = bounds.chain.len() + 1;
+    // The segment list is reserved for its worst case before anything is
+    // read, so a shortfall shows up, and the stratum is raised, before the
+    // comparison rather than after it.
+    let mut reservation = budget.try_reserve(Half::Skeleton, Bytes(gaps as u64 * SEGMENT_BYTES))?;
     let bitmaps = 2 * 8 * gaps.div_ceil(64) as u64;
     // As many lanes as there are tasks, threads and pairs of the smallest
-    // buffers that fit. The buffers take an eighth of what is free, but no
-    // more than the longest stretch a task streams: a small pair under a
-    // large budget gets small buffers.
+    // buffers that fit. The buffers take half of what is free, since the
+    // segment list is already reserved and nothing else needs the rest
+    // during the comparison, but no more than the longest stretch a task
+    // streams: a small pair under a large budget gets small buffers.
     let free = budget.available(Half::Skeleton).0.saturating_sub(bitmaps);
     let tasks = bounds.end_a.offset.div_ceil(TASK_BYTES).max(1);
     let lanes = (free / (2 * MIN_BUF))
         .min(tasks)
         .clamp(1, rayon::current_num_threads() as u64);
-    let buf = (free / (8 * 2 * lanes))
+    let buf = (free / (2 * 2 * lanes))
         .min(bounds.longest_aligned_run().max(MIN_BUF))
         .clamp(MIN_BUF, MAX_BUF);
     let buffers = 2 * buf * lanes;
@@ -192,7 +216,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     // differing gap plus one, which sizes the list once.
     let differing = (0..gaps).filter(|&g| differs(g)).count();
     let cap = gaps.min(2 * differing + 1);
-    let reservation = budget.try_reserve(Half::Skeleton, Bytes(cap as u64 * SEGMENT_BYTES))?;
+    reservation.shrink(Bytes((gaps - cap) as u64 * SEGMENT_BYTES));
     let mut segments = Vec::with_capacity(cap);
     for g in 0..gaps {
         let status = if differs(g) {

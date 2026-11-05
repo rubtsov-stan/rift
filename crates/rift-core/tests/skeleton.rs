@@ -308,3 +308,106 @@ fn a_build_fails_only_when_the_coarsest_stratum_does() {
         }
     }
 }
+
+/// A source that counts the bytes read from it, and the reads longer than
+/// a line check (256 bytes) that start at its first byte: in a pair whose
+/// first gaps are aligned, each comparison pass makes one.
+struct Counted<'a> {
+    data: &'a [u8],
+    read: std::sync::atomic::AtomicU64,
+    from_start: std::sync::atomic::AtomicU64,
+}
+
+impl<'a> Counted<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            read: 0.into(),
+            from_start: 0.into(),
+        }
+    }
+
+    /// Bytes read and reads from the start since the last call.
+    fn take(&self) -> (u64, u64) {
+        let o = std::sync::atomic::Ordering::Relaxed;
+        (self.read.swap(0, o), self.from_start.swap(0, o))
+    }
+}
+
+impl Source for Counted<'_> {
+    fn len(&self) -> Bytes {
+        Source::len(self.data)
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: rift_core::ByteOffset) -> std::io::Result<usize> {
+        let n = self.data.read_at(buf, offset)?;
+        let o = std::sync::atomic::Ordering::Relaxed;
+        self.read.fetch_add(n as u64, o);
+        if offset.0 == 0 && buf.len() > 256 {
+            self.from_start.fetch_add(1, o);
+        }
+        Ok(n)
+    }
+}
+
+/// B is A with a line inserted after each of A's lines past the first 50:
+/// nearly every gap differs, every line of A is an anchor, and the
+/// segment list is as long as the anchor chain. The first 50 lines form
+/// one equal stretch that a comparison pass streams from the first byte.
+fn interleaved_pair(n: usize) -> (Vec<u8>, Vec<u8>) {
+    let a = lines(n);
+    let mut b = Vec::new();
+    for (i, line) in a.split_inclusive(|&c| c == b'\n').enumerate() {
+        b.extend_from_slice(line);
+        if i >= 50 {
+            b.extend_from_slice(format!("inserted {i}\n").as_bytes());
+        }
+    }
+    (a, b)
+}
+
+/// However little budget is left, the comparison runs once: a retry at a
+/// coarser stratum happens before the files are read.
+#[test]
+fn a_retry_never_rereads_the_files() {
+    let (a, b) = interleaved_pair(2000);
+    let (ca, cb) = (Counted::new(&a), Counted::new(&b));
+    let budget = Budget::new(Bytes::mib(4));
+    for left in (8 << 10..96 << 10).step_by(512) {
+        let mut sa = scan(&ca, &budget, &config(0)).unwrap();
+        let mut sb = scan(&cb, &budget, &config(0)).unwrap();
+        let free = budget.available(Half::Skeleton).0;
+        let _held = budget
+            .try_reserve(Half::Skeleton, Bytes(free.saturating_sub(left)))
+            .unwrap();
+        ca.take();
+        if let Ok(map) = build(&ca, &cb, &mut sa, &mut sb, &budget) {
+            check(&a, &b, map.segments());
+        }
+        let (_, passes) = ca.take();
+        assert!(passes <= 1, "{left} bytes left: {passes} comparison passes");
+    }
+}
+
+/// A shortfall no stratum can fix fails at once, without thinning the
+/// scans all the way down.
+#[test]
+fn a_budget_below_the_comparison_floor_fails_without_thinning() {
+    let a = lines(100);
+    let budget = Budget::new(Bytes::mib(4));
+    let mut sa = scan(&a[..], &budget, &config(0)).unwrap();
+    let mut sb = scan(&a[..], &budget, &config(0)).unwrap();
+    let samples = (sa.samples().len() + sb.samples().len()) as u64 * 24;
+    let free = budget.available(Half::Skeleton).0;
+    // Less than two 4 KiB buffers even with every sample released.
+    let _held = budget
+        .try_reserve(Half::Skeleton, Bytes(free + samples - (6 << 10)))
+        .unwrap();
+    let counted = Counted::new(&a);
+    assert!(matches!(
+        build(&counted, &counted, &mut sa, &mut sb, &budget),
+        Err(rift_core::Error::Budget(_))
+    ));
+    assert_eq!(sa.level(), 0, "thinned before failing");
+    assert_eq!(counted.take(), (0, 0));
+}
