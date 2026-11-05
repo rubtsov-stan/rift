@@ -161,11 +161,18 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     };
     let gaps = bounds.chain.len() + 1;
     let bitmaps = 2 * 8 * gaps.div_ceil(64) as u64;
-    // As many lanes as there are threads and pairs of the smallest buffers
-    // that fit; the buffers then take an eighth of what is free, at most.
+    // As many lanes as there are tasks, threads and pairs of the smallest
+    // buffers that fit. The buffers take an eighth of what is free, but no
+    // more than the longest stretch a task streams: a small pair under a
+    // large budget gets small buffers.
     let free = budget.available(Half::Skeleton).0.saturating_sub(bitmaps);
-    let lanes = (free / (2 * MIN_BUF)).clamp(1, rayon::current_num_threads() as u64);
-    let buf = (free / (8 * 2 * lanes)).clamp(MIN_BUF, MAX_BUF);
+    let tasks = bounds.end_a.offset.div_ceil(TASK_BYTES).max(1);
+    let lanes = (free / (2 * MIN_BUF))
+        .min(tasks)
+        .clamp(1, rayon::current_num_threads() as u64);
+    let buf = (free / (8 * 2 * lanes))
+        .min(bounds.longest_aligned_run().max(MIN_BUF))
+        .clamp(MIN_BUF, MAX_BUF);
     let buffers = 2 * buf * lanes;
     let mut work = budget.try_reserve(Half::Skeleton, Bytes(buffers + bitmaps))?;
     let verdicts = compare_gaps(
@@ -434,6 +441,24 @@ impl Bounds<'_> {
         1 + self
             .chain
             .partition_point(|p| self.samples_a[p.a as usize].offset.0 < offset)
+    }
+
+    /// Bytes of A in the longest run of consecutive aligned gaps.
+    fn longest_aligned_run(&self) -> u64 {
+        let gaps = self.chain.len() + 1;
+        let (mut longest, mut start) = (0, None);
+        for g in 0..=gaps {
+            let aligned = g < gaps && self.aligned(g);
+            match (aligned, start) {
+                (true, None) => start = Some(self.at(g).0.offset),
+                (false, Some(from)) => {
+                    longest = longest.max(self.at(g).0.offset - from);
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        longest
     }
 
     /// The gap among `lo..hi` whose A side holds byte `offset`.
