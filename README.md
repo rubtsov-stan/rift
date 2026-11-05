@@ -42,8 +42,8 @@ measurements behind them are in [DESIGN.md](DESIGN.md).
 
 ## Install
 
-Each GitHub release carries binaries for macOS and Linux (x86_64 and
-arm64) and a shell installer:
+Each GitHub release has binaries for macOS and Linux on x86_64 and arm64,
+and a shell installer:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rubtsov-stan/rift/releases/latest/download/rift-diff-installer.sh | sh
