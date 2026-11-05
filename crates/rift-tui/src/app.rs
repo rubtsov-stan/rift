@@ -103,6 +103,9 @@ impl<'a> App<'a> {
         self.message = "";
         if let Mode::Goto(n) = self.mode {
             match key.code {
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Action::Quit;
+                }
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let d = u64::from(c as u8 - b'0');
                     self.mode =

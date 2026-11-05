@@ -219,6 +219,16 @@ fn inserts_at_the_top_report_the_first_a_line() {
 }
 
 #[test]
+fn ctrl_c_quits_from_the_go_to_prompt() {
+    let m = mock();
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    chars(&mut app, "g4");
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert_eq!(app.handle_key(ctrl_c), Action::Quit);
+}
+
+#[test]
 fn each_hunk_is_fetched_once_per_frame() {
     let m = mock();
     let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
