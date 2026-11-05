@@ -270,3 +270,41 @@ fn comparison_threads_shrink_to_fit_the_budget() {
     assert!(map.is_identical());
     assert_eq!(map.level(), 0, "fewer threads, not a coarser stratum");
 }
+/// Whatever the scans leave of the skeleton half, the build fails only if
+/// it would fail at the coarsest stratum too.
+#[test]
+fn a_build_fails_only_when_the_coarsest_stratum_does() {
+    let a = lines(300);
+    let ma = MemLines::new(&a);
+    let mut b = a.clone();
+    let mut off = 0;
+    for i in 0..300 {
+        if i % 2 == 1 {
+            b[off] = b'#';
+        }
+        off += ma.line(i).unwrap().len();
+    }
+    let budget = Budget::new(Bytes::mib(4));
+    let squeezed = |left: u64, level: u32| {
+        let (mut sa, mut sb) = (
+            scan(&a[..], &budget, &config(0)).unwrap(),
+            scan(&b[..], &budget, &config(0)).unwrap(),
+        );
+        sa.thin(level);
+        sb.thin(level);
+        let free = budget.available(Half::Skeleton).0;
+        let _held = budget
+            .try_reserve(Half::Skeleton, Bytes(free.saturating_sub(left)))
+            .unwrap();
+        build(&a[..], &b[..], &mut sa, &mut sb, &budget).map(|m| m.segments().to_vec())
+    };
+    for left in (8 << 10..48 << 10).step_by(64) {
+        match squeezed(left, 0) {
+            Ok(segments) => check(&a, &b, &segments),
+            Err(e) => assert!(
+                squeezed(left, rift_core::strata::MAX_LEVEL).is_err(),
+                "{left} bytes left: {e}, yet the coarsest stratum fits"
+            ),
+        }
+    }
+}

@@ -106,16 +106,17 @@ pub fn build_pair<A: Source + ?Sized, B: Source + ?Sized>(
 
 /// Builds the segment map of `src_a` and `src_b` from their scans.
 ///
-/// Both scans are thinned to a common stratum first, and further whenever
-/// the anchor table does not fit what is left of the skeleton half.
+/// Both scans are thinned to a common stratum first, and one stratum
+/// further whenever the anchor table, the chain search, the comparison
+/// buffers or the segment list do not fit what is left of the skeleton
+/// half. A retry repeats the comparison.
 /// `O(n_a + n_b + m log m)` for `n` samples and `m` anchor candidates, plus
 /// one read of every byte that lies in a gap of equal length on both sides.
 ///
 /// # Errors
 ///
-/// [`Error::Budget`] if the skeleton half cannot hold the table even at
-/// the coarsest stratum, the comparison buffers, or the segment list;
-/// [`Error::Io`] from either source.
+/// [`Error::Budget`] if the skeleton half cannot hold the map even at the
+/// coarsest stratum; [`Error::Io`] from either source.
 pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
@@ -124,14 +125,25 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     budget: &Budget,
 ) -> Result<Skeleton> {
     let mut level = scan_a.level().max(scan_b.level());
-    let mut anchors = loop {
+    loop {
         scan_a.thin(level);
         scan_b.thin(level);
-        match anchors::select(scan_a.samples(), scan_b.samples(), budget) {
+        match build_at(src_a, src_b, scan_a, scan_b, budget) {
             Err(Error::Budget(_)) if level < MAX_LEVEL => level += 1,
-            other => break other?,
+            other => return other,
         }
-    };
+    }
+}
+
+/// One attempt at the scans' current stratum.
+fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
+    src_a: &A,
+    src_b: &B,
+    scan_a: &Scanned,
+    scan_b: &Scanned,
+    budget: &Budget,
+) -> Result<Skeleton> {
+    let mut anchors = anchors::select(scan_a.samples(), scan_b.samples(), budget)?;
     longest_increasing(&mut anchors, budget)?;
 
     let bounds = Bounds {
@@ -190,7 +202,7 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     drop(work);
     Ok(Skeleton {
         anchors: bounds.chain.len() - false_anchors,
-        level,
+        level: scan_a.level(),
         segments,
         _reservation: reservation,
     })
