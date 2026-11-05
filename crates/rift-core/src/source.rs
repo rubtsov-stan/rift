@@ -5,6 +5,7 @@
 //! read into a caller-owned buffer, safe to call from several threads.
 
 use std::io;
+use std::sync::Arc;
 
 use crate::types::{ByteOffset, Bytes};
 
@@ -85,6 +86,16 @@ impl<S: Source + ?Sized> Source for &S {
     }
 }
 
+impl<S: Source + ?Sized + Send> Source for Arc<S> {
+    fn len(&self) -> Bytes {
+        (**self).len()
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +120,15 @@ mod tests {
         assert_eq!(&buf, b"bc");
         let err = src.read_exact_at(&mut buf, ByteOffset(2)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn arc_reads_like_what_it_holds() {
+        let src: Arc<[u8]> = Arc::from(&b"shared"[..]);
+        let mut buf = [0u8; 3];
+        assert_eq!(src.read_at(&mut buf, ByteOffset(3)).unwrap(), 3);
+        assert_eq!(&buf, b"red");
+        assert_eq!(Source::len(&src), Bytes(6));
     }
 
     #[test]
