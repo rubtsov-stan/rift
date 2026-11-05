@@ -21,6 +21,7 @@ pub mod anchors;
 pub mod diff;
 pub mod index;
 pub mod keyed;
+pub mod moves;
 pub mod refine;
 pub mod scan;
 pub mod sched;

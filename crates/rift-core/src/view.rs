@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::edit::Hunk;
+use crate::moves::MovedBlock;
 use crate::segment::Segment;
 use crate::types::LineNo;
 
@@ -56,4 +57,10 @@ pub trait DiffView: Send + Sync {
     /// Lines of A currently on screen. Inserted lines count with the A line
     /// they follow.
     fn set_visible(&self, range: Range<LineNo>);
+
+    /// Blocks that moved, ordered by their line in A. Empty unless the
+    /// implementation detects moves.
+    fn moved_blocks(&self) -> &[MovedBlock] {
+        &[]
+    }
 }
