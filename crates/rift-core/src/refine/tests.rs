@@ -302,7 +302,7 @@ fn small_reservation_grows_or_fails_with_budget_error() {
     let budget = Budget::new(Bytes(2 * estimate.0 - 2));
     let mut res = budget.try_reserve(Half::Refine, Bytes(10)).unwrap();
     let err = exact().refine(&seg, &h, &h, &m, &m, &mut res).unwrap_err();
-    assert!(matches!(err, crate::Error::Budget(_)), "{err}");
+    assert!(matches!(err, Error::Budget(_)), "{err}");
     assert_eq!(
         res.bytes(),
         Bytes(10),
@@ -527,4 +527,53 @@ fn dp_threshold() {
             .fold(f64::MAX, f64::min);
         eprintln!("dp_max {dp:3}: 20k random gaps {total:.3} s, 1M-line segment {big:.3} s");
     }
+}
+
+#[test]
+fn lines_longer_than_the_reader_are_compared_in_pieces() {
+    use crate::index::IndexedLines;
+    use crate::scan::{ScanConfig, scan};
+
+    let long = |tail: u8| {
+        let mut l = vec![b'x'; 200_000];
+        l.push(tail);
+        l.push(b'\n');
+        l
+    };
+    let build = |parts: &[&[u8]]| parts.concat();
+    let a = build(&[b"a\n", &long(b'1'), b"b\n", &long(b'2'), b"z\n"]);
+    let b = build(&[b"a\n", &long(b'1'), b"c\n", &long(b'3'), b"z\n"]);
+    let budget = Budget::new(Bytes::mib(64));
+    let reader = |data: &[u8]| {
+        let cfg = ScanConfig::for_pair(Bytes(data.len() as u64), Bytes(0), &budget).0;
+        scan(data, &budget, &cfg).unwrap()
+    };
+    let (sa, sb) = (reader(&a), reader(&b));
+    let la = IndexedLines::new(&a[..], sa.index(), &budget, Half::Refine, Bytes(4096)).unwrap();
+    let lb = IndexedLines::new(&b[..], sb.index(), &budget, Half::Refine, Bytes(4096)).unwrap();
+    let seg = Segment {
+        a: LineNo(0)..LineNo(5),
+        b: LineNo(0)..LineNo(5),
+        status: SegmentStatus::Differs,
+    };
+    let hashes = |d: &[u8]| lines(d).into_iter().map(xxh3_64).collect::<Vec<_>>();
+    let (ha, hb) = (hashes(&a), hashes(&b));
+    let mut res = budget.try_reserve(Half::Refine, Bytes(0)).unwrap();
+    let hunk = Refiner::new(256)
+        .refine(&seg, &ha, &hb, &la, &lb, &mut res)
+        .unwrap();
+    assert_eq!(
+        apply(&hunk, &seg, &lines(&a), &lines(&b)).concat(),
+        b,
+        "script replays to B"
+    );
+    assert_eq!(edit_count(&hunk), 4, "the equal long line stays equal");
+
+    // A hash collision on the long lines: verification must catch it.
+    let mut hb2 = hb.clone();
+    hb2[3] = ha[3];
+    let hunk = Refiner::new(256)
+        .refine(&seg, &ha, &hb2, &la, &lb, &mut res)
+        .unwrap();
+    assert_eq!(apply(&hunk, &seg, &lines(&a), &lines(&b)).concat(), b);
 }

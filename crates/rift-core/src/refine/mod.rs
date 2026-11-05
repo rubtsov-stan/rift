@@ -20,10 +20,11 @@ use std::ops::Range;
 
 use crate::budget::Reservation;
 use crate::edit::{Edit, Hunk};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::lines::{LineAccess, LineBuf};
+use crate::script::PIECE;
 use crate::segment::Segment;
-use crate::types::{Bytes, LineHash};
+use crate::types::{Bytes, LineHash, LineNo};
 
 /// Largest `N+M` handled by quadratic DP instead of Myers.
 ///
@@ -41,7 +42,9 @@ pub const DP_MAX: usize = 12;
 const MAX_DEPTH: usize = 32;
 
 /// Lines per side read in one `read_lines` call while verifying matches.
-const VERIFY_LINES: usize = 1024;
+/// The line buffers hold one block, so this times the longest line a
+/// reader returns whole bounds them.
+const VERIFY_LINES: usize = 64;
 
 /// Not reached, in `u32` index arrays.
 const NONE: u32 = u32::MAX;
@@ -72,10 +75,12 @@ fn scratch_words(s: u64) -> u64 {
 /// Per-worker state: the cost cutoff and the line buffers reused across
 /// segments.
 ///
-/// The line buffers hold up to `VERIFY_LINES` (1024) lines per side while a
+/// The line buffers hold up to `VERIFY_LINES` (64) lines per side while a
 /// match is verified and are not part of [`work_estimate`]: their size
 /// follows line length, which the estimate does not know. The caller
-/// accounts for them once per worker, like its read buffers.
+/// accounts for them once per worker, like its read buffers. A line the
+/// reader cannot return whole is compared in pieces of
+/// 64 KiB.
 #[derive(Debug)]
 pub struct Refiner {
     cutoff: u64,
@@ -229,7 +234,7 @@ fn empty<T>(cap: usize) -> Result<Vec<T>> {
     Ok(out)
 }
 
-fn oom(_: std::collections::TryReserveError) -> crate::Error {
+fn oom(_: std::collections::TryReserveError) -> Error {
     std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
 }
 
@@ -442,15 +447,21 @@ fn verify<L: LineAccess + ?Sized>(
             (ie, je) = (ci + 1, cj + 1);
             (ci, cj) = (ci + 1, cj + 1);
         }
-        lines_a.read_lines(seg.a.start + i0 as u64..seg.a.start + ie as u64, buf_a)?;
-        lines_b.read_lines(seg.b.start + j0 as u64..seg.b.start + je as u64, buf_b)?;
+        let whole = read_block(lines_a, seg.a.start + i0 as u64, ie - i0, buf_a)?
+            && read_block(lines_b, seg.b.start + j0 as u64, je - j0, buf_b)?;
         while i < ie && j < je {
             if removed[i] {
                 i += 1;
             } else if added[j] {
                 j += 1;
             } else {
-                if buf_a.line(i - i0) != buf_b.line(j - j0) {
+                let same = if whole {
+                    buf_a.line(i - i0) == buf_b.line(j - j0)
+                } else {
+                    let (at_a, at_b) = (seg.a.start + i as u64, seg.b.start + j as u64);
+                    same_line(lines_a, at_a, lines_b, at_b, buf_a, buf_b)?
+                };
+                if !same {
                     removed[i] = true;
                     added[j] = true;
                 }
@@ -461,6 +472,45 @@ fn verify<L: LineAccess + ?Sized>(
     }
     debug_assert!(i >= n && j >= m, "unflagged lines must pair up exactly");
     Ok(())
+}
+
+/// Reads `len` lines from `start` into `buf`; false when one of them is too
+/// long for the reader, and the block must be compared line by line.
+fn read_block<L: LineAccess + ?Sized>(
+    lines: &L,
+    start: LineNo,
+    len: usize,
+    buf: &mut LineBuf,
+) -> Result<bool> {
+    match lines.read_lines(start..start + len as u64, buf) {
+        Ok(()) => Ok(true),
+        Err(Error::LineTooLong { .. }) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether line `x` of A and line `y` of B have the same bytes, compared
+/// in pieces so a line of any length fits the buffers.
+pub(crate) fn same_line<L: LineAccess + ?Sized, M: LineAccess + ?Sized>(
+    lines_a: &L,
+    x: LineNo,
+    lines_b: &M,
+    y: LineNo,
+    buf_a: &mut LineBuf,
+    buf_b: &mut LineBuf,
+) -> Result<bool> {
+    let mut from = 0;
+    loop {
+        let end_a = lines_a.read_line_part(x, Bytes(from), PIECE, buf_a)?;
+        let end_b = lines_b.read_line_part(y, Bytes(from), PIECE, buf_b)?;
+        if end_a != end_b || buf_a.line(0) != buf_b.line(0) {
+            return Ok(false);
+        }
+        if end_a {
+            return Ok(true);
+        }
+        from += PIECE.0;
+    }
 }
 
 /// Turns the flag arrays into ordered runs with absolute line numbers.
