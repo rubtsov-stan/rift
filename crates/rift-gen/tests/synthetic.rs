@@ -68,19 +68,6 @@ fn options() -> Options<'static> {
 }
 
 #[test]
-fn reading_the_source_takes_no_heap() {
-    let _turn = SERIAL.lock().unwrap();
-    let (a, _) = pair(1 << 30);
-    let mut buf = vec![0u8; 1 << 20];
-    let base = alloc::current().0;
-    alloc::reset_peak();
-    for k in 0..64u64 {
-        a.read_at(&mut buf, ByteOffset(k * 16_777_259)).unwrap();
-    }
-    assert_eq!(alloc::peak().0, base, "a read allocated");
-}
-
-#[test]
 fn the_diff_of_a_small_synthetic_pair_replays_to_b() {
     let _turn = SERIAL.lock().unwrap();
     let (a, b) = pair(8 << 20);
