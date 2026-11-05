@@ -5,9 +5,9 @@
 //! method). It never blocks on refinement: a hunk that is not ready is drawn
 //! as a pending row and the frame is redrawn on the next tick.
 //!
-//! Memory: the interface keeps `O(m)` small vectors over the segment list
-//! (`diffs`, `starts`) and `O(width)` minimap cells. They sit outside the
-//! engine budget and are about 16 bytes per segment.
+//! Memory: nothing is kept per segment. Segment data is read from the view
+//! on demand, and the interface holds two running sums and `O(width)`
+//! minimap cells, so its footprint does not depend on the file size.
 #![forbid(unsafe_code)]
 
 mod app;

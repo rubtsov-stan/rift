@@ -5,7 +5,7 @@ use std::ops::Range;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rift_core::{DiffView, HunkState, LineAccess, LineBuf, LineNo, Progress, SegmentStatus};
 
-use crate::minimap::{self, Minimap};
+use crate::minimap::{self, Cursor, Minimap};
 
 /// What the loop should do after a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,10 +51,13 @@ pub struct App<'a> {
     pub(crate) pos: Pos,
     pub(crate) mode: Mode,
     pub(crate) message: &'static str,
-    /// Indices of segments that are not Equal, ascending.
-    pub(crate) diffs: Vec<usize>,
-    /// Minimap-space start of every segment, plus the total.
-    pub(crate) starts: Vec<u64>,
+    /// Segments that are not Equal, and the minimap weight of all segments.
+    /// One pass at construction; nothing is kept per segment.
+    pub(crate) diff_total: u64,
+    pub(crate) weight_total: u64,
+    /// Differences before the top segment, and the weight before it.
+    pub(crate) seen: Cursor,
+    pub(crate) before: Cursor,
     pub(crate) rows: u16,
     pub(crate) reported: Option<Range<LineNo>>,
     pub(crate) drawn_progress: Option<Progress>,
@@ -67,9 +70,8 @@ impl<'a> App<'a> {
     #[must_use]
     pub fn new(view: &'a dyn DiffView, a: &'a dyn LineAccess, b: &'a dyn LineAccess) -> Self {
         let segs = view.segments();
-        let diffs = (0..segs.len())
-            .filter(|&i| segs[i].status != SegmentStatus::Equal)
-            .collect();
+        let diff_total = segs.iter().map(minimap::is_diff).sum();
+        let weight_total = segs.iter().map(minimap::weight).sum();
         Self {
             view,
             a,
@@ -77,8 +79,10 @@ impl<'a> App<'a> {
             pos: Pos::default(),
             mode: Mode::Normal,
             message: "",
-            diffs,
-            starts: minimap::starts(segs),
+            diff_total,
+            weight_total,
+            seen: Cursor::default(),
+            before: Cursor::default(),
             rows: 20,
             reported: None,
             drawn_progress: None,
@@ -132,27 +136,28 @@ impl<'a> App<'a> {
     }
 
     fn next_diff(&mut self) {
-        let i = self.diffs.partition_point(|&d| d <= self.pos.seg);
-        match self.diffs.get(i) {
-            Some(&seg) => self.pos = Pos { seg, off: 0 },
+        let segs = self.view.segments();
+        let next = (self.pos.seg + 1..segs.len()).find(|&i| segs[i].status != SegmentStatus::Equal);
+        match next {
+            Some(seg) => self.pos = Pos { seg, off: 0 },
             None => self.message = "no next difference",
         }
     }
 
     fn prev_diff(&mut self) {
-        let inside = self.diffs.binary_search(&self.pos.seg).is_ok();
+        let segs = self.view.segments();
+        let inside = segs
+            .get(self.pos.seg)
+            .is_some_and(|s| s.status != SegmentStatus::Equal);
         if inside && self.pos.off > 0 {
             self.pos.off = 0;
             return;
         }
-        let i = self.diffs.partition_point(|&d| d < self.pos.seg);
-        match i.checked_sub(1) {
-            Some(i) => {
-                self.pos = Pos {
-                    seg: self.diffs[i],
-                    off: 0,
-                }
-            }
+        let prev = (0..self.pos.seg)
+            .rev()
+            .find(|&i| segs[i].status != SegmentStatus::Equal);
+        match prev {
+            Some(seg) => self.pos = Pos { seg, off: 0 },
             None => self.message = "no previous difference",
         }
     }

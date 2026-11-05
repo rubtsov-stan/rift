@@ -10,16 +10,42 @@ pub(crate) struct Minimap {
     approx: Vec<u64>,
 }
 
-/// Start of each segment in the weighted space, plus the total at the end.
-pub(crate) fn starts(segments: &[Segment]) -> Vec<u64> {
-    let mut v = Vec::with_capacity(segments.len() + 1);
-    let mut at = 0u64;
-    v.push(0);
-    for s in segments {
-        at += s.len_a().max(s.len_b());
-        v.push(at);
+/// Weight of a segment in the minimap: the longer of its two sides.
+pub(crate) fn weight(s: &Segment) -> u64 {
+    s.len_a().max(s.len_b())
+}
+
+/// Whether the segment is a difference.
+pub(crate) fn is_diff(s: &Segment) -> u64 {
+    u64::from(s.status != SegmentStatus::Equal)
+}
+
+/// Running sum of `f` over `segments[..seg]`, kept at the last asked
+/// position. Moving costs the distance moved, so a frame near the previous
+/// one is cheap and no per-segment array is needed.
+#[derive(Debug, Default)]
+pub(crate) struct Cursor {
+    seg: usize,
+    sum: u64,
+}
+
+impl Cursor {
+    pub(crate) fn sum_to(
+        &mut self,
+        segments: &[Segment],
+        seg: usize,
+        f: fn(&Segment) -> u64,
+    ) -> u64 {
+        while self.seg < seg {
+            self.sum += f(&segments[self.seg]);
+            self.seg += 1;
+        }
+        while self.seg > seg {
+            self.seg -= 1;
+            self.sum -= f(&segments[self.seg]);
+        }
+        self.sum
     }
-    v
 }
 
 fn cell_of(pos: u64, total: u64, width: usize) -> usize {
@@ -39,23 +65,24 @@ impl Minimap {
     }
 
     /// Rebuilds the cells; reuses their allocation. O(m + width).
-    pub(crate) fn rebuild(&mut self, segments: &[Segment], starts: &[u64], width: usize) {
+    pub(crate) fn rebuild(&mut self, segments: &[Segment], total: u64, width: usize) {
         self.width = width;
         self.differs.clear();
         self.approx.clear();
         self.differs.resize(width, 0);
         self.approx.resize(width, 0);
-        let total = starts.last().copied().unwrap_or(0);
         if width == 0 || total == 0 {
             return;
         }
-        for (s, w) in segments.iter().zip(starts.windows(2)) {
+        let mut at = 0;
+        for s in segments {
+            let (lo, hi) = (at, at + weight(s));
+            at = hi;
             let acc = match s.status {
                 SegmentStatus::Equal => continue,
                 SegmentStatus::Differs => &mut self.differs,
                 SegmentStatus::Approx => &mut self.approx,
             };
-            let (lo, hi) = (w[0], w[1]);
             let (first, last) = (cell_of(lo, total, width), cell_of(hi - 1, total, width));
             for (c, cell) in acc.iter_mut().enumerate().take(last + 1).skip(first) {
                 let from = lo.max(cell_start(c, total, width));

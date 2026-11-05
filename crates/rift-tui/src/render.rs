@@ -10,6 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Segment, SegmentStatus};
 
 use crate::app::{App, Mode, Pos, Scratch};
+use crate::minimap;
 
 const GLYPHS: [char; 9] = ['·', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 const MINIMAP_ROWS: u16 = 3;
@@ -349,18 +350,19 @@ impl App<'_> {
 
     fn draw_minimap(&mut self, buf: &mut Buffer, area: Rect, info: &Info) {
         let bar = usize::from(area.width - LABEL_COLS);
-        let total = self.starts.last().copied().unwrap_or(0);
+        let total = self.weight_total;
+        let segs = self.view.segments();
         let mm = &mut self.scratch.minimap;
         if mm.width() != bar {
-            mm.rebuild(self.view.segments(), &self.starts, bar);
+            mm.rebuild(segs, total, bar);
         }
         let labels = [('D', Color::Red), ('~', Color::Yellow), ('v', Color::Reset)];
         let (c0, c1) = if total == 0 {
             (0, 0)
         } else {
-            let at = |p: Pos| {
-                let w = self.starts[p.seg + 1] - self.starts[p.seg];
-                self.starts[p.seg] + p.off.min(w.saturating_sub(1))
+            let mut at = |p: Pos| {
+                let w = minimap::weight(&segs[p.seg]);
+                self.before.sum_to(segs, p.seg, minimap::weight) + p.off.min(w.saturating_sub(1))
             };
             (mm.cell(at(self.pos), total), mm.cell(at(info.last), total))
         };
@@ -400,16 +402,21 @@ impl App<'_> {
             }
             sc.status.push_str("_  Enter/Esc");
         } else {
-            let seen = self.diffs.partition_point(|&d| d <= self.pos.seg);
+            let segs = self.view.segments();
+            let seen = if segs.is_empty() {
+                0
+            } else {
+                self.seen.sum_to(segs, self.pos.seg + 1, minimap::is_diff)
+            };
             let _ = write!(
                 sc.status,
                 " A {}  B {}  diff {}/{}",
                 self.view.len_a(),
                 self.view.len_b(),
                 seen,
-                self.diffs.len()
+                self.diff_total
             );
-            if self.diffs.is_empty() {
+            if self.diff_total == 0 {
                 sc.status.push_str("  files are identical");
             }
             if !self.message.is_empty() {
