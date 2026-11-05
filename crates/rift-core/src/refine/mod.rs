@@ -72,7 +72,7 @@ fn scratch_words(s: u64) -> u64 {
 /// Per-worker state: the cost cutoff and the line buffers reused across
 /// segments.
 ///
-/// The line buffers hold up to [`VERIFY_LINES`] lines per side while a
+/// The line buffers hold up to `VERIFY_LINES` (1024) lines per side while a
 /// match is verified and are not part of [`work_estimate`]: their size
 /// follows line length, which the estimate does not know. The caller
 /// accounts for them once per worker, like its read buffers.
