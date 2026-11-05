@@ -162,28 +162,11 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Rows a segment occupies. A pending hunk is one placeholder row.
-    /// O(edits) for a refined hunk.
+    /// Rows a segment occupies. O(edits) for a refined hunk.
     pub(crate) fn rows_of(&self, seg: usize) -> u64 {
         let s = &self.view.segments()[seg];
-        if s.status == SegmentStatus::Equal {
-            return s.len_a().max(1);
-        }
-        match self.view.hunk(seg) {
-            HunkState::Pending => 1,
-            HunkState::Ready(h) | HunkState::Approx(h) => {
-                let n: u64 = h
-                    .edits
-                    .iter()
-                    .map(|e| match *e {
-                        rift_core::Edit::Equal { len, .. }
-                        | rift_core::Edit::Delete { len, .. }
-                        | rift_core::Edit::Insert { len, .. } => len,
-                    })
-                    .sum();
-                n.max(1)
-            }
-        }
+        let state = (s.status != SegmentStatus::Equal).then(|| self.view.hunk(seg));
+        rows_in(s, state.as_ref())
     }
 
     /// Scrolls down but stops with the last row at the bottom of the view.
@@ -283,5 +266,24 @@ impl<'a> App<'a> {
             0
         };
         self.pos = Pos { seg, off };
+    }
+}
+
+/// Rows of a segment given its hunk state (`None` for an Equal segment). A
+/// pending hunk is one placeholder row.
+pub(crate) fn rows_in(seg: &rift_core::Segment, state: Option<&HunkState>) -> u64 {
+    match state {
+        None => seg.len_a().max(1),
+        Some(HunkState::Pending) => 1,
+        Some(HunkState::Ready(h) | HunkState::Approx(h)) => h
+            .edits
+            .iter()
+            .map(|e| match *e {
+                rift_core::Edit::Equal { len, .. }
+                | rift_core::Edit::Delete { len, .. }
+                | rift_core::Edit::Insert { len, .. } => len,
+            })
+            .sum::<u64>()
+            .max(1),
     }
 }

@@ -31,6 +31,8 @@ pub struct MockView {
     state: Mutex<State>,
     total: u64,
     pub visible: Mutex<Vec<Range<LineNo>>>,
+    /// Segments passed to `hunk`, recorded once `log_hunk_calls` is called.
+    calls: Mutex<Option<Vec<usize>>>,
 }
 
 pub struct Mock {
@@ -141,6 +143,7 @@ impl Mock {
             }),
             total,
             visible: Mutex::new(Vec::with_capacity(1 << 16)),
+            calls: Mutex::new(None),
         };
         Self { view, a, b }
     }
@@ -163,6 +166,15 @@ impl Mock {
 }
 
 impl MockView {
+    /// Starts recording which segments `hunk` is asked for.
+    pub fn log_hunk_calls(&self) {
+        *self.calls.lock().unwrap() = Some(Vec::new());
+    }
+
+    pub fn hunk_calls(&self) -> Vec<usize> {
+        self.calls.lock().unwrap().clone().unwrap_or_default()
+    }
+
     /// Finishes one pending hunk, the one closest after the visible window.
     /// Returns whether anything was pending.
     pub fn refine_next(&self) -> bool {
@@ -192,6 +204,9 @@ impl DiffView for MockView {
         &self.segments
     }
     fn hunk(&self, segment: usize) -> HunkState {
+        if let Some(log) = self.calls.lock().unwrap().as_mut() {
+            log.push(segment);
+        }
         self.state.lock().unwrap().shown[segment].clone()
     }
     fn progress(&self) -> Progress {

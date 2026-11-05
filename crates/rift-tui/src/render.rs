@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Segment, SegmentStatus};
 
-use crate::app::{App, Mode, Pos, Scratch};
+use crate::app::{App, Mode, Pos, Scratch, rows_in};
 use crate::minimap;
 
 const GLYPHS: [char; 9] = ['·', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -298,7 +298,11 @@ impl App<'_> {
                 pending: false,
             };
         }
-        let rows_here = self.rows_of(self.pos.seg);
+        // The first segment's hunk is fetched here and reused by the loop.
+        let start_seg = self.pos.seg;
+        let mut first =
+            (segs[start_seg].status != SegmentStatus::Equal).then(|| view.hunk(start_seg));
+        let rows_here = rows_in(&segs[start_seg], first.as_ref());
         self.pos.off = self.pos.off.min(rows_here - 1);
         let (len_a, len_b) = (view.len_a(), view.len_b());
         let mut painter = Painter {
@@ -326,7 +330,8 @@ impl App<'_> {
             let done = if seg.status == SegmentStatus::Equal {
                 painter.equal(buf, seg, skip)
             } else {
-                match view.hunk(idx) {
+                let state = first.take().filter(|_| idx == start_seg);
+                match state.unwrap_or_else(|| view.hunk(idx)) {
                     HunkState::Pending if skip == 0 => painter.pending(buf, seg),
                     HunkState::Pending => 1,
                     HunkState::Ready(h) => painter.hunk(buf, seg, &h, false, skip),

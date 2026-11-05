@@ -189,6 +189,23 @@ fn inserted_lines_count_with_the_a_line_they_follow() {
 }
 
 #[test]
+fn each_hunk_is_fetched_once_per_frame() {
+    let m = mock();
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 30)).unwrap();
+    chars(&mut app, "n");
+    m.view.log_hunk_calls();
+    draw(&mut app, &mut term);
+    let mut calls = m.view.hunk_calls();
+    let total = calls.len();
+    calls.sort_unstable();
+    calls.dedup();
+    assert!(total > 0);
+    assert_eq!(calls.len(), total, "a segment was fetched twice");
+}
+
+#[test]
 fn event_loop_records_one_sample_per_key_and_redraws_on_progress() {
     let m = Mock::build(
         &[
