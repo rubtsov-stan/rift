@@ -365,3 +365,118 @@ H2 holds for the parallel scanner: with four or more threads it reads at
 disk speed. A single thread is CPU-bound on short lines at about 70 ns per
 line, 14 million lines per second, so the scanner must be parallel, as
 planned.
+
+## 0.2
+
+0.2 adds four features to the MVP: shingle anchors, key mode, moved blocks
+and an MCP server. The contracts they share went in first, so each feature
+stays inside its own module and none of them edits a shared file. A
+performance pass over the skeleton follows shingle anchors, and the
+Homebrew installer comes back once the tap exists. The persistent index and
+the GUI wait for 0.3: the index writes files next to user data and needs
+its own design for safety and invalidation.
+
+### Contracts
+
+**`CandidateSource`, `UniqueLines`** (`anchors`). A source gets the
+samples of both files and the budget, and returns `Anchors`: pairs of
+sample indices, strictly increasing in A, with no B index used twice, and a
+skeleton-half reservation that covers them. Candidates are hash matches;
+the skeleton confirms the ones it keeps. `anchors::select` alone decides
+which sources run, and both the skeleton and the resampler call it. Today
+it runs `UniqueLines`, the MVP's selection unchanged.
+
+**`OffChain`** (`skeleton`). The candidates the chain search leaves out,
+as `[line in A, line in B]` pairs in A order, from `Skeleton::off_chain`,
+`Skeleton::into_parts` and `Diff::off_chain`. Nothing has read their
+bytes, so a reader compares the two lines before it relies on a pair. The
+list costs 16 bytes per pair from the skeleton half and grows as pairs
+arrive. It stops at 1/8 of what that half has free when the search starts,
+which leaves room for the segment list and the comparison buffers, and
+counts the pairs it could not keep in `dropped`.
+
+**`KeySpec`, `CsvColumn`, `KeyedChange`, `ChangeKind`, `KeyError`**
+(`keyed`). A key is a CSV column by position or header name, an NDJSON
+field path, or a column of a `pg_dump` COPY block by name. `--key` parses
+`csv:N` (counted from 1), `csv:NAME`, `json:a.b` and `copy:NAME`. A
+`KeyedChange` holds the key's bytes as the file has them, `Added`,
+`Removed` or `Changed`, and the record's first line in A and in B; a side
+is absent only when the kind says so. `KeyError` reaches callers as
+`Error::Keyed`, and its first variant is duplicate keys. Until key mode
+exists, `rift --key` exits 2 with "key mode is not implemented yet".
+
+**`MovedBlock`** (`moves`). Two line ranges of the same length, one in A
+and one in B, holding the same bytes. `DiffView::moved_blocks` returns
+them ordered by A, and its default returns none. A moved block annotates
+the diff and never changes the edit script.
+
+**`rift-mcp`**. A crate with an MCP server on standard input and output,
+built on `rmcp`. It answers `initialize` and has no tools yet. The
+workspace manifest already lists what the server needs: `rmcp`, `tokio`,
+`serde`, `serde_json` and `schemars`. `rift-core` gains no dependency.
+
+**Generator profiles** (`rift-gen`). `nokey` draws every row from a pool
+of 1024 rows without an id, so in a file of a few MiB no line occurs only
+once. `shuffled` gives every row a unique id in the first column (the `id`
+field for NDJSON) and moves blocks of 1 to 50 rows in B, each across at
+least four times its length; inserts, deletes and modifies act on keys,
+and a modify keeps its key. `--rows csv|sql|ndjson` picks the row format.
+The manifest lists every change and every block move with its line in A
+and in B.
+
+### Shingle anchors
+
+A dump without an id column gives the skeleton few unique lines, so it
+ends up with few anchors and large `Approx` regions. A shingle is the hash
+of a window of `w` consecutive lines, combined from line hashes instead of
+hashing the bytes again. Shingles are sampled by the strata rule, and one
+that occurs once in each file becomes a candidate pointing at its first
+line. They come from a second `CandidateSource` and are paid from the
+skeleton half; when they do not fit, the skeleton falls back to unique
+lines alone and does not fail. Measurements on `nokey` and the real data
+sets choose `w`, and whether shingles run everywhere or only in gaps that
+unique lines leave too long. A shingle anchor still counts only after its
+lines compare equal byte by byte.
+
+### Key mode
+
+`rift --key SPEC a b` compares records by key, in any row order, and
+prints the added, removed and changed keys with their line numbers. The
+plan is to partition by key hash: pass `k` reads both files and keeps only
+the records whose key hash falls in partition `k`, and the file sizes and
+the budget set the partition count so that one partition fits. Each pass
+rereads both files and writes nothing to disk. A key found twice in one
+file is an error that lists the first few. A record counts as unchanged
+only after its bytes compare equal. `shuffled` is the test bed: its
+manifest names every change, and a pair that is only reordered reports
+none.
+
+### Moved blocks
+
+A block that moved shows up as a deletion and an insertion. Its lines
+still match between the files, and the chain search leaves those matches
+out because they cross the chain: they are the `OffChain` pairs. Detection
+groups consecutive pairs into runs, extends each run line by line in both
+directions with a byte comparison, and keeps runs of at least a few lines.
+Its memory comes from the refine half; when the budget is too small, it
+skips moves and the summary says so. `--summary` and `--stats` list moved
+blocks, and the terminal view marks both ends of each and jumps between
+them. The unified diff stays byte-identical.
+
+### MCP server
+
+`rift-mcp` lets an MCP client explore the diff of two large files through
+small answers instead of megabytes of text: `summary`, `hunks_at(line)`
+and `next_difference(after_line)`. It keeps the diff of each pair of
+files alive between calls, so it builds the skeleton once, and drops it
+after an idle timeout. It opens regular files only, read-only, and every response
+has a size bound. It reaches the core through `DiffView` and the contracts
+above.
+
+### Performance and packaging
+
+The performance pass profiles the full diff and `--summary` on a 10 GiB
+pair and targets the second pass over differing regions. It starts after
+shingle anchors, since both change the skeleton's comparison path.
+Homebrew returns to the release installers once the tap repository and
+its token exist.
