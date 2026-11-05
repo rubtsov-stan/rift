@@ -534,7 +534,7 @@ fn visible_segments_include_an_insert_at_the_top() {
 fn finishes<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::thread::Result<T> {
     let (done, finished) = channel();
     let handle = std::thread::spawn(move || {
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let out = panic::catch_unwind(AssertUnwindSafe(f));
         let _ = done.send(());
         out
     });
@@ -575,4 +575,27 @@ fn refine_bytes_held_before_construction_do_not_stall_the_workers() {
     let t = Arc::clone(&s);
     finishes(move || t.wait_hunk(2)).unwrap();
     assert!(budget.used(Half::Refine) <= budget.capacity(Half::Refine));
+}
+
+#[test]
+fn a_panicking_job_fails_the_waiter_instead_of_hanging() {
+    struct Boom;
+    impl Job for Boom {
+        fn estimate(&self, _: &Segment) -> Bytes {
+            Bytes(8)
+        }
+        fn run(&self, segment: &Segment, _: &Cancel) -> Hunk {
+            assert!(id(segment) != 1, "boom");
+            script(segment, false)
+        }
+        fn too_large(&self, segment: &Segment, _: Bytes, _: &Cancel) -> Hunk {
+            script(segment, true)
+        }
+    }
+    let n = 3;
+    let s = Arc::new(Scheduler::new(Boom, segments(n, |_| false), &budget(n, 4), 1).unwrap());
+    let t = Arc::clone(&s);
+    assert!(finishes(move || t.wait_hunk(1)).is_err(), "waiter panics");
+    let t = Arc::clone(&s);
+    finishes(move || t.wait_hunk(2)).expect("the worker survived");
 }

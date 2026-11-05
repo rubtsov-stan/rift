@@ -22,6 +22,8 @@ pub(super) enum State {
     Running,
     /// The hunk is in the cache.
     Cached,
+    /// The job panicked; asking for the hunk panics too.
+    Failed,
 }
 
 #[derive(Debug)]

@@ -30,6 +30,7 @@ mod tests;
 
 use std::collections::BTreeSet;
 use std::ops::Range;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -198,7 +199,7 @@ impl<J: Job> Scheduler<J> {
     ///
     /// # Panics
     ///
-    /// Panics if `segment` is out of range.
+    /// Panics if `segment` is out of range or its job panicked.
     #[allow(
         clippy::must_use_candidate,
         reason = "waiting for the computation is the effect; the value may be ignored"
@@ -309,7 +310,16 @@ impl<J: Job> Shared<J> {
     }
 
     /// The cached hunk, or a request for it that wakes a worker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the job for `segment` panicked, so a bug in a job reaches
+    /// the caller instead of leaving it waiting.
     fn lookup(&self, q: &mut Queue, segment: usize) -> Option<Arc<Hunk>> {
+        assert!(
+            q.cache.state(segment) != State::Failed,
+            "refinement of segment {segment} panicked"
+        );
         let hunk = q.cache.get(segment);
         if hunk.is_none() && q.cache.state(segment) == State::Idle && q.wanted.insert(segment) {
             self.cv.notify_all();
@@ -370,6 +380,13 @@ impl Queue {
         cancel
     }
 
+    fn fail(&mut self, segment: usize) {
+        let at = self.running.iter().position(|r| r.segment == segment);
+        self.running
+            .swap_remove(at.expect("failed job was running"));
+        self.cache.set_state(segment, State::Failed);
+    }
+
     fn complete(&mut self, segment: usize, hunk: Hunk, cancelled: bool) {
         let at = self.running.iter().position(|r| r.segment == segment);
         self.running
@@ -418,16 +435,27 @@ fn worker<J: Job>(shared: &Shared<J>) {
         let cancel = q.start(i, prefetch);
         drop(q);
 
-        let mut hunk = if too_large {
-            shared.job.too_large(segment, shared.work_cap, &cancel)
-        } else {
-            shared.job.run(segment, &cancel)
-        };
+        // A panicking job must not take the worker down with it and leave
+        // its segment Running forever; the panic is passed to whoever asks
+        // for the hunk. Nothing the job touched is shared but the budget,
+        // which the reservation's drop settles.
+        let out = panic::catch_unwind(AssertUnwindSafe(|| {
+            if too_large {
+                shared.job.too_large(segment, shared.work_cap, &cancel)
+            } else {
+                shared.job.run(segment, &cancel)
+            }
+        }));
         drop(reservation);
-        hunk.edits.shrink_to_fit();
 
         q = shared.lock();
-        q.complete(i, hunk, cancel.is_set());
+        match out {
+            Ok(mut hunk) => {
+                hunk.edits.shrink_to_fit();
+                q.complete(i, hunk, cancel.is_set());
+            }
+            Err(_) => q.fail(i),
+        }
         shared.cv.notify_all();
     }
 }
