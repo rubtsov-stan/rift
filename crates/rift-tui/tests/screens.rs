@@ -489,3 +489,43 @@ fn every_control_character_is_escaped_except_tab() {
     assert_escaped('\u{2029}');
     assert!(drawn('\t').contains("a b"));
 }
+
+#[test]
+fn a_character_cut_at_the_prefix_boundary_is_not_shown_as_invalid() {
+    // 4-byte characters, one column wide. The row cap is 4 * room + 2 bytes,
+    // so the read ends two bytes into a character.
+    let line = "\u{1D11E}".repeat(100) + "\n";
+    let lines = Canned {
+        lines: vec![line.as_bytes(), b"next\n"],
+        fail: None,
+    };
+    let s = show(&lines);
+    assert!(!s.contains('\u{FFFD}'), "{s}");
+    let row = s.lines().next().unwrap();
+    // 70 columns minus the 9-column gutter.
+    assert_eq!(row.matches('\u{1D11E}').count(), 61, "{row}");
+}
+
+#[test]
+fn shrinking_and_growing_the_terminal_leaves_no_stale_state() {
+    let m = Mock::large(30, true);
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut shrunk = App::new(&m.view, &a, &b);
+    let mut fresh = App::new(&m.view, &a, &b);
+    for app in [&mut shrunk, &mut fresh] {
+        press(app, "nn ");
+    }
+    for (w, h) in [
+        (120, 40),
+        (60, 12),
+        (30, 6),
+        (24, 3),
+        (20, 2),
+        (1, 1),
+        (50, 10),
+    ] {
+        // Must not panic at any size; the last one is compared below.
+        screen(&mut shrunk, w, h);
+    }
+    assert_eq!(screen(&mut shrunk, 50, 10), screen(&mut fresh, 50, 10));
+}
