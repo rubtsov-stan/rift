@@ -111,49 +111,29 @@ yellow and marked with `~`.
 
 ## Benchmarks
 
-`bench/run.sh` compares Rift with `diff` and `git diff --no-index` and
-prints the table below together with the hardware and the commands;
-`bench/data.sh` regenerates the data sets.
+Wall time and peak memory of Rift, `diff` and `git diff --no-index` on
+the two pairs of generated SQL dumps from `bench/data.sh`, with Rift at
+`--mem 256M`.
 
-#### Hardware
+Apple M1, 16 GB RAM, internal SSD, macOS, warm page cache.
 
-- CPU: Apple M1
-- RAM: 16.0 GiB
-- Disk: APPLE SSD AP0512Q
-- OS: macOS 27.0.1
-- rift: 0e837b0 release profile, no target-cpu=native
-- diff: Apple diff (based on FreeBSD diff) (not GNU; run and labelled as such)
-- git: git version 2.50.1 (Apple Git-155)
-- Page cache: warm (no root: caches not dropped)
+| Pair | Tool | Time | Peak memory |
+|---|---|---|---|
+| 1 GB | `rift --summary` | 1.26 s | 127.7 MiB |
+| 1 GB | `rift` (full diff) | 0.93 s | 130.8 MiB |
+| 1 GB | system `diff` | 17.55 s | 3.2 GiB |
+| 10 GB | `rift --summary` | 13.37 s | 136.5 MiB |
+| 10 GB | `rift` (full diff) | 26.16 s | 136.5 MiB |
+| 10 GB | `diff` | did not run: needs more than 16 GB of RAM | |
+| 10 GB | `git diff` | did not run: needs more than 16 GB of RAM | |
 
-#### Seeds and commands
+Peak memory is the resident set; Rift's heap, the part `--mem` limits,
+peaked at 83.5 MiB on the 1 GB pair and 94.1 MiB on the 10 GB pair.
+`git diff` has no 1 GB row because it treats files over 512 MiB as binary
+and prints no diff.
 
-- gen1g: existing pair in /Users/stan/rift-data/gen1g (bench/data.sh uses seed 7)
-- gen10g: existing pair in /Users/stan/rift-data/gen10g (bench/data.sh uses seed 7)
-- summary: `rift --summary --mem 256M a b`; full diff: `rift --stats --mem 256M a b`
-- diff: `diff a b` (GNU when labelled so); git: `git diff --no-index a b`
-- timing: `/usr/bin/time -l COMMAND`, stdout redirected to a file (output column is its size)
-
-#### Results
-
-| Pair | Command | Cache | Wall | Peak RSS | Output | Peak heap | Status |
-|---|---|---|---|---|---|---|---|
-| gen1g | rift --summary --mem 256M | warm | 1.26 s | 127.7 MiB | 673 B | 83.5 MiB | exit 1 |
-| gen1g | rift --stats --mem 256M | warm | 0.93 s | 130.8 MiB | 23.0 MiB | 83.5 MiB | exit 1 |
-| gen1g | system diff (not GNU) | warm | 17.55 s | 3.2 GiB | 22.9 MiB |  | exit 1 |
-| gen1g | git diff --no-index a b | warm | 63.92 s | 4.9 MiB | 189 B |  | exit 1 |
-| gen10g | rift --summary --mem 256M | warm | 13.37 s | 136.5 MiB | 686 B | 94.1 MiB | exit 1 |
-| gen10g | rift --stats --mem 256M | warm | 26.16 s | 136.5 MiB | 238.2 MiB | 94.1 MiB | exit 1 |
-| gen10g | diff | | not run: needs more memory than available (20.0 GiB of input, 16.0 GiB RAM) | | | | |
-| gen10g | git diff --no-index | | not run: needs more memory than available (20.0 GiB of input, 16.0 GiB RAM) | | | | |
-
-Notes on this run: `git diff` treats files above its 512 MiB
-`core.bigFileThreshold` as binary, so on the 1 GiB pair it printed only
-"Binary files differ". The page cache was not dropped (no root), but the
-10 GiB pair is twice the RAM, so each of its passes reads mostly from the
-disk. `rift --summary` reads both files twice (scan, then comparison of
-the equal stretches); `cat a b` over the same pair took 6.6 to 6.9 s.
-
+`bench/run.sh` prints the full results with the commands and seeds, and
+`bench/data.sh` regenerates the data.
 
 ## License
 
