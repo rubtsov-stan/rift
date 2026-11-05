@@ -13,9 +13,9 @@
 //!
 //! An anchor is confirmed byte by byte either way: inside the comparison of
 //! the equal gap it opens, or, when its gap differs, by reading its two
-//! lines. Nothing is taken on a hash match: a gap boundary is a line start
-//! in both files whatever the anchor's bytes, and an `Equal` segment is
-//! always a compared one.
+//! lines. An anchor whose lines differ is demoted: the gaps on both sides
+//! of it merge into one `Differs` segment. An `Equal` segment is always a
+//! compared one.
 //!
 //! Memory, from the skeleton half, besides what the two [`Scanned`] hold:
 //! the anchor table and candidates (see [`anchors`]), then 8 bytes per
@@ -24,7 +24,7 @@
 //! 40 bytes per segment for the result.
 
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -65,7 +65,8 @@ impl Skeleton {
 
     /// Anchors in the chain the map was cut along, all confirmed byte by
     /// byte. A candidate whose bytes turned out to differ (a hash
-    /// collision) is not counted; the line boundary it marks stays valid.
+    /// collision) is not counted, and its neighbouring gaps form one
+    /// `Differs` segment.
     #[must_use]
     pub fn anchors(&self) -> usize {
         self.anchors
@@ -152,31 +153,30 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
         (budget.available(Half::Skeleton).0 / (8 * 2 * threads as u64)).clamp(MIN_BUF, MAX_BUF);
     let bitmap = 8 * gaps.div_ceil(64) as u64;
     let buffers = 2 * buf * threads as u64;
-    let mut work = budget.try_reserve(Half::Skeleton, Bytes(buffers + bitmap))?;
+    let mut work = budget.try_reserve(Half::Skeleton, Bytes(buffers + 2 * bitmap))?;
     let verdicts = compare_gaps(&bounds, src_a, src_b, to_usize(buf), TASK_BYTES)?;
     work.shrink(Bytes(buffers));
 
+    // A false anchor is demoted: the gap it closes is marked as differing
+    // and joins the one it opens.
+    let differs = |g: usize| verdicts.differs(g) || (g + 1 < gaps && verdicts.false_anchor(g + 1));
     // Equal gaps merge, so segments alternate at worst: at most two per
     // differing gap plus one, which sizes the list once.
-    let differing: usize = verdicts
-        .bits
-        .iter()
-        .map(|w| w.load(Ordering::Relaxed).count_ones() as usize)
-        .sum();
+    let differing = (0..gaps).filter(|&g| differs(g)).count();
     let cap = gaps.min(2 * differing + 1);
     let reservation = budget.try_reserve(Half::Skeleton, Bytes(cap as u64 * SEGMENT_BYTES))?;
     let mut segments = Vec::with_capacity(cap);
     for g in 0..gaps {
-        let status = if verdicts.differs(g) {
+        let status = if differs(g) {
             SegmentStatus::Differs
         } else {
             SegmentStatus::Equal
         };
         let (a, b) = bounds.lines(g, g + 1);
-        push(&mut segments, a, b, status);
+        push(&mut segments, a, b, status, verdicts.false_anchor(g));
     }
     debug_assert!(segments.len() <= cap);
-    let false_anchors = verdicts.false_anchors;
+    let false_anchors = (0..gaps).filter(|&g| verdicts.false_anchor(g)).count();
     drop(verdicts);
     drop(work);
     Ok(Skeleton {
@@ -197,15 +197,32 @@ const TASK_BYTES: u64 = 16 << 20;
 /// What the comparison found, per gap.
 struct Verdicts {
     /// A bit per gap, set when it differs or is not aligned.
-    bits: Vec<AtomicU64>,
-    /// Anchors opening a differing gap whose two lines turned out unequal.
-    false_anchors: usize,
+    differs: Vec<AtomicU64>,
+    /// A bit per gap, set when the anchor opening it turned out to have
+    /// unequal lines: a hash collision.
+    false_anchors: Vec<AtomicU64>,
+}
+
+fn bitmap(bits: usize) -> Vec<AtomicU64> {
+    (0..bits.div_ceil(64)).map(|_| AtomicU64::new(0)).collect()
+}
+
+// Relaxed: each bit is written by one task and read after the pool joins.
+fn set(bits: &[AtomicU64], i: usize) {
+    bits[i / 64].fetch_or(1 << (i % 64), Ordering::Relaxed);
+}
+
+fn get(bits: &[AtomicU64], i: usize) -> bool {
+    bits[i / 64].load(Ordering::Relaxed) & (1 << (i % 64)) != 0
 }
 
 impl Verdicts {
     fn differs(&self, g: usize) -> bool {
-        // Relaxed: the bits were written before the pool joined.
-        self.bits[g / 64].load(Ordering::Relaxed) & (1 << (g % 64)) != 0
+        get(&self.differs, g)
+    }
+
+    fn false_anchor(&self, g: usize) -> bool {
+        get(&self.false_anchors, g)
     }
 }
 
@@ -226,17 +243,17 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     task_bytes: u64,
 ) -> Result<Verdicts> {
     let gaps = bounds.chain.len() + 1;
-    let bits: Vec<AtomicU64> = (0..gaps.div_ceil(64)).map(|_| AtomicU64::new(0)).collect();
-    let false_anchors = AtomicUsize::new(0);
-    // Relaxed: each bit and count is written by one task and read after
-    // the pool joins.
+    let verdicts = Verdicts {
+        differs: bitmap(gaps),
+        false_anchors: bitmap(gaps),
+    };
     let differs = |g: usize, buf_a: &mut [u8], buf_b: &mut [u8]| -> Result<()> {
-        bits[g / 64].fetch_or(1 << (g % 64), Ordering::Relaxed);
+        set(&verdicts.differs, g);
         if g > 0 {
             let (a, b) = bounds.at(g);
             let (a, b) = (ByteOffset(a.offset), ByteOffset(b.offset));
             if !anchors::same_line(src_a, a, src_b, b, buf_a, buf_b)? {
-                false_anchors.fetch_add(1, Ordering::Relaxed);
+                set(&verdicts.false_anchors, g);
             }
         }
         Ok(())
@@ -288,10 +305,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
             Ok(())
         },
     )?;
-    Ok(Verdicts {
-        bits,
-        false_anchors: false_anchors.into_inner(),
-    })
+    Ok(verdicts)
 }
 
 /// Reduces the candidates, ordered by A, to a longest chain increasing in
@@ -421,14 +435,21 @@ impl Bounds<'_> {
 }
 
 /// Appends a segment, merging it into an `Equal` predecessor when it is
-/// `Equal` too. A segment empty on both sides is dropped.
-fn push(segments: &mut Vec<Segment>, a: Range<LineNo>, b: Range<LineNo>, status: SegmentStatus) {
+/// `Equal` too, or into a `Differs` one when `join` says the boundary
+/// between them is a false anchor. A segment empty on both sides is dropped.
+fn push(
+    segments: &mut Vec<Segment>,
+    a: Range<LineNo>,
+    b: Range<LineNo>,
+    status: SegmentStatus,
+    join: bool,
+) {
     if a.is_empty() && b.is_empty() {
         return;
     }
     if let Some(last) = segments.last_mut()
-        && last.status == SegmentStatus::Equal
-        && status == SegmentStatus::Equal
+        && last.status == status
+        && (status == SegmentStatus::Equal || join)
     {
         last.a.end = a.end;
         last.b.end = b.end;
@@ -544,14 +565,15 @@ mod tests {
             .filter(|&g| {
                 want[g] && ma.line(u64::from(chain[g - 1].a)) != mb.line(u64::from(chain[g - 1].b))
             })
-            .count();
-        assert!(false_anchors > 0);
+            .collect::<Vec<_>>();
+        assert!(!false_anchors.is_empty());
         for task_bytes in [1, 3, 64, 100, 1 << 20] {
             for buf in [1, 5, 4096] {
                 let got = compare_gaps(&bounds, &a[..], &b[..], buf, task_bytes).unwrap();
                 let bits: Vec<bool> = (0..gaps).map(|g| got.differs(g)).collect();
                 assert_eq!(bits, want, "task_bytes {task_bytes}, buf {buf}");
-                assert_eq!(got.false_anchors, false_anchors, "task_bytes {task_bytes}");
+                let false_got: Vec<usize> = (0..gaps).filter(|&g| got.false_anchor(g)).collect();
+                assert_eq!(false_got, false_anchors, "task_bytes {task_bytes}");
             }
         }
     }

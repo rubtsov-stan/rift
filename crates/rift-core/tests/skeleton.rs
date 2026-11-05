@@ -3,7 +3,7 @@
 use proptest::prelude::*;
 use rift_core::scan::{ScanConfig, scan};
 use rift_core::skeleton::{Skeleton, build, build_pair};
-use rift_core::{Budget, Bytes, LineAccess, LineNo, MemLines, Segment, SegmentStatus};
+use rift_core::{Budget, Bytes, LineAccess, LineNo, MemLines, Segment, SegmentStatus, Source};
 
 fn config(level: u32) -> ScanConfig {
     ScanConfig {
@@ -192,4 +192,62 @@ proptest! {
         let map = map_at(&a, &b, level);
         prop_assert_eq!(map.is_identical(), a == b);
     }
+}
+
+/// A source whose bytes change once the scan is done, so a line that hashed
+/// equal to its counterpart reads back different: a forced hash collision.
+struct Collide {
+    scanned: Vec<u8>,
+    read_later: Vec<u8>,
+    swapped: std::sync::atomic::AtomicBool,
+}
+
+impl Source for Collide {
+    fn len(&self) -> Bytes {
+        Bytes(self.scanned.len() as u64)
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: rift_core::ByteOffset) -> std::io::Result<usize> {
+        let swapped = self.swapped.load(std::sync::atomic::Ordering::Relaxed);
+        let data = if swapped {
+            &self.read_later
+        } else {
+            &self.scanned
+        };
+        data[..].read_at(buf, offset)
+    }
+}
+
+#[test]
+fn a_false_anchor_is_demoted_and_never_equal() {
+    let a = lines(400);
+    let ma = MemLines::new(&a);
+    // Line 200 of B scans like A's line 200, then reads back changed.
+    let k = 200;
+    let start: usize = (0..k).map(|i| ma.line(i).unwrap().len()).sum();
+    let mut later = a.clone();
+    later[start] = b'#';
+    let b = Collide {
+        scanned: a.clone(),
+        read_later: later.clone(),
+        swapped: false.into(),
+    };
+    let budget = Budget::new(Bytes::mib(16));
+    let mut sa = scan(&a[..], &budget, &config(0)).unwrap();
+    let mut sb = scan(&b, &budget, &config(0)).unwrap();
+    b.swapped.store(true, std::sync::atomic::Ordering::Relaxed);
+    let map = build(&a[..], &b, &mut sa, &mut sb, &budget).unwrap();
+
+    check(&a, &later, map.segments());
+    let differs: Vec<&Segment> = map
+        .segments()
+        .iter()
+        .filter(|s| s.status != SegmentStatus::Equal)
+        .collect();
+    // Every line is an anchor at stratum 0. The gap the false anchor opens
+    // merges with the gap before it.
+    assert_eq!(differs.len(), 1, "{:?}", map.segments());
+    assert_eq!(differs[0].a, LineNo(k - 1)..LineNo(k + 1));
+    assert_eq!(differs[0].b, LineNo(k - 1)..LineNo(k + 1));
+    assert_eq!(map.anchors(), 399);
 }
