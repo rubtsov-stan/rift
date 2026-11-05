@@ -145,6 +145,8 @@ struct Queue {
     wanted: BTreeSet<usize>,
     /// Background scan position in file order: nothing below it is fresh.
     cursor: usize,
+    /// Whether idle workers refine segments nobody asked for.
+    background: bool,
     running: Vec<Running>,
     /// Segments whose job failed, with the reason; one entry each.
     failures: Vec<(usize, String)>,
@@ -194,6 +196,7 @@ impl<J: Job> Scheduler<J> {
                 visible: 0..0,
                 wanted: BTreeSet::new(),
                 cursor: 0,
+                background: true,
                 running: Vec::with_capacity(threads),
                 failures: Vec::new(),
                 stop: false,
@@ -216,6 +219,17 @@ impl<J: Job> Scheduler<J> {
     #[must_use]
     pub fn work_cap(&self) -> Bytes {
         self.shared.work_cap
+    }
+
+    /// Turns background refinement on or off; it is on from the start.
+    ///
+    /// The unified writer turns it off and moves the visible window ahead
+    /// of itself instead: background work runs ahead without bound, and
+    /// once the cache is full it evicts hunks the writer has not reached,
+    /// which then have to be computed twice.
+    pub fn set_background(&self, on: bool) {
+        self.shared.lock().background = on;
+        self.shared.cv.notify_all();
     }
 
     /// The hunk for `segment`, computing it first if needed. Blocks; for the
@@ -384,7 +398,7 @@ impl Queue {
             }
             self.wanted.pop_first();
         }
-        while self.cursor < self.cache.len() {
+        while self.background && self.cursor < self.cache.len() {
             if self.cache.fresh(self.cursor) {
                 return Some((self.cursor, false));
             }

@@ -307,6 +307,7 @@ fn queue_rewinds_cursor_after_a_cancel() {
         visible: 2..3,
         wanted: BTreeSet::new(),
         cursor: 0,
+        background: true,
         running: Vec::new(),
         failures: Vec::new(),
         stop: false,
@@ -616,4 +617,34 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
     finishes(move || t.wait_hunk(3))
         .unwrap()
         .expect("the worker survived");
+}
+
+#[test]
+fn without_background_only_the_window_and_requests_are_refined() {
+    let n = 12;
+    let (started, starts) = channel();
+    let job = Fake {
+        started: Some(started),
+        ..Fake::new()
+    };
+    let s = Scheduler::new(job, segments(n, |_| false), &budget(n, 64), 1).unwrap();
+    s.set_background(false);
+    // The worker may have taken segment 0 before the switch.
+    let first = starts.recv_timeout(std::time::Duration::from_millis(200));
+    assert!(matches!(first, Ok(0) | Err(_)));
+    s.set_visible(lines(6));
+    let mut got: Vec<usize> = (0..9).map(|_| starts.recv().unwrap()).collect();
+    got.sort_unstable();
+    assert_eq!(got, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    s.wait_hunk(11).unwrap();
+    assert!(
+        starts
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_ok_and(|i| i == 11)
+    );
+    assert!(
+        starts
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err()
+    );
 }
