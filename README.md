@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.svg" width="96" alt="Rift">
+</p>
+
 # Rift
 
 [![CI](https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml)

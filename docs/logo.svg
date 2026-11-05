@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Rift</title>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#1f2328"/>
+  <path d="M28 28 H66 L52 56 L72 72 L58 100 H28 Z" fill="#e5534b"/>
+  <path d="M100 28 V100 H70 L84 72 L64 56 L78 28 Z" fill="#57ab5a"/>
+</svg>
