@@ -250,7 +250,7 @@ mod tests {
             select_of(&[1, 2, 3, 4], &[4, 2]),
             [Pair { a: 1, b: 1 }, Pair { a: 3, b: 0 }]
         );
-        assert!(select_of(&[], &[1]).is_empty());
+        assert_eq!(select_of(&[], &[1]), []);
     }
 
     #[test]

@@ -816,7 +816,7 @@ mod tests {
                 want[g] && ma.line(u64::from(chain[g - 1].a)) != mb.line(u64::from(chain[g - 1].b))
             })
             .collect::<Vec<_>>();
-        assert!(!false_anchors.is_empty());
+        assert_ne!(false_anchors, [0; 0]);
         for task_bytes in [1, 3, 64, 100, 1 << 20] {
             for buf in [1, 5, 4096] {
                 let got = compare_gaps(&bounds, &a[..], &b[..], buf, 3, task_bytes).unwrap();

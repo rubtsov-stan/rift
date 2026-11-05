@@ -156,7 +156,7 @@ fn exit_codes_follow_diff() {
     let same = pair(b"one\ntwo\n", b"one\ntwo\n");
     let out = rift(&[], &same.a, &same.b);
     assert_eq!(out.status.code(), Some(0));
-    assert!(out.stdout.is_empty());
+    assert_eq!(out.stdout, b"");
 
     let differ = pair(b"one\ntwo\n", b"one\n2\n");
     let out = rift(&[], &differ.a, &differ.b);

@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn empty_slice_is_empty() {
         let src: &[u8] = b"";
-        assert!(src.is_empty());
+        assert!(Source::is_empty(&src));
         assert_eq!(Source::len(&src), Bytes(0));
     }
 }

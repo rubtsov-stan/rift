@@ -99,7 +99,7 @@ fn higher_stratum_is_a_subset() {
     let data = lines(4000);
     let low = check(&data, &config(2, 128, 2));
     let high = check(&data, &config(3, 128, 2));
-    assert!(!high.samples().is_empty());
+    assert_ne!(high.samples(), []);
     assert!(high.samples().len() < low.samples().len());
     assert!(high.samples().iter().all(|s| low.samples().contains(s)));
 }

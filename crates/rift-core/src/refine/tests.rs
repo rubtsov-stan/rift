@@ -162,7 +162,7 @@ fn mutated() -> impl Strategy<Value = (Vec<u8>, Vec<u8>)> {
 #[test]
 fn empty_sides_and_identical_input() {
     let mut r = exact();
-    assert!(check(&mut r, b"", b"", 0, xxh3_64).edits.is_empty());
+    assert_eq!(check(&mut r, b"", b"", 0, xxh3_64).edits, []);
     assert_eq!(
         check(&mut r, b"", b"x\ny\n", 0, xxh3_64).edits,
         [Edit::Insert {

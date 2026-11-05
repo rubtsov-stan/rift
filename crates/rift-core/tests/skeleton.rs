@@ -81,7 +81,7 @@ fn identical_files_are_one_equal_segment() {
 #[test]
 fn empty_files_have_no_segments() {
     let map = map_at(b"", b"", 0);
-    assert!(map.segments().is_empty());
+    assert_eq!(map.segments(), []);
     assert!(map.is_identical());
     assert_eq!(map.anchors(), 0);
 }

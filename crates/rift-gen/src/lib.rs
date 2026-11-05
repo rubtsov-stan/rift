@@ -447,7 +447,7 @@ mod tests {
         cfg.kinds.clear();
         let (a, b, muts) = pair(&cfg);
         assert_eq!(a, b);
-        assert!(muts.is_empty());
+        assert_eq!(muts, [] as [Mutation; 0]);
         assert!(a.len() >= 100_000);
     }
 
