@@ -1,19 +1,27 @@
 <p align="center">
-  <img src="docs/logo.svg" width="96" alt="Rift">
+  <img src="docs/logo.svg" width="112" alt="">
 </p>
 
-# Rift
+<h1 align="center">Rift</h1>
 
-[![CI](https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/rubtsov-stan/rift)](https://github.com/rubtsov-stan/rift/releases/latest)
+<p align="center">
+  Diff huge text files under a hard memory limit.
+</p>
+
+<p align="center">
+  <a href="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml"><img src="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/rubtsov-stan/rift/releases/latest"><img src="https://img.shields.io/github/v/release/rubtsov-stan/rift" alt="Release"></a>
+</p>
+
+<p align="center">
+  <img src="docs/demo.gif" alt="rift --summary on a 64 MiB pair, then the terminal view jumping between differences" width="720">
+</p>
 
 Rift diffs text files of any size, from megabytes to hundreds of
 gigabytes, under a heap limit you set on the command line (`--mem`,
 256 MiB by default). It writes a unified diff that `patch` applies to the
 first file to get the second, and has a terminal view that lets you jump
 through the differences before the whole diff is done.
-
-![rift --summary on a 64 MiB pair, then the terminal view jumping between differences](docs/demo.gif)
 
 Use it on database dumps before and after a migration, CSV or NDJSON
 exports, generated fixtures and large golden files: inputs where `diff`
