@@ -23,7 +23,7 @@ use std::iter::Peekable;
 use crate::edit::{Edit, Hunk};
 use crate::error::Result;
 use crate::lines::{LineAccess, LineBuf};
-use crate::script::{Cursor, for_each_line};
+use crate::script::{Cursor, for_each_piece};
 use crate::types::{Bytes, LineNo};
 
 /// Context lines around each change by default, as in `diff -u`.
@@ -284,14 +284,21 @@ impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
             Edit::Insert { b, len } => (self.b, b"+", b, len),
         };
         let out = &mut self.out;
-        for_each_line(&src, start..start + len, &mut self.buf, |line| {
-            out.write_all(prefix)?;
-            out.write_all(line)?;
-            if line.last() != Some(&b'\n') {
-                out.write_all(b"\n\\ No newline at end of file\n")?;
-            }
-            Ok(())
-        })
+        for_each_piece(
+            &src,
+            start..start + len,
+            &mut self.buf,
+            |piece, first, last| {
+                if first {
+                    out.write_all(prefix)?;
+                }
+                out.write_all(piece)?;
+                if last && piece.last() != Some(&b'\n') {
+                    out.write_all(b"\n\\ No newline at end of file\n")?;
+                }
+                Ok(())
+            },
+        )
     }
 }
 

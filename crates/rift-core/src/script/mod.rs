@@ -11,11 +11,14 @@ use std::ops::Range;
 use crate::edit::{Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::lines::{LineAccess, LineBuf};
-use crate::types::LineNo;
+use crate::types::{Bytes, LineNo};
 
 /// Lines fetched per `read_lines` call, which bounds the line buffer to
-/// this many lines of the longest line seen.
-pub(crate) const LINES_PER_READ: u64 = 1024;
+/// this many lines of the longest line the reader returns whole.
+pub(crate) const LINES_PER_READ: u64 = 64;
+
+/// Bytes per piece when a line is too long for `read_lines`.
+pub(crate) const PIECE: Bytes = Bytes(64 << 10);
 
 /// Position reached while walking a script.
 ///
@@ -119,27 +122,53 @@ pub fn apply<'h>(
             Edit::Insert { b: start, len } => (b, start, len),
             Edit::Delete { .. } => continue,
         };
-        for_each_line(&src, start..start + len, &mut buf, |l| out.write_all(l))?;
+        for_each_piece(&src, start..start + len, &mut buf, |p, _, _| {
+            out.write_all(p)
+        })?;
     }
     cursor.finish(a.line_count(), b.line_count())
 }
 
-/// Calls `f` on every line of `range`, reading [`LINES_PER_READ`] lines at
-/// a time into `buf`.
-pub(crate) fn for_each_line(
-    src: &impl LineAccess,
+/// Calls `f(piece, first, last)` on the bytes of every line of `range`, in
+/// order: once per line with both flags set, or, for a line the reader
+/// cannot return whole, once per piece of at most [`PIECE`] bytes, `first`
+/// on the first and `last` on the one that ends the line. Lines are read
+/// [`LINES_PER_READ`] at a time into `buf`.
+pub(crate) fn for_each_piece(
+    src: &(impl LineAccess + ?Sized),
     range: Range<LineNo>,
     buf: &mut LineBuf,
-    mut f: impl FnMut(&[u8]) -> std::io::Result<()>,
+    mut f: impl FnMut(&[u8], bool, bool) -> std::io::Result<()>,
 ) -> Result<()> {
     let mut at = range.start;
     while at < range.end {
         let end = at + (range.end - at).min(LINES_PER_READ);
-        src.read_lines(at..end, buf)?;
+        let long = match src.read_lines(at..end, buf) {
+            Ok(()) => end,
+            Err(Error::LineTooLong { line, .. }) if (at..end).contains(&line) => {
+                src.read_lines(at..line, buf)?;
+                line
+            }
+            Err(e) => return Err(e),
+        };
         for line in buf.iter() {
-            f(line)?;
+            f(line, true, true)?;
         }
-        at = end;
+        if long < end {
+            let mut from = 0;
+            loop {
+                let done = src.read_line_part(long, Bytes(from), PIECE, buf)?;
+                let piece = buf.line(0);
+                f(piece, from == 0, done)?;
+                if done {
+                    break;
+                }
+                from += piece.len() as u64;
+            }
+            at = long + 1;
+        } else {
+            at = end;
+        }
     }
     Ok(())
 }
@@ -366,13 +395,61 @@ mod tests {
         let src = MemLines::new(&data);
         let mut buf = LineBuf::new();
         let mut out = Vec::new();
-        for_each_line(&src, LineNo(1)..LineNo(2999), &mut buf, |l| {
+        for_each_piece(&src, LineNo(1)..LineNo(2999), &mut buf, |l, first, last| {
+            assert!(first && last);
             out.extend_from_slice(l);
             Ok(())
         })
         .unwrap();
         assert_eq!(out, data[2..data.len() - 5]);
         assert!(u64::try_from(buf.len()).unwrap() <= LINES_PER_READ);
+    }
+
+    #[test]
+    fn lines_longer_than_the_reader_arrive_in_pieces() {
+        use crate::budget::{Budget, Half};
+        use crate::scan::{ScanConfig, scan};
+
+        let mut data = Vec::new();
+        for i in 0..200 {
+            if i % 50 == 7 {
+                data.extend(std::iter::repeat_n(b'x', 200_000));
+            }
+            data.extend_from_slice(format!("{i}\n").as_bytes());
+        }
+        data.extend(std::iter::repeat_n(b'y', 70_000));
+        let budget = Budget::new(Bytes::mib(64));
+        let cfg = ScanConfig::for_pair(Bytes(data.len() as u64), Bytes(0), &budget).0;
+        let scanned = scan(&data[..], &budget, &cfg).unwrap();
+        let reader = crate::index::IndexedLines::new(
+            &data[..],
+            scanned.index(),
+            &budget,
+            Half::Refine,
+            Bytes(4096),
+        )
+        .unwrap();
+        let mem = MemLines::new(&data);
+        for range in [0..201, 5..9, 7..8, 200..201, 150..200] {
+            let (mut out, mut lines, mut open) = (Vec::new(), 0, false);
+            let mut buf = LineBuf::new();
+            let r = LineNo(range.start)..LineNo(range.end);
+            for_each_piece(&reader, r, &mut buf, |p, first, last| {
+                assert!(p.len() as u64 <= PIECE.0.max(4096));
+                assert_eq!(first, !open, "first marks a new line");
+                open = !last;
+                lines += u64::from(last);
+                out.extend_from_slice(p);
+                Ok(())
+            })
+            .unwrap();
+            let want: Vec<u8> = range
+                .clone()
+                .flat_map(|i| mem.line(i).unwrap().to_vec())
+                .collect();
+            assert_eq!(out, want, "{range:?}");
+            assert_eq!(lines, range.end - range.start);
+        }
     }
 
     proptest! {
