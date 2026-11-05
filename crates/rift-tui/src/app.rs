@@ -5,6 +5,7 @@ use std::ops::Range;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rift_core::{DiffView, HunkState, LineAccess, LineBuf, LineNo, Progress, SegmentStatus};
 
+use crate::cache::LineCache;
 use crate::minimap::{self, Cursor, Minimap};
 
 /// What the loop should do after a key.
@@ -40,6 +41,7 @@ pub(crate) struct Scratch {
     pub text: String,
     pub prefix: String,
     pub err: String,
+    pub cache: LineCache,
     pub status: String,
     pub minimap: Minimap,
 }

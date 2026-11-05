@@ -10,7 +10,7 @@ use common::{Mock, Spec};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use rift_core::MemLines;
+use rift_core::{Bytes, LineAccess, LineBuf, LineNo, MemLines, Result};
 use rift_tui::{Action, App, run};
 
 fn key(c: KeyCode) -> KeyEvent {
@@ -293,4 +293,69 @@ fn event_loop_records_one_sample_per_key_and_redraws_on_progress() {
         2,
         "q quits before drawing and records nothing"
     );
+}
+
+/// Counts `read_line_prefix` calls per line.
+struct Counted<'a> {
+    inner: MemLines<'a>,
+    prefix_reads: std::sync::Mutex<Vec<u64>>,
+}
+
+impl LineAccess for Counted<'_> {
+    fn line_count(&self) -> u64 {
+        self.inner.line_count()
+    }
+    fn read_lines(&self, range: std::ops::Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
+        self.inner.read_lines(range, buf)
+    }
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
+        self.prefix_reads.lock().unwrap().push(line.0);
+        self.inner.read_line_prefix(line, max, buf)
+    }
+}
+
+#[test]
+fn a_huge_line_is_read_once_while_the_window_stays() {
+    let mut data = b"first\n".to_vec();
+    data.extend(std::iter::repeat_n(b'x', 1 << 20));
+    data.push(b'\n');
+    for i in 0..40 {
+        data.extend_from_slice(format!("line {i}\n").as_bytes());
+    }
+    let lines = Counted {
+        inner: MemLines::new(&data),
+        prefix_reads: std::sync::Mutex::new(Vec::new()),
+    };
+    let m = Mock::build(&[Spec::Equal(lines.line_count())], true);
+    let mut app = App::new(&m.view, &lines, &lines);
+    let mut term = Terminal::new(TestBackend::new(70, 8)).unwrap();
+    let reads_of_huge = |lines: &Counted<'_>| {
+        lines
+            .prefix_reads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|&&l| l == 1)
+            .count()
+    };
+    for _ in 0..100 {
+        draw(&mut app, &mut term);
+    }
+    assert_eq!(reads_of_huge(&lines), 1, "redraws must reuse the cache");
+    draw(&mut app, &mut term);
+    assert_eq!(reads_of_huge(&lines), 1);
+
+    app.handle_key(key(KeyCode::PageDown));
+    draw(&mut app, &mut term);
+    assert_eq!(reads_of_huge(&lines), 1, "off screen, not read");
+    app.handle_key(key(KeyCode::PageUp));
+    draw(&mut app, &mut term);
+    assert_eq!(reads_of_huge(&lines), 2, "coming back reads it again");
+    draw(&mut app, &mut term);
+    assert_eq!(reads_of_huge(&lines), 2);
+
+    // A wider terminal needs a longer prefix.
+    let mut wide = Terminal::new(TestBackend::new(140, 8)).unwrap();
+    draw(&mut app, &mut wide);
+    assert_eq!(reads_of_huge(&lines), 3);
 }

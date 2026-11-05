@@ -7,7 +7,10 @@ use common::{Mock, Spec};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use rift_core::{Error, LineAccess, LineBuf, LineNo, MemLines, Result};
+use rift_core::scan::{ScanConfig, scan};
+use rift_core::{
+    Budget, Bytes, Half, LineAccess, LineBuf, LineNo, MemLines, Result, index::IndexedLines,
+};
 use rift_tui::{Action, App};
 
 const W: u16 = 56;
@@ -356,8 +359,6 @@ v ······················▀▀▀▀▀▀▀▀▀▀▀�
 struct Canned<'a> {
     lines: Vec<&'a [u8]>,
     fail: Option<&'static str>,
-    /// Longest line served whole, like a budgeted reader.
-    cap: usize,
 }
 
 impl LineAccess for Canned<'_> {
@@ -366,31 +367,19 @@ impl LineAccess for Canned<'_> {
     }
     fn read_lines(&self, range: std::ops::Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
         buf.clear();
-        if let Some(msg) = self.fail {
-            return Err(std::io::Error::other(msg).into());
-        }
         for i in range.start.0..range.end.0 {
-            let line = self.lines[usize::try_from(i).unwrap()];
-            if line.len() > self.cap {
-                return Err(Error::LineTooLong {
-                    line: LineNo(i),
-                    cap: rift_core::Bytes(self.cap as u64),
-                });
-            }
-            buf.push(line)?;
+            buf.push(self.lines[usize::try_from(i).unwrap()])?;
         }
         Ok(())
     }
-    fn read_line_prefix(
-        &self,
-        line: LineNo,
-        max: rift_core::Bytes,
-        buf: &mut LineBuf,
-    ) -> Result<rift_core::Bytes> {
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
         buf.clear();
+        if let Some(msg) = self.fail {
+            return Err(std::io::Error::other(msg).into());
+        }
         let bytes = self.lines[usize::try_from(line.0).unwrap()];
         buf.push(&bytes[..bytes.len().min(usize::try_from(max.0).unwrap())])?;
-        Ok(rift_core::Bytes(bytes.len() as u64))
+        Ok(Bytes(bytes.len() as u64))
     }
 }
 
@@ -409,7 +398,6 @@ fn file_text_is_shown_as_visible_escapes() {
             b"f\x1b[31mg\x07\n",
         ],
         fail: None,
-        cap: 1 << 20,
     };
     let s = show(&lines);
     assert!(s.contains(r"a\u{202E}b"), "{s}");
@@ -425,7 +413,6 @@ fn error_text_is_sanitized() {
     let lines = Canned {
         lines: vec![b"x\n"],
         fail: Some("boom \u{202E}\x1b[31m"),
-        cap: 1,
     };
     let s = show(&lines);
     assert!(s.contains(r"boom \u{202E}\u{1B}[31m"), "{s}");
@@ -433,16 +420,28 @@ fn error_text_is_sanitized() {
 }
 
 #[test]
-fn a_line_over_the_budget_fails_alone() {
-    let huge = vec![b'x'; 1 << 20];
-    let lines = Canned {
-        lines: vec![b"before\n", &huge, b"after\n"],
-        fail: None,
-        cap: 64,
-    };
-    let s = show(&lines);
-    assert!(s.contains("before"), "{s}");
-    assert!(s.contains("after"), "{s}");
-    assert!(s.contains("exceeds buffer"), "{s}");
-    assert!(!s.contains("xxxxxxxx"), "{s}");
+fn a_line_over_the_budget_is_drawn_from_its_prefix() {
+    // 1 MiB line, 256-byte read buffer: read_lines would fail on it.
+    let mut data = b"before\n".to_vec();
+    data.extend(std::iter::repeat_n(b'x', 1 << 20));
+    data.extend_from_slice(b"\nafter\n");
+    let budget = Budget::new(Bytes::mib(64));
+    let (cfg, _) = ScanConfig::for_pair(Bytes(data.len() as u64), Bytes(0), &budget);
+    let scanned = scan(&data[..], &budget, &cfg).unwrap();
+    let lines = IndexedLines::new(
+        &data[..],
+        scanned.index(),
+        &budget,
+        Half::Refine,
+        Bytes(256),
+    )
+    .unwrap();
+    let mut probe = LineBuf::new();
+    assert!(lines.read_lines(LineNo(1)..LineNo(2), &mut probe).is_err());
+    let m = Mock::build(&[Spec::Equal(3)], true);
+    let mut app = App::new(&m.view, &lines, &lines);
+    let s = screen(&mut app, 70, 8);
+    assert!(s.contains("before") && s.contains("after"), "{s}");
+    assert!(s.contains(&"x".repeat(40)), "{s}");
+    assert!(!s.contains("exceeds"), "{s}");
 }

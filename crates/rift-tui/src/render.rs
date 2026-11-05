@@ -10,6 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Segment, SegmentStatus};
 
 use crate::app::{App, Mode, Pos, Scratch, rows_in};
+use crate::cache::LineCache;
 use crate::minimap;
 
 const GLYPHS: [char; 9] = ['·', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -91,7 +92,7 @@ impl Painter<'_> {
             Kind::Insert => (self.files[1], run.b),
             _ => (self.files[0], run.a),
         };
-        let batch = file.read_lines(LineNo(first)..LineNo(first + n), &mut self.scratch.lines);
+        let side = u8::from(run.kind == Kind::Insert);
         let (mark, color) = match (run.kind, run.approx) {
             (Kind::Equal, _) => (' ', None),
             (kind, true) => (
@@ -120,26 +121,21 @@ impl Painter<'_> {
                 let _ = write!(pre, "{:digits$}", run.b + i + 1);
             }
             pre.push_str(" │ ");
-            let txt = &mut self.scratch.text;
-            txt.clear();
-            // One bad line (too long for the reader) must not blank its
-            // neighbours: after a failed batch, ask for each line alone.
-            let single;
-            let (read, at) = if batch.is_ok() {
-                (&batch, usize::try_from(i).expect("small"))
-            } else {
-                let from = LineNo(first + i);
-                single = file.read_lines(from..from + 1, &mut self.scratch.lines);
-                (&single, 0)
-            };
+            self.scratch.text.clear();
+            // A row shows at most `room` characters of at most 4 bytes, so
+            // this prefix is enough however long the line is.
             let mut left = room;
-            match read {
-                Ok(()) => sanitize(self.scratch.lines.line(at), txt, &mut left),
+            let sc = &mut *self.scratch;
+            let txt = &mut sc.text;
+            match sc
+                .cache
+                .get(file, side, first + i, room * 4 + 2, &mut sc.lines)
+            {
+                Ok(e) => sanitize(sc.cache.bytes(&e), LineCache::is_cut(&e), txt, &mut left),
                 Err(e) => {
-                    let msg = &mut self.scratch.err;
-                    msg.clear();
-                    let _ = write!(msg, "<{e}>");
-                    push_clean(txt, msg, &mut left);
+                    sc.err.clear();
+                    let _ = write!(sc.err, "<{e}>");
+                    push_clean(txt, &sc.err, &mut left);
                 }
             }
             let y = self.row + u16::try_from(i).expect("rows fit the screen");
@@ -240,12 +236,15 @@ impl Painter<'_> {
 /// Appends `line` to `out` while `left` columns remain: no terminator, tabs
 /// as a space, invalid UTF-8 as U+FFFD, everything else that could change
 /// the terminal or the reading order as a visible `\u{..}` escape.
-fn sanitize(line: &[u8], out: &mut String, left: &mut usize) {
+fn sanitize(line: &[u8], cut: bool, out: &mut String, left: &mut usize) {
     let line = line.strip_suffix(b"\n").unwrap_or(line);
     let line = line.strip_suffix(b"\r").unwrap_or(line);
-    for chunk in line.utf8_chunks() {
+    let mut chunks = line.utf8_chunks().peekable();
+    while let Some(chunk) = chunks.next() {
         push_clean(out, chunk.valid(), left);
-        if !chunk.invalid().is_empty() && *left > 0 {
+        // A cut can end inside a character; that is not invalid text.
+        let torn = cut && chunks.peek().is_none();
+        if !chunk.invalid().is_empty() && !torn && *left > 0 {
             *left -= 1;
             out.push('\u{FFFD}');
         }
@@ -360,6 +359,7 @@ impl App<'_> {
         let rows_here = rows_in(&segs[start_seg], first.as_ref());
         self.pos.off = self.pos.off.min(rows_here - 1);
         let (len_a, len_b) = (view.len_a(), view.len_b());
+        self.scratch.cache.begin();
         let mut painter = Painter {
             files: [self.a, self.b],
             scratch: &mut self.scratch,

@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod cache;
 mod minimap;
 mod render;
 mod run;
