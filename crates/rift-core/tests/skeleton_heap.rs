@@ -42,10 +42,11 @@ fn open(path: &PathBuf) -> FileSource {
 #[ignore = "needs ~/rift-data/gen1g from bench/data.sh; run in release"]
 fn a_1gib_pair_maps_under_256mib_of_heap() {
     let dir = PathBuf::from(std::env::var_os("HOME").unwrap()).join("rift-data/gen1g");
-    if !dir.join("b").exists() {
-        eprintln!("skipped: {} not found, run bench/data.sh", dir.display());
-        return;
-    }
+    assert!(
+        dir.join("b").exists(),
+        "{} not found: generate it with bench/data.sh",
+        dir.display()
+    );
     let (a, b) = (open(&dir.join("a")), open(&dir.join("b")));
     let mem = Bytes::mib(256);
     alloc::reset_peak();
