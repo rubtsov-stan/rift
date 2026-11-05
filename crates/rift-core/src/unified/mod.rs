@@ -12,13 +12,15 @@
 //! `patch` ignores that slot, so the diff applies exactly as it would
 //! without the mark.
 //!
-//! Memory: the 1 MiB output buffer, the edits of the open hunk (24 bytes
-//! each) and one line buffer of at most 1024 lines, all in the Refine half;
-//! the caller holds the reservation. Lines are written straight from the
-//! line buffer.
+//! Memory: the 1 MiB output buffer and one line buffer of at most 64
+//! lines, both in the Refine half; the caller holds the reservation. No
+//! edit is kept: each unified hunk is walked twice, once for its header and
+//! once for its lines, so a hunk of any length costs nothing more. Lines
+//! are written straight from the line buffer.
 
 use std::io::{self, BufWriter, Write};
-use std::iter::Peekable;
+use std::marker::PhantomData;
+use std::ops::{Deref, Range};
 
 use crate::edit::{Edit, Hunk};
 use crate::error::Result;
@@ -80,7 +82,15 @@ pub fn exit_code<E>(result: &std::result::Result<Verdict, E>) -> i32 {
     }
 }
 
-/// Writes `hunks` as a unified diff of `a` against `b` to `out`.
+/// Writes the script whose `i`-th hunk `hunk(i)` returns as a unified diff
+/// of `a` against `b` to `out`. `hunk` returns `None` past the last hunk.
+///
+/// The writer keeps no edits: it walks the script twice per unified hunk,
+/// once to find where the hunk ends and print its header, once to print
+/// its lines, so `hunk` is called again for the hunks a unified hunk spans
+/// and must return the same script each time; it is called once per edit
+/// read and its result dropped right after. Memory is the 1 MiB output
+/// buffer and a line buffer.
 ///
 /// `out` is wrapped in a 1 MiB `BufWriter` and flushed before returning.
 /// The script is validated while it is walked; on an invalid script the
@@ -89,66 +99,74 @@ pub fn exit_code<E>(result: &std::result::Result<Verdict, E>) -> i32 {
 /// # Errors
 ///
 /// `InvalidScript`, `LineOutOfRange` or `Io` from the sources, `Io` from
-/// `out`.
-pub fn write_diff<'h>(
+/// `out`, and whatever `hunk` returns.
+pub fn write_diff<H: Deref<Target = Hunk>>(
     a: &impl LineAccess,
     b: &impl LineAccess,
-    hunks: impl IntoIterator<Item = &'h Hunk>,
+    hunk: impl Fn(usize) -> Result<Option<H>>,
     opts: &Options<'_>,
     out: impl Write,
 ) -> Result<Verdict> {
-    let edits = hunks
-        .into_iter()
-        .flat_map(|h| h.edits.iter().map(move |&e| (e, h.approx)));
-    let edits = Merged {
-        inner: edits.peekable(),
-    };
     let mut w = Writer {
         a,
         b,
         opts,
         out: BufWriter::with_capacity(Bytes::mib(1).as_usize(), out),
         buf: LineBuf::new(),
-        hunk: Vec::new(),
-        start: Cursor::default(),
-        has_change: false,
-        approx: false,
         wrote_header: false,
     };
-    let mut cursor = Cursor::default();
     let ctx = opts.context;
-    for (edit, approx, last) in edits {
+    let mut walk = Merged::new(&hunk, At::default());
+    let mut cursor = Cursor::default();
+    // The last `ctx` lines of the equal run before the next change.
+    let mut lead = Cursor::default()..Cursor::default();
+    while let Some(m) = walk.next()? {
         let at = cursor;
-        cursor.step(edit)?;
-        let Edit::Equal { a, b, len } = edit else {
-            w.push(at, edit);
-            w.has_change = true;
-            w.approx |= approx;
+        cursor.step(m.edit)?;
+        if let Edit::Equal { len, .. } = m.edit {
+            lead = back(cursor, len.min(ctx))..cursor;
             continue;
-        };
-        if w.has_change {
-            // Inside a hunk: a run of at most 2 * ctx lines between two
-            // changes is context; a longer one, or the last, closes it.
-            if !last && len <= ctx.saturating_mul(2) {
-                w.push(at, edit);
-                continue;
+        }
+        if lead.end != at {
+            lead = at..at;
+        }
+        // First pass: where the hunk ends, whether it is approximate, and
+        // the walk positioned after its closing equal run.
+        let first = m.at;
+        let mut end = cursor;
+        let mut approx = m.approx;
+        let mut next = None;
+        while let Some(m) = walk.next()? {
+            cursor.step(m.edit)?;
+            match m.edit {
+                Edit::Equal { len, .. } if m.last || len > ctx.saturating_mul(2) => {
+                    let keep = len.min(ctx);
+                    end = Cursor {
+                        a: end.a + keep,
+                        b: end.b + keep,
+                    };
+                    next = Some(m);
+                    break;
+                }
+                Edit::Equal { .. } => end = cursor,
+                _ => {
+                    approx |= m.approx;
+                    end = cursor;
+                }
             }
-            w.push(
-                at,
-                Edit::Equal {
-                    a,
-                    b,
-                    len: len.min(ctx),
-                },
-            );
-            w.flush()?;
         }
-        if !last {
-            w.lead(a, b, len);
+        w.header(lead.start, end, approx)?;
+        w.lines(Side::Equal, lead.start.a, lead.end.a - lead.start.a)?;
+        w.body(&hunk, first, end)?;
+        match next {
+            Some(m) if !m.last => {
+                let Edit::Equal { len, .. } = m.edit else {
+                    unreachable!("the first pass stops on an equal run")
+                };
+                lead = back(cursor, len.min(ctx))..cursor;
+            }
+            _ => {}
         }
-    }
-    if w.has_change {
-        w.flush()?;
     }
     cursor.finish(a.line_count(), b.line_count())?;
     w.out.flush()?;
@@ -159,38 +177,114 @@ pub fn write_diff<'h>(
     })
 }
 
-/// Coalesces consecutive contiguous `Equal` edits, so the gap between two
-/// changes is seen as one run however the hunks split it, and flags the
-/// last edit.
-struct Merged<I: Iterator<Item = (Edit, bool)>> {
-    inner: Peekable<I>,
+/// `c` moved `n` lines back in both files.
+fn back(c: Cursor, n: u64) -> Cursor {
+    Cursor {
+        a: LineNo(c.a.0 - n),
+        b: LineNo(c.b.0 - n),
+    }
 }
 
-impl<I: Iterator<Item = (Edit, bool)>> Iterator for Merged<I> {
-    type Item = (Edit, bool, bool);
+/// Position of a raw edit: hunk index and edit index within it.
+#[derive(Debug, Clone, Copy, Default)]
+struct At {
+    hunk: usize,
+    edit: usize,
+}
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let (mut edit, approx) = self.inner.next()?;
+/// One edit of the merged walk.
+#[derive(Debug, Clone, Copy)]
+struct Step {
+    edit: Edit,
+    /// The hunk it came from was approximate.
+    approx: bool,
+    /// Where it starts in the raw script.
+    at: At,
+    /// Nothing follows it.
+    last: bool,
+}
+
+/// Walks the script from a position, coalescing consecutive contiguous
+/// `Equal` edits so the gap between two changes is seen as one run however
+/// the hunks split it, and flagging the last edit.
+///
+/// A hunk is fetched again for every edit and dropped at once, so the
+/// writer holds no hunk while it waits for the next one or writes lines:
+/// a scheduler's cache stays free to evict what the writer has read.
+struct Merged<'f, F, H> {
+    hunk: &'f F,
+    at: At,
+    peeked: Option<(Edit, bool, At)>,
+    _hunk: PhantomData<H>,
+}
+
+impl<'f, F: Fn(usize) -> Result<Option<H>>, H: Deref<Target = Hunk>> Merged<'f, F, H> {
+    fn new(hunk: &'f F, at: At) -> Self {
+        Self {
+            hunk,
+            at,
+            peeked: None,
+            _hunk: PhantomData,
+        }
+    }
+
+    /// The next raw edit and its hunk's approx flag.
+    fn raw(&mut self) -> Result<Option<(Edit, bool, At)>> {
+        if let Some(p) = self.peeked.take() {
+            return Ok(Some(p));
+        }
+        loop {
+            let Some(h) = (self.hunk)(self.at.hunk)? else {
+                return Ok(None);
+            };
+            if let Some(&edit) = h.edits.get(self.at.edit) {
+                let at = self.at;
+                self.at.edit += 1;
+                return Ok(Some((edit, h.approx, at)));
+            }
+            self.at = At {
+                hunk: self.at.hunk + 1,
+                edit: 0,
+            };
+        }
+    }
+
+    fn next(&mut self) -> Result<Option<Step>> {
+        let Some((mut edit, approx, at)) = self.raw()? else {
+            return Ok(None);
+        };
         if let Edit::Equal { a, b, len } = &mut edit {
-            while let Some((
-                Edit::Equal {
-                    a: a2,
-                    b: b2,
-                    len: len2,
-                },
-                _,
-            )) = self.inner.peek()
-            {
-                if *a2 != *a + *len || *b2 != *b + *len {
-                    break;
+            while let Some(p) = self.raw()? {
+                match p.0 {
+                    Edit::Equal {
+                        a: a2,
+                        b: b2,
+                        len: len2,
+                    } if a2 == *a + *len && b2 == *b + *len => *len += len2,
+                    _ => {
+                        self.peeked = Some(p);
+                        break;
+                    }
                 }
-                *len += len2;
-                self.inner.next();
             }
         }
-        let last = self.inner.peek().is_none();
-        Some((edit, approx, last))
+        let next = self.raw()?;
+        let last = next.is_none();
+        self.peeked = next;
+        Ok(Some(Step {
+            edit,
+            approx,
+            at,
+            last,
+        }))
     }
+}
+
+#[derive(Clone, Copy)]
+enum Side {
+    Equal,
+    Delete,
+    Insert,
 }
 
 struct Writer<'o, A, B, W: Write> {
@@ -199,89 +293,72 @@ struct Writer<'o, A, B, W: Write> {
     opts: &'o Options<'o>,
     out: BufWriter<W>,
     buf: LineBuf,
-    /// Edits of the open hunk, context included.
-    hunk: Vec<Edit>,
-    /// Where the open hunk starts in both files.
-    start: Cursor,
-    has_change: bool,
-    approx: bool,
     wrote_header: bool,
 }
 
 impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
-    /// Opens a hunk with the last `context` lines of an equal run, replacing
-    /// any earlier lead that no change followed.
-    fn lead(&mut self, a: LineNo, b: LineNo, len: u64) {
-        self.hunk.clear();
-        let keep = len.min(self.opts.context);
-        if keep > 0 {
-            let skip = len - keep;
-            let (a, b) = (a + skip, b + skip);
-            self.push(Cursor { a, b }, Edit::Equal { a, b, len: keep });
-        }
-    }
-
-    /// Appends `edit`, which starts at `at` in both files, to the open hunk.
-    fn push(&mut self, at: Cursor, edit: Edit) {
-        if self.hunk.is_empty() {
-            self.start = at;
-        }
-        self.hunk.push(edit);
-    }
-
-    /// Writes the open hunk and resets for the next one.
-    fn flush(&mut self) -> Result<()> {
+    /// The file headers before the first hunk, then the `@@` line of a
+    /// hunk from `start` to `end`.
+    fn header(&mut self, start: Cursor, end: Cursor, approx: bool) -> Result<()> {
         if !self.wrote_header {
             write_label(&mut self.out, b"--- ", &self.opts.old)?;
             write_label(&mut self.out, b"+++ ", &self.opts.new)?;
             self.wrote_header = true;
         }
-        let (mut len_a, mut len_b) = (0, 0);
-        for edit in &self.hunk {
-            match *edit {
-                Edit::Equal { len, .. } => {
-                    len_a += len;
-                    len_b += len;
-                }
-                Edit::Delete { len, .. } => len_a += len,
-                Edit::Insert { len, .. } => len_b += len,
-            }
-        }
         self.out.write_all(b"@@ -")?;
-        write_range(&mut self.out, self.start.a, len_a)?;
+        write_range(&mut self.out, start.a, end.a - start.a)?;
         self.out.write_all(b" +")?;
-        write_range(&mut self.out, self.start.b, len_b)?;
-        self.out.write_all(if self.approx {
-            b" @@ approx\n"
-        } else {
-            b" @@\n"
-        })?;
-        // A run of changes with no equal line between them is one change
-        // block, printed as GNU diff does: every `-` line, then every `+`.
-        let mut hunk = std::mem::take(&mut self.hunk);
-        let is_equal = |e: &Edit| matches!(e, Edit::Equal { .. });
-        let is_insert = |e: &Edit| matches!(e, Edit::Insert { .. });
-        for block in hunk.chunk_by(|x, y| is_equal(x) == is_equal(y)) {
-            for &edit in block.iter().filter(|e| !is_insert(e)) {
-                self.write_lines(edit)?;
-            }
-            for &edit in block.iter().filter(|e| is_insert(e)) {
-                self.write_lines(edit)?;
-            }
-        }
-        hunk.clear();
-        self.hunk = hunk;
-        self.has_change = false;
-        self.approx = false;
+        write_range(&mut self.out, start.b, end.b - start.b)?;
+        self.out
+            .write_all(if approx { b" @@ approx\n" } else { b" @@\n" })?;
         Ok(())
     }
 
-    /// Writes the lines of one edit with its prefix.
-    fn write_lines(&mut self, edit: Edit) -> Result<()> {
-        let (src, prefix, start, len): (&dyn LineAccess, _, _, _) = match edit {
-            Edit::Equal { a, len, .. } => (self.a, b" ", a, len),
-            Edit::Delete { a, len } => (self.a, b"-", a, len),
-            Edit::Insert { b, len } => (self.b, b"+", b, len),
+    /// Second pass: the lines of the hunk from its first change at `first`
+    /// to `end`. A run of changes with no equal line between them is one
+    /// change block, printed as GNU diff does: every `-` line, then every
+    /// `+`. Within a block the deletes are contiguous in A and the inserts
+    /// in B, so two ranges describe it.
+    fn body<F, H>(&mut self, hunk: &F, first: At, end: Cursor) -> Result<()>
+    where
+        F: Fn(usize) -> Result<Option<H>>,
+        H: Deref<Target = Hunk>,
+    {
+        let mut walk = Merged::new(hunk, first);
+        let (mut dels, mut ins) = (None, None);
+        while let Some(m) = walk.next()? {
+            match m.edit {
+                Edit::Equal { a, b, len } => {
+                    self.block(dels.take(), ins.take())?;
+                    let len = len.min(end.a - a);
+                    self.lines(Side::Equal, a, len)?;
+                    if (a + len, b + len) == (end.a, end.b) {
+                        return Ok(());
+                    }
+                }
+                Edit::Delete { a, len } => dels.get_or_insert(a..a).end = a + len,
+                Edit::Insert { b, len } => ins.get_or_insert(b..b).end = b + len,
+            }
+        }
+        self.block(dels, ins)
+    }
+
+    fn block(&mut self, dels: Option<Range<LineNo>>, ins: Option<Range<LineNo>>) -> Result<()> {
+        if let Some(r) = dels {
+            self.lines(Side::Delete, r.start, r.end - r.start)?;
+        }
+        if let Some(r) = ins {
+            self.lines(Side::Insert, r.start, r.end - r.start)?;
+        }
+        Ok(())
+    }
+
+    /// Writes `len` lines from `start` with the prefix for `side`.
+    fn lines(&mut self, side: Side, start: LineNo, len: u64) -> Result<()> {
+        let (src, prefix): (&dyn LineAccess, _) = match side {
+            Side::Equal => (self.a, b" "),
+            Side::Delete => (self.a, b"-"),
+            Side::Insert => (self.b, b"+"),
         };
         let out = &mut self.out;
         for_each_piece(

@@ -35,7 +35,8 @@ fn options(context: u64) -> Options<'static> {
 
 fn render(a: &[u8], b: &[u8], hunks: &[Hunk], opts: &Options<'_>) -> (Vec<u8>, Verdict) {
     let mut out = Vec::new();
-    let verdict = write_diff(&MemLines::new(a), &MemLines::new(b), hunks, opts, &mut out).unwrap();
+    let get = |i: usize| Ok(hunks.get(i));
+    let verdict = write_diff(&MemLines::new(a), &MemLines::new(b), get, opts, &mut out).unwrap();
     (out, verdict)
 }
 
@@ -226,7 +227,7 @@ fn exit_codes_follow_diff() {
     let r = write_diff(
         &MemLines::new(b"a\n"),
         &MemLines::new(b""),
-        &bad,
+        |i| Ok(bad.get(i)),
         &options(3),
         Vec::new(),
     );
