@@ -161,10 +161,12 @@ cleanup() {
     */rift-bench-*) rm -rf "$scratch" ;;
   esac
 }
+# Arm the cleanup only once the directory is ours: if it already exists,
+# mkdir fails and the existing directory is left alone.
+mkdir -m 700 "$scratch" || die "$scratch already exists; remove it or rerun"
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -m 700 "$scratch"
 
 raw=$scratch/pkg/raw
 mkdir -p "$raw" "$scratch/bin"
