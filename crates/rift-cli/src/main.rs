@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 
 mod source;
+mod summary;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -24,11 +25,21 @@ struct Args {
     a: PathBuf,
     /// Second file.
     b: PathBuf,
+    /// Print line counts, the segment map and resource use instead of a
+    /// diff.
+    #[arg(long)]
+    summary: bool,
+    /// Heap limit, in bytes or with a K, M, G or T suffix (powers of 1024).
+    #[arg(long, default_value = "256M", value_parser = summary::parse_size)]
+    mem: rift_core::Bytes,
 }
 
 fn run(args: &Args) -> anyhow::Result<ExitCode> {
     let a = FileSource::open(&args.a).with_context(|| format!("open {}", args.a.display()))?;
     let b = FileSource::open(&args.b).with_context(|| format!("open {}", args.b.display()))?;
+    if args.summary {
+        return summary::run(&a, &b, args.mem);
+    }
     println!("{} bytes, {} bytes", a.len(), b.len());
     Ok(ExitCode::SUCCESS)
 }

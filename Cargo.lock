@@ -1524,6 +1524,7 @@ dependencies = [
  "clap",
  "libc",
  "rift-core",
+ "rift-gen",
  "tempfile",
 ]
 
