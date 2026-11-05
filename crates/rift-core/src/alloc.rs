@@ -2,7 +2,8 @@
 //!
 //! The only `unsafe` in the crate. Installed by the binary with
 //! `#[global_allocator]`; tests read the peak to check it stays under
-//! `--mem`.
+//! `--mem`. The counters are process-wide, so a test that asserts on them
+//! lives in its own integration test binary (see `tests/alloc.rs`).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,51 +86,5 @@ unsafe impl GlobalAlloc for CountingAlloc {
             }
         }
         p
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Mutex;
-
-    use super::*;
-
-    #[global_allocator]
-    static ALLOC: CountingAlloc = CountingAlloc;
-
-    /// Other tests allocate on their own threads, so the counters move by a
-    /// few kilobytes underneath us. The checks use 64 MiB with 1 MiB slack,
-    /// and the two tests take this lock so they do not disturb each other.
-    static SERIAL: Mutex<()> = Mutex::new(());
-
-    const BIG: usize = 64 << 20;
-    const SLACK: u64 = 1 << 20;
-    const BIG_U64: u64 = BIG as u64;
-
-    #[test]
-    fn counters_follow_a_large_allocation() {
-        let _guard = SERIAL.lock().unwrap();
-        let before = current().0;
-        reset_peak();
-        let v = vec![1u8; BIG];
-        assert!(current().0 >= before + BIG_U64 - SLACK);
-        assert!(peak().0 >= before + BIG_U64 - SLACK);
-        drop(v);
-        assert!(current().0 < before + SLACK);
-        assert!(
-            peak().0 >= before + BIG_U64 - SLACK,
-            "peak survives the free"
-        );
-    }
-
-    #[test]
-    fn realloc_adjusts_by_the_difference() {
-        let _guard = SERIAL.lock().unwrap();
-        let mut v: Vec<u8> = Vec::with_capacity(BIG);
-        let base = current().0;
-        v.reserve_exact(2 * BIG);
-        assert!(current().0 >= base + BIG_U64 - SLACK);
-        v.shrink_to(BIG);
-        assert!(current().0 < base + SLACK);
     }
 }

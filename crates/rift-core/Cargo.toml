@@ -22,6 +22,7 @@ itoa.workspace = true
 crossbeam-utils.workspace = true
 
 [dev-dependencies]
+rift-core = { path = ".", features = ["counting-alloc"] }
 proptest.workspace = true
 divan.workspace = true
 imara-diff.workspace = true

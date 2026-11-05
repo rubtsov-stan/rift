@@ -528,35 +528,3 @@ fn dp_threshold() {
         eprintln!("dp_max {dp:3}: 20k random gaps {total:.3} s, 1M-line segment {big:.3} s");
     }
 }
-
-#[cfg(feature = "counting-alloc")]
-#[test]
-fn heap_stays_within_the_estimate() {
-    use crate::alloc;
-    let (a, b) = big_pair(100_000, 0.001, 11);
-    let (ma, mb) = (MemLines::new(&a), MemLines::new(&b));
-    let ha: Vec<u64> = lines(&a).iter().map(|l| xxh3_64(l)).collect();
-    let hb: Vec<u64> = lines(&b).iter().map(|l| xxh3_64(l)).collect();
-    let seg = Segment {
-        a: LineNo(0)..LineNo(ha.len() as u64),
-        b: LineNo(0)..LineNo(hb.len() as u64),
-        status: SegmentStatus::Differs,
-    };
-    let est = work_estimate(ha.len() as u64, hb.len() as u64);
-    let budget = Budget::new(Bytes::mib(256));
-    let mut res = budget.try_reserve(Half::Refine, est).unwrap();
-    let mut r = Refiner::new(1000);
-    // First call grows the line buffers; the second is measured.
-    r.refine(&seg, &ha, &hb, &ma, &mb, &mut res).unwrap();
-    let before = alloc::current().0;
-    alloc::reset_peak();
-    let hunk = r.refine(&seg, &ha, &hb, &ma, &mb, &mut res).unwrap();
-    let peak = alloc::peak().0 - before;
-    let hunk_bytes = (hunk.edits.capacity() * size_of::<Edit>()) as u64;
-    // Other test threads allocate concurrently; 1 MiB of slack covers them.
-    assert!(
-        peak <= est.0 + hunk_bytes + (1 << 20),
-        "peak {peak} > estimate {} + hunk {hunk_bytes}",
-        est.0
-    );
-}
