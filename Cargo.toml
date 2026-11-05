@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rubtsov-stan/rift"
+homepage = "https://github.com/rubtsov-stan/rift"
 authors = ["Stanislav"]
 
 [workspace.dependencies]
@@ -47,4 +48,8 @@ panic = "abort"
 debug = "line-tables-only"
 
 [profile.bench]
+inherits = "release"
+
+# Release binaries are built with the release profile the benchmarks use.
+[profile.dist]
 inherits = "release"
