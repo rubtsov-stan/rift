@@ -205,6 +205,46 @@ fn budget_is_returned_and_never_exceeded() {
     assert_eq!(tiny.used(Half::Skeleton), Bytes(0));
 }
 
+/// Lines of 2 to 6 bytes are ten times more than the 64 bytes per line
+/// the scanner assumes, so both vectors must grow past their start.
+#[test]
+fn vectors_grow_within_the_budget_when_lines_are_shorter_than_assumed() {
+    let data: Vec<u8> = (0..40_000)
+        .flat_map(|i| format!("{i}\n").into_bytes())
+        .collect();
+    let budget = Budget::new(Bytes::mib(64));
+    let cfg = ScanConfig {
+        level: 0,
+        sample_cap: 1 << 20,
+        checkpoint_interval: 4,
+        checkpoint_cap: 1 << 20,
+        chunk: Bytes(4096),
+        threads: 2,
+    };
+    let got = scan(&data[..], &budget, &cfg).unwrap();
+    assert_eq!(
+        got.level(),
+        0,
+        "growth, not thinning, absorbs the extra samples"
+    );
+    assert_eq!(
+        got.index().interval(),
+        4,
+        "growth, not doubling, absorbs the checkpoints"
+    );
+    assert_eq!(got.samples(), expected(&data, 0));
+    assert_eq!(budget.used(Half::Skeleton), got.held());
+    drop(got);
+    assert_eq!(budget.used(Half::Skeleton), Bytes(0));
+
+    // A half too small to grow into falls back to thinning, still exact.
+    let small = Budget::new(Bytes(1200 << 10));
+    let got = scan(&data[..], &small, &cfg).unwrap();
+    assert!(got.level() > 0 || got.index().interval() > 4);
+    assert_eq!(got.samples(), expected(&data, got.level()));
+    assert!(small.used(Half::Skeleton) <= small.capacity(Half::Skeleton));
+}
+
 #[test]
 fn index_reaches_every_line() {
     let data = lines(3000);

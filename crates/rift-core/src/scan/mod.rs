@@ -9,13 +9,17 @@
 //! their chunk until all counts are known; a prefix sum over chunks then
 //! makes the numbers absolute.
 //!
-//! When the samples or checkpoints outgrow their capacity, the stratum is
-//! raised, or the checkpoint interval doubled, and the vectors are thinned
-//! in place; nothing is reread.
+//! The sample and checkpoint vectors start at what the file is expected to
+//! produce, never more than the configured caps, and grow toward the caps
+//! with a reservation taken first. When the caps are reached, or the budget
+//! refuses to grow, the stratum is raised, or the checkpoint interval
+//! doubled, and the vectors are thinned in place; nothing is reread.
 //!
-//! Memory, all from the skeleton half: the sample and checkpoint capacity for
+//! Memory, all from the skeleton half: the sample and checkpoint vectors for
 //! the lifetime of the result, and for the duration of the scan only, the
-//! per-worker buffers plus one counter per chunk.
+//! per-worker buffers, at most one chunk plus a tail and never more than the
+//! file, plus one counter per chunk. Nothing is sized from the budget alone:
+//! a small file costs little whatever `--mem` says.
 
 use std::num::NonZero;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -216,13 +220,23 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
     let chunk = cfg.chunk.0;
     let chunks = len.div_ceil(chunk);
     let threads = cfg.threads.clamp(1, to_usize(chunks.max(1)));
+    // A chunk is read from one byte before its start, so a buffer of
+    // `len + 1` holds any chunk of the file whole and never fills.
+    let buf_len = (chunk + TAIL as u64).min(len + 1);
 
-    let mut keep = budget.try_reserve(
+    // Start at what the file is expected to produce; grow toward the caps.
+    let lines = estimated_lines(Bytes(len));
+    let sample_start = (lines >> cfg.level.min(63))
+        .saturating_add(1)
+        .min(cfg.sample_cap as u64);
+    let checkpoint_start = (lines / cfg.checkpoint_interval)
+        .saturating_add(chunks + 1)
+        .min(cfg.checkpoint_cap as u64);
+    let keep = budget.try_reserve(
         Half::Skeleton,
-        Bytes(cfg.sample_cap as u64 * SAMPLE_BYTES + cfg.checkpoint_cap as u64 * CHECKPOINT_BYTES),
+        Bytes(sample_start * SAMPLE_BYTES + checkpoint_start * CHECKPOINT_BYTES),
     )?;
-    let per_worker = chunk
-        + TAIL as u64
+    let per_worker = buf_len
         + STAGING_SAMPLES as u64 * SAMPLE_BYTES
         + STAGING_CHECKPOINTS as u64 * CHECKPOINT_BYTES;
     let work = budget.try_reserve(
@@ -231,10 +245,14 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
     )?;
 
     let shared = Shared {
-        samples: Mutex::new(Vec::with_capacity(cfg.sample_cap)),
+        samples: Mutex::new(Vec::with_capacity(to_usize(sample_start))),
+        sample_cap: cfg.sample_cap,
         level: AtomicU32::new(cfg.level),
-        checkpoints: Mutex::new(Vec::with_capacity(cfg.checkpoint_cap)),
+        checkpoints: Mutex::new(Vec::with_capacity(to_usize(checkpoint_start))),
+        checkpoint_cap: cfg.checkpoint_cap,
         interval: AtomicU64::new(cfg.checkpoint_interval),
+        keep: Mutex::new(keep),
+        buf_len: to_usize(buf_len),
         counts: (0..chunks).map(|_| AtomicU64::new(0)).collect(),
         next: AtomicU64::new(0),
         failed: AtomicBool::new(false),
@@ -259,6 +277,10 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
         c.store(total, Ordering::Relaxed);
         total += n;
     }
+    let mut keep = shared
+        .keep
+        .into_inner()
+        .unwrap_or_else(PoisonError::into_inner);
     let base =
         |offset: ByteOffset| shared.counts[to_usize(offset.0 / chunk)].load(Ordering::Relaxed);
 
@@ -305,9 +327,18 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
 /// chunk-local until the scan ends.
 struct Shared {
     samples: Mutex<Vec<Sample>>,
+    /// Most samples the vector may grow to before the stratum is raised.
+    sample_cap: usize,
     level: AtomicU32,
     checkpoints: Mutex<Vec<Checkpoint>>,
+    /// Most checkpoints before the interval is doubled.
+    checkpoint_cap: usize,
     interval: AtomicU64,
+    /// Bytes held for both vectors. Locked only while a vector's own lock is
+    /// held, always in that order, so the two cannot deadlock.
+    keep: Mutex<Reservation>,
+    /// Per-worker read buffer size.
+    buf_len: usize,
     counts: Vec<AtomicU64>,
     next: AtomicU64,
     failed: AtomicBool,
@@ -324,7 +355,9 @@ impl Shared {
         // this lock orders every write to the vector.
         let mut level = self.level.load(Ordering::Relaxed);
         strata::thin(staging, level);
-        while out.len() + staging.len() > out.capacity() {
+        while out.len() + staging.len() > out.capacity()
+            && !self.grow(&mut out, staging.len(), self.sample_cap)
+        {
             if level == strata::MAX_LEVEL {
                 return Err(exceeded(out.len() + staging.len(), &out));
             }
@@ -346,7 +379,9 @@ impl Shared {
             .unwrap_or_else(PoisonError::into_inner);
         let mut interval = self.interval.load(Ordering::Relaxed);
         staging.retain(|c| c.line.0.is_multiple_of(interval));
-        while out.len() + staging.len() > out.capacity() {
+        while out.len() + staging.len() > out.capacity()
+            && !self.grow(&mut out, staging.len(), self.checkpoint_cap)
+        {
             if interval >= MAX_INTERVAL {
                 return Err(exceeded(out.len() + staging.len(), &out));
             }
@@ -357,6 +392,34 @@ impl Shared {
         self.interval.store(interval, Ordering::Relaxed);
         out.append(staging);
         Ok(interval)
+    }
+
+    /// Grows `out` so `extra` more items fit, doubling toward `cap`, with
+    /// the bytes reserved first. False when the cap is reached or the
+    /// budget or allocator refuses; the caller then thins instead.
+    fn grow<T>(&self, out: &mut Vec<T>, extra: usize, cap: usize) -> bool {
+        let need = out.len() + extra;
+        let old = out.capacity();
+        if need > cap {
+            return false;
+        }
+        let new = need.max(old.saturating_mul(2)).min(cap);
+        let bytes = |n: usize| Bytes((n * size_of::<T>()) as u64);
+        let mut keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
+        if keep.grow(bytes(new - old)).is_err() {
+            return false;
+        }
+        if out.try_reserve_exact(new - out.len()).is_err() {
+            keep.shrink(bytes(new - old));
+            return false;
+        }
+        // try_reserve_exact may round up; account for what was allocated.
+        if let Some(more) = out.capacity().checked_sub(new).filter(|&m| m > 0)
+            && keep.grow(bytes(more)).is_err()
+        {
+            out.shrink_to(new);
+        }
+        true
     }
 }
 
@@ -397,7 +460,7 @@ impl<'a> Worker<'a> {
     }
 
     fn run<S: Source + ?Sized>(mut self, source: &S) -> Result<()> {
-        let mut buf = vec![0u8; to_usize(self.shared.chunk) + TAIL];
+        let mut buf = vec![0u8; self.shared.buf_len];
         let chunks = self.shared.counts.len() as u64;
         let result = loop {
             if self.shared.failed.load(Ordering::Relaxed) {
