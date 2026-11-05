@@ -1,5 +1,8 @@
 # Rift
 
+[![CI](https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/rubtsov-stan/rift)](https://github.com/rubtsov-stan/rift/releases/latest)
+
 Rift diffs text files of any size, from megabytes to hundreds of
 gigabytes, under a heap limit you set on the command line (`--mem`,
 256 MiB by default). It writes a unified diff that `patch` applies to the
