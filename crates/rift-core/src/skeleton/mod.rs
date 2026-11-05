@@ -59,7 +59,7 @@ pub struct Skeleton {
     segments: Vec<Segment>,
     anchors: usize,
     level: u32,
-    _reservation: Reservation,
+    reservation: Reservation,
 }
 
 impl Skeleton {
@@ -82,6 +82,12 @@ impl Skeleton {
     #[must_use]
     pub fn level(&self) -> u32 {
         self.level
+    }
+
+    /// The segment list and the skeleton-half bytes it holds.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<Segment>, Reservation) {
+        (self.segments, self.reservation)
     }
 
     /// Whether the files are identical: every segment is `Equal`.
@@ -236,7 +242,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         anchors: bounds.chain.len() - false_anchors,
         level: scan_a.level(),
         segments,
-        _reservation: reservation,
+        reservation,
     })
 }
 
@@ -371,7 +377,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
 
 /// Reduces the candidates, ordered by A, to a longest chain increasing in
 /// B. Patience sorting: `O(m log m)` time, 8 bytes per candidate.
-fn longest_increasing(anchors: &mut Anchors, budget: &Budget) -> Result<()> {
+pub(crate) fn longest_increasing(anchors: &mut Anchors, budget: &Budget) -> Result<()> {
     let pairs = &mut anchors.pairs;
     let m = pairs.len();
     if m == 0 {

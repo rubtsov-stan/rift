@@ -191,6 +191,24 @@ impl Scanned {
     }
 }
 
+impl Scanned {
+    /// The index alone, with the reservation shrunk to what it holds. For a
+    /// diff that is past the skeleton and only reads lines.
+    #[must_use]
+    pub fn into_index(self) -> (LineIndex, Reservation) {
+        let Scanned {
+            samples,
+            index,
+            mut reservation,
+            ..
+        } = self;
+        let bytes = (samples.capacity() as u64) * SAMPLE_BYTES;
+        drop(samples);
+        reservation.shrink(Bytes(bytes));
+        (index, reservation)
+    }
+}
+
 /// Drops spare capacity and gives those bytes back to the reservation.
 pub(crate) fn release_slack<T>(v: &mut Vec<T>, reservation: &mut Reservation) {
     let before = v.capacity();

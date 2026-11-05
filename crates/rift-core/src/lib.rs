@@ -18,6 +18,7 @@ pub mod types;
 mod view;
 
 pub mod anchors;
+pub mod diff;
 pub mod index;
 pub mod refine;
 pub mod scan;
