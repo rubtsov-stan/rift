@@ -101,7 +101,6 @@ impl LineBuf {
     }
 
     /// All lines held, in order.
-    #[must_use]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         (0..self.len()).map(|i| self.line(i))
     }
