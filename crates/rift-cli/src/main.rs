@@ -29,8 +29,8 @@ struct Args {
     /// diff.
     #[arg(long)]
     summary: bool,
-    /// Heap limit, in bytes or with a K, M, G or T suffix (powers of 1024).
-    #[arg(long, default_value = "256M", value_parser = summary::parse_size)]
+    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
+    #[arg(long, default_value = "256M", value_parser = rift_core::Bytes::parse_budget)]
     mem: rift_core::Bytes,
 }
 

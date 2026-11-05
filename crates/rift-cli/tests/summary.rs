@@ -68,3 +68,16 @@ fn errors_exit_two() {
     let (_dir, a, b) = files(b"x\n", b"x\n");
     assert_eq!(rift(&a, &b, "12Q").status.code(), Some(2));
 }
+
+#[test]
+fn mem_takes_the_same_sizes_as_the_generator() {
+    let (_dir, a, b) = files(b"x\n", b"x\n");
+    // Sizes a pair this small can run with; larger ones reserve sample
+    // capacity in proportion to the budget, not the files.
+    for mem in ["1GiB", "16mib", " 64M ", "65536k"] {
+        assert_eq!(rift(&a, &b, mem).status.code(), Some(0), "--mem {mem:?}");
+    }
+    for mem in ["0", "0K", "1.5G", "-1M", "16Q"] {
+        assert_eq!(rift(&a, &b, mem).status.code(), Some(2), "--mem {mem:?}");
+    }
+}
