@@ -421,3 +421,39 @@ fn a_budget_below_the_comparison_floor_fails_without_thinning() {
     assert_eq!(sa.level(), 0, "thinned before failing");
     assert_eq!(counted.take(), (0, 0));
 }
+
+/// A reversed file crosses the chain everywhere, so every candidate but
+/// one is off the chain, and a small budget caps how many are kept.
+#[test]
+fn off_chain_pairs_stay_under_their_cap_and_are_released() {
+    let n = 20_000;
+    let a = lines(n);
+    let b: Vec<u8> = a
+        .split_inclusive(|&c| c == b'\n')
+        .rev()
+        .flatten()
+        .copied()
+        .collect();
+    let budget = Budget::new(Bytes::mib(2));
+    let cap = budget.capacity(Half::Skeleton).0;
+    let mut sa = scan(&a[..], &budget, &config(0)).unwrap();
+    let mut sb = scan(&b[..], &budget, &config(0)).unwrap();
+    let map = build(&a[..], &b[..], &mut sa, &mut sb, &budget).unwrap();
+    let off = map.off_chain();
+    assert!(off.dropped() > 0, "the cap was not reached");
+    assert!(off.pairs().len() as u64 * 16 <= cap / 8);
+    for w in off.pairs().windows(2) {
+        assert!(w[0][0] < w[1][0], "not in A order");
+    }
+    for &[la, lb] in off.pairs() {
+        assert_eq!(la.0 + lb.0, n as u64 - 1, "not a matching line");
+    }
+
+    let used = budget.used(Half::Skeleton).0;
+    let kept = off.pairs().len() as u64 * 16;
+    let (_, _, held, off) = map.into_parts();
+    drop(off);
+    assert_eq!(budget.used(Half::Skeleton).0, used - kept);
+    drop((held, sa, sb));
+    assert_eq!(budget.used(Half::Skeleton).0, 0);
+}

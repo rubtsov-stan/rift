@@ -39,7 +39,7 @@ use crate::refine::{Refiner, VERIFY_LINES, work_estimate};
 use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler};
 use crate::script::{LINES_PER_READ, PIECE, for_each_piece};
 use crate::segment::{Segment, SegmentStatus};
-use crate::skeleton::build_pair;
+use crate::skeleton::{OffChain, build_pair};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 use crate::unified::{Options, Verdict, write_diff};
@@ -92,6 +92,8 @@ pub struct Diff<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized +
     threads: usize,
     level: u32,
     anchors: usize,
+    /// In the skeleton half, with its own reservation.
+    off_chain: OffChain,
     _map: [Reservation; 3],
     _front: Reservation,
 }
@@ -123,7 +125,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         let (level, anchors) = (skeleton.level(), skeleton.anchors());
         let (index_a, held_a) = scan_a.into_index();
         let (index_b, held_b) = scan_b.into_index();
-        let (segments, starts, held_map) = skeleton.into_parts();
+        let (segments, starts, held_map, off_chain) = skeleton.into_parts();
         let starts: Arc<[[ByteOffset; 2]]> = starts.into();
         let (index_a, index_b) = (Arc::new(index_a), Arc::new(index_b));
 
@@ -188,6 +190,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             threads,
             level,
             anchors,
+            off_chain,
             _map: [held_a, held_b, held_map],
             _front: front,
         })
@@ -215,6 +218,12 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     #[must_use]
     pub fn anchors(&self) -> usize {
         self.anchors
+    }
+
+    /// Anchor candidates the skeleton's chain left out.
+    #[must_use]
+    pub fn off_chain(&self) -> &OffChain {
+        &self.off_chain
     }
 
     /// Refinement workers.

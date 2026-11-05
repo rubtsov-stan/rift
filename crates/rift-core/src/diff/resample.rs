@@ -223,7 +223,7 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
         }
         let (sa, sb) = samples.split_at(in_a);
         let attempt = anchors::select(sa, sb, inner).and_then(|mut found| {
-            longest_increasing(&mut found, inner)?;
+            longest_increasing(&mut found, inner, |_| {})?;
             Ok(found)
         });
         match attempt {

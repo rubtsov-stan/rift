@@ -22,7 +22,8 @@
 //! candidate during the subsequence search, then two buffers of at most
 //! 1 MiB per pool thread and a bit per gap during the comparison, and
 //! 56 bytes per segment for the result: the segment and the byte offsets
-//! where it starts.
+//! where it starts. The candidates left out of the chain stay as an
+//! [`OffChain`] list, 16 bytes per pair, capped as described there.
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +54,84 @@ const SAMPLE_BYTES: u64 = size_of::<Sample>() as u64;
 const COARSEST_MAP_BYTES: u64 = 16 + SEGMENT_BYTES + 16 + 2 * MIN_BUF;
 /// Marks the first element of a chain in the subsequence search.
 const NO_PREV: u32 = u32::MAX;
+/// One off-chain pair: its line in A and in B.
+const LINE_PAIR_BYTES: u64 = size_of::<[LineNo; 2]>() as u64;
+/// The off-chain list takes at most this fraction, `1 / OFF_CHAIN_SHARE`,
+/// of the skeleton half that is free when the chain search starts.
+const OFF_CHAIN_SHARE: u64 = 8;
+/// The off-chain list grows by at least this many pairs at a time.
+const OFF_CHAIN_STEP: usize = 64;
+
+/// Anchor candidates that the chain search left out: hash matches between
+/// a line of A and a line of B that cross the chain, such as the lines of
+/// a block that moved.
+///
+/// These are hash matches, not confirmed ones: unlike the chain, nothing
+/// reads their bytes, so a reader compares the two lines before it relies
+/// on a pair.
+///
+/// Memory, from the skeleton half: 16 bytes per pair, reserved as the list
+/// grows and trimmed to its length once the chain is known. The list keeps
+/// the first pairs in A order up to `1 / 8` of the skeleton half that is
+/// free when the chain search starts, so it never crowds out the segment
+/// list and comparison buffers that follow. The rest are counted in
+/// [`dropped`](Self::dropped). Dropping the list releases its bytes.
+#[derive(Debug)]
+pub struct OffChain {
+    pairs: Vec<[LineNo; 2]>,
+    dropped: u64,
+    limit: usize,
+    reservation: Reservation,
+}
+
+impl OffChain {
+    fn new(budget: &Budget) -> Result<Self> {
+        let limit = budget.available(Half::Skeleton).0 / OFF_CHAIN_SHARE / LINE_PAIR_BYTES;
+        Ok(Self {
+            pairs: Vec::new(),
+            dropped: 0,
+            limit: usize::try_from(limit).unwrap_or(usize::MAX),
+            reservation: budget.try_reserve(Half::Skeleton, Bytes(0))?,
+        })
+    }
+
+    /// Appends a pair if the cap and the budget allow, counts it as
+    /// dropped otherwise.
+    fn push(&mut self, pair: [LineNo; 2]) {
+        let len = self.pairs.len();
+        if len == self.pairs.capacity() {
+            let extra = (2 * len)
+                .max(OFF_CHAIN_STEP)
+                .min(self.limit)
+                .saturating_sub(len);
+            let bytes = Bytes(extra as u64 * LINE_PAIR_BYTES);
+            if extra == 0 || self.reservation.grow(bytes).is_err() {
+                self.limit = len;
+                self.dropped += 1;
+                return;
+            }
+            if self.pairs.try_reserve_exact(extra).is_err() {
+                self.reservation.shrink(bytes);
+                self.limit = len;
+                self.dropped += 1;
+                return;
+            }
+        }
+        self.pairs.push(pair);
+    }
+
+    /// The kept pairs, `[line in A, line in B]`, ordered by the line in A.
+    #[must_use]
+    pub fn pairs(&self) -> &[[LineNo; 2]] {
+        &self.pairs
+    }
+
+    /// Pairs left out because the list reached its cap.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+}
 
 /// The segment map of a pair of files. Dropping it releases its share of
 /// the budget.
@@ -63,6 +142,7 @@ pub struct Skeleton {
     anchors: usize,
     level: u32,
     reservation: Reservation,
+    off_chain: OffChain,
 }
 
 impl Skeleton {
@@ -94,11 +174,17 @@ impl Skeleton {
         &self.starts
     }
 
-    /// The segment list, the start offsets and the skeleton-half bytes
-    /// they hold.
+    /// Candidates the chain left out; see [`OffChain`].
     #[must_use]
-    pub fn into_parts(self) -> (Vec<Segment>, Vec<[ByteOffset; 2]>, Reservation) {
-        (self.segments, self.starts, self.reservation)
+    pub fn off_chain(&self) -> &OffChain {
+        &self.off_chain
+    }
+
+    /// The segment list, the start offsets, the skeleton-half bytes they
+    /// hold, and the off-chain list, which holds its own.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<Segment>, Vec<[ByteOffset; 2]>, Reservation, OffChain) {
+        (self.segments, self.starts, self.reservation, self.off_chain)
     }
 
     /// Whether the files are identical: every segment is `Equal`.
@@ -181,7 +267,14 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     budget: &Budget,
 ) -> Result<Skeleton> {
     let mut anchors = anchors::select(scan_a.samples(), scan_b.samples(), budget)?;
-    longest_increasing(&mut anchors, budget)?;
+    let mut off_chain = OffChain::new(budget)?;
+    longest_increasing(&mut anchors, budget, |p| {
+        off_chain.push([
+            scan_a.samples()[p.a as usize].line,
+            scan_b.samples()[p.b as usize].line,
+        ]);
+    })?;
+    release_slack(&mut off_chain.pairs, &mut off_chain.reservation);
 
     let bounds = Bounds {
         chain: anchors.pairs(),
@@ -259,6 +352,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         segments,
         starts,
         reservation,
+        off_chain,
     })
 }
 
@@ -392,8 +486,13 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
 }
 
 /// Reduces the candidates, ordered by A, to a longest chain increasing in
-/// B. Patience sorting: `O(m log m)` time, 8 bytes per candidate.
-pub(crate) fn longest_increasing(anchors: &mut Anchors, budget: &Budget) -> Result<()> {
+/// B, and hands every candidate left out to `off_chain`, in A order.
+/// Patience sorting: `O(m log m)` time, 8 bytes per candidate.
+pub(crate) fn longest_increasing(
+    anchors: &mut Anchors,
+    budget: &Budget,
+    mut off_chain: impl FnMut(Pair),
+) -> Result<()> {
     let pairs = &mut anchors.pairs;
     let m = pairs.len();
     if m == 0 {
@@ -422,6 +521,12 @@ pub(crate) fn longest_increasing(anchors: &mut Anchors, budget: &Budget) -> Resu
     for slot in tails.iter_mut().rev() {
         *slot = cur;
         cur = prev[cur as usize];
+    }
+    let mut chain = tails.iter().peekable();
+    for (i, &p) in pairs.iter().enumerate() {
+        if chain.next_if(|&&t| t as usize == i).is_none() {
+            off_chain(p);
+        }
     }
     for (j, &t) in tails.iter().enumerate() {
         pairs[j] = pairs[t as usize];
@@ -716,7 +821,9 @@ mod tests {
         let budget = Budget::new(Bytes::mib(1));
         let (a, b) = (with(&[1, 2, 3, 4, 5, 6]), with(&[3, 1, 2, 6, 4, 5]));
         let mut anchors = anchors::select(&a, &b, &budget).unwrap();
-        longest_increasing(&mut anchors, &budget).unwrap();
+        let mut off = Vec::new();
+        longest_increasing(&mut anchors, &budget, |p| off.push((p.a, p.b))).unwrap();
+        assert_eq!(off, [(2, 0), (5, 3)]);
         let chain: Vec<(u32, u32)> = anchors.pairs().iter().map(|p| (p.a, p.b)).collect();
         assert_eq!(chain, [(0, 1), (1, 2), (3, 4), (4, 5)]);
     }
