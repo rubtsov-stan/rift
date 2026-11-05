@@ -29,6 +29,7 @@ mod cache;
 mod tests;
 
 use std::collections::BTreeSet;
+use std::io;
 use std::ops::Range;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,15 +77,35 @@ pub trait Job: Send + Sync + 'static {
     /// hunk also fits the cache.
     fn estimate(&self, segment: &Segment) -> Bytes;
 
-    /// Refines `segment` within its estimate, checking `cancel` along the way.
-    fn run(&self, segment: &Segment, cancel: &Cancel) -> Hunk;
+    /// Refines `segment` within its estimate, which `reservation` holds,
+    /// checking `cancel` along the way.
+    ///
+    /// # Errors
+    ///
+    /// Whatever stops the refinement, typically a failed read. The error
+    /// goes to whoever waits for the hunk.
+    fn run(
+        &self,
+        segment: &Segment,
+        reservation: &mut Reservation,
+        cancel: &Cancel,
+    ) -> Result<Hunk>;
 
-    /// Called instead of [`run`](Job::run) when the estimate exceeds `limit`,
-    /// the most the scheduler can ever reserve for one job. The job resamples
-    /// within `limit` or returns an approximate script; either way the hunk,
-    /// counted like the cache counts it, stays within `limit`. A whole
-    /// replacement, two edits, always does.
-    fn too_large(&self, segment: &Segment, limit: Bytes, cancel: &Cancel) -> Hunk;
+    /// Called instead of [`run`](Job::run) when the estimate exceeds the
+    /// most the scheduler can ever reserve for one job, which `reservation`
+    /// holds. The job resamples within it or returns an approximate script;
+    /// either way the hunk, counted like the cache counts it, stays within
+    /// the reservation. A whole replacement, two edits, always does.
+    ///
+    /// # Errors
+    ///
+    /// As for [`run`](Job::run).
+    fn too_large(
+        &self,
+        segment: &Segment,
+        reservation: &mut Reservation,
+        cancel: &Cancel,
+    ) -> Result<Hunk>;
 }
 
 /// Lazily refined diff over a fixed thread pool. Implements [`DiffView`].
@@ -125,6 +146,8 @@ struct Queue {
     /// Background scan position in file order: nothing below it is fresh.
     cursor: usize,
     running: Vec<Running>,
+    /// Segments whose job failed, with the reason; one entry each.
+    failures: Vec<(usize, String)>,
     stop: bool,
 }
 
@@ -172,6 +195,7 @@ impl<J: Job> Scheduler<J> {
                 wanted: BTreeSet::new(),
                 cursor: 0,
                 running: Vec::with_capacity(threads),
+                failures: Vec::new(),
                 stop: false,
             }),
             cv: Condvar::new(),
@@ -183,7 +207,7 @@ impl<J: Job> Scheduler<J> {
                     .name("rift-sched".into())
                     .spawn(move || worker(&shared))
             })
-            .collect::<std::io::Result<_>>()?;
+            .collect::<io::Result<_>>()?;
         Ok(Scheduler { shared, workers })
     }
 
@@ -197,21 +221,21 @@ impl<J: Job> Scheduler<J> {
     /// The hunk for `segment`, computing it first if needed. Blocks; for the
     /// unified writer and tests, not for a frame loop.
     ///
+    /// # Errors
+    ///
+    /// The job's error, or an error naming the panic if the job panicked.
+    ///
     /// # Panics
     ///
-    /// Panics if `segment` is out of range or its job panicked.
-    #[allow(
-        clippy::must_use_candidate,
-        reason = "waiting for the computation is the effect; the value may be ignored"
-    )]
-    pub fn wait_hunk(&self, segment: usize) -> Arc<Hunk> {
+    /// Panics if `segment` is out of range.
+    pub fn wait_hunk(&self, segment: usize) -> Result<Arc<Hunk>> {
         if let Some(hunk) = self.shared.equal_hunk(segment) {
-            return hunk;
+            return Ok(hunk);
         }
         let mut q = self.shared.lock();
         loop {
-            if let Some(hunk) = self.shared.lookup(&mut q, segment) {
-                return hunk;
+            if let Some(hunk) = self.shared.lookup(&mut q, segment)? {
+                return Ok(hunk);
             }
             q = self.shared.wait(q);
         }
@@ -253,7 +277,10 @@ impl<J: Job> DiffView for Scheduler<J> {
         if let Some(hunk) = self.shared.equal_hunk(segment) {
             return HunkState::Ready(hunk);
         }
-        match self.shared.lookup(&mut self.shared.lock(), segment) {
+        // A frame loop has no error channel; a failed segment is a read
+        // error or a bug, and the front end stops with its message.
+        let found = self.shared.lookup(&mut self.shared.lock(), segment);
+        match found.unwrap_or_else(|e| panic!("{e}")) {
             Some(hunk) if hunk.approx => HunkState::Approx(hunk),
             Some(hunk) => HunkState::Ready(hunk),
             None => HunkState::Pending,
@@ -309,22 +336,19 @@ impl<J: Job> Shared<J> {
         })
     }
 
-    /// The cached hunk, or a request for it that wakes a worker.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the job for `segment` panicked, so a bug in a job reaches
-    /// the caller instead of leaving it waiting.
-    fn lookup(&self, q: &mut Queue, segment: usize) -> Option<Arc<Hunk>> {
-        assert!(
-            q.cache.state(segment) != State::Failed,
-            "refinement of segment {segment} panicked"
-        );
+    /// The cached hunk, or a request for it that wakes a worker. A failed
+    /// job is reported instead, so its waiter does not wait forever.
+    fn lookup(&self, q: &mut Queue, segment: usize) -> Result<Option<Arc<Hunk>>> {
+        if q.cache.state(segment) == State::Failed {
+            let why = q.failures.iter().find(|f| f.0 == segment);
+            let why = why.map_or("failed", |f| f.1.as_str());
+            return Err(io::Error::other(format!("refining segment {segment}: {why}")).into());
+        }
         let hunk = q.cache.get(segment);
         if hunk.is_none() && q.cache.state(segment) == State::Idle && q.wanted.insert(segment) {
             self.cv.notify_all();
         }
-        hunk
+        Ok(hunk)
     }
 }
 
@@ -380,11 +404,12 @@ impl Queue {
         cancel
     }
 
-    fn fail(&mut self, segment: usize) {
+    fn fail(&mut self, segment: usize, why: String) {
         let at = self.running.iter().position(|r| r.segment == segment);
         self.running
             .swap_remove(at.expect("failed job was running"));
         self.cache.set_state(segment, State::Failed);
+        self.failures.push((segment, why));
     }
 
     fn complete(&mut self, segment: usize, hunk: Hunk, cancelled: bool) {
@@ -439,22 +464,26 @@ fn worker<J: Job>(shared: &Shared<J>) {
         // its segment Running forever; the panic is passed to whoever asks
         // for the hunk. Nothing the job touched is shared but the budget,
         // which the reservation's drop settles.
+        let mut reservation = reservation;
         let out = panic::catch_unwind(AssertUnwindSafe(|| {
             if too_large {
-                shared.job.too_large(segment, shared.work_cap, &cancel)
+                shared.job.too_large(segment, &mut reservation, &cancel)
             } else {
-                shared.job.run(segment, &cancel)
+                shared.job.run(segment, &mut reservation, &cancel)
             }
         }));
         drop(reservation);
 
         q = shared.lock();
         match out {
-            Ok(mut hunk) => {
+            Ok(Ok(mut hunk)) => {
                 hunk.edits.shrink_to_fit();
                 q.complete(i, hunk, cancel.is_set());
             }
-            Err(_) => q.fail(i),
+            // A cancelled job may stop with an error; nobody wants it.
+            Ok(Err(_)) if cancel.is_set() => q.complete(i, Hunk::default(), true),
+            Ok(Err(e)) => q.fail(i, e.to_string()),
+            Err(_) => q.fail(i, "the job panicked".into()),
         }
         shared.cv.notify_all();
     }

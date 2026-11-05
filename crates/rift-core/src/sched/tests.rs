@@ -101,15 +101,21 @@ impl Job for Fake {
         (self.estimate)(segment)
     }
 
-    fn run(&self, segment: &Segment, cancel: &Cancel) -> Hunk {
+    fn run(&self, segment: &Segment, _: &mut Reservation, cancel: &Cancel) -> Result<Hunk> {
         self.enter(segment, cancel);
-        script(segment, false)
+        Ok(script(segment, false))
     }
 
-    fn too_large(&self, segment: &Segment, limit: Bytes, cancel: &Cancel) -> Hunk {
+    fn too_large(
+        &self,
+        segment: &Segment,
+        reservation: &mut Reservation,
+        cancel: &Cancel,
+    ) -> Result<Hunk> {
+        let limit = reservation.bytes();
         self.too_large.lock().unwrap().push((id(segment), limit));
         self.enter(segment, cancel);
-        script(segment, true)
+        Ok(script(segment, true))
     }
 }
 
@@ -123,7 +129,7 @@ fn budget(n: usize, hunks: u64) -> Budget {
 
 fn wait_all<J: Job>(s: &Scheduler<J>) {
     for i in 0..s.segments().len() {
-        s.wait_hunk(i);
+        s.wait_hunk(i).unwrap();
     }
 }
 
@@ -234,7 +240,7 @@ fn requested_hunk_is_served_before_background() {
     for _ in 0..n - 2 {
         release.send(()).unwrap();
     }
-    s.wait_hunk(7);
+    s.wait_hunk(7).unwrap();
     assert!(ready(&s.hunk(6)).is_some());
 }
 
@@ -302,6 +308,7 @@ fn queue_rewinds_cursor_after_a_cancel() {
         wanted: BTreeSet::new(),
         cursor: 0,
         running: Vec::new(),
+        failures: Vec::new(),
         stop: false,
     };
     assert_eq!(q.pick(), Some((2, true)));
@@ -330,7 +337,7 @@ fn lru_evicts_oldest_and_recompute_is_deterministic() {
     // One release per computation keeps the worker in step with the test.
     let step = |i: usize| {
         release.send(()).unwrap();
-        s.wait_hunk(i)
+        s.wait_hunk(i).unwrap()
     };
     let h0 = step(0);
     let h1 = step(1);
@@ -436,16 +443,18 @@ impl Job for Watch {
         self.inner.estimate(segment)
     }
 
-    fn run(&self, segment: &Segment, cancel: &Cancel) -> Hunk {
+    fn run(&self, segment: &Segment, r: &mut Reservation, cancel: &Cancel) -> Result<Hunk> {
+        assert_eq!(r.bytes(), self.estimate(segment));
         self.check(self.estimate(segment));
-        self.inner.run(segment, cancel)
+        self.inner.run(segment, r, cancel)
     }
 
-    fn too_large(&self, segment: &Segment, limit: Bytes, cancel: &Cancel) -> Hunk {
+    fn too_large(&self, segment: &Segment, r: &mut Reservation, cancel: &Cancel) -> Result<Hunk> {
+        let limit = r.bytes();
         assert_eq!(limit, self.work_cap);
         assert!(self.estimate(segment) > limit);
         self.check(limit);
-        self.inner.too_large(segment, limit, cancel)
+        self.inner.too_large(segment, r, cancel)
     }
 }
 
@@ -486,7 +495,7 @@ fn budget_is_never_exceeded_under_concurrency() {
                     let _ = s.hunk(rng.below(n));
                 }
                 _ => {
-                    s.wait_hunk(rng.below(n));
+                    s.wait_hunk(rng.below(n)).unwrap();
                 }
             }
         }
@@ -555,7 +564,7 @@ fn a_row_table_larger_than_the_cache_block_is_refused_not_spun_on() {
         Err(e) => panic!("unexpected error {e}"),
         Ok(s) => {
             let s = Arc::new(s);
-            finishes(move || s.wait_hunk(n - 1)).unwrap();
+            finishes(move || s.wait_hunk(n - 1)).unwrap().unwrap();
         }
     }
 }
@@ -573,29 +582,38 @@ fn refine_bytes_held_before_construction_do_not_stall_the_workers() {
     };
     let s = Arc::new(Scheduler::new(job, segments(n, |_| false), &budget, 1).unwrap());
     let t = Arc::clone(&s);
-    finishes(move || t.wait_hunk(2)).unwrap();
+    finishes(move || t.wait_hunk(2)).unwrap().unwrap();
     assert!(budget.used(Half::Refine) <= budget.capacity(Half::Refine));
 }
 
 #[test]
-fn a_panicking_job_fails_the_waiter_instead_of_hanging() {
+fn a_failing_job_fails_the_waiter_instead_of_hanging() {
     struct Boom;
     impl Job for Boom {
         fn estimate(&self, _: &Segment) -> Bytes {
             Bytes(8)
         }
-        fn run(&self, segment: &Segment, _: &Cancel) -> Hunk {
+        fn run(&self, segment: &Segment, _: &mut Reservation, _: &Cancel) -> Result<Hunk> {
             assert!(id(segment) != 1, "boom");
-            script(segment, false)
+            if id(segment) == 2 {
+                return Err(io::Error::other("disk on fire").into());
+            }
+            Ok(script(segment, false))
         }
-        fn too_large(&self, segment: &Segment, _: Bytes, _: &Cancel) -> Hunk {
-            script(segment, true)
+        fn too_large(&self, s: &Segment, _: &mut Reservation, _: &Cancel) -> Result<Hunk> {
+            Ok(script(s, true))
         }
     }
-    let n = 3;
+    let n = 4;
     let s = Arc::new(Scheduler::new(Boom, segments(n, |_| false), &budget(n, 4), 1).unwrap());
     let t = Arc::clone(&s);
-    assert!(finishes(move || t.wait_hunk(1)).is_err(), "waiter panics");
+    let err = finishes(move || t.wait_hunk(1)).unwrap().unwrap_err();
+    assert!(err.to_string().contains("panicked"), "{err}");
     let t = Arc::clone(&s);
-    finishes(move || t.wait_hunk(2)).expect("the worker survived");
+    let err = finishes(move || t.wait_hunk(2)).unwrap().unwrap_err();
+    assert!(err.to_string().contains("disk on fire"), "{err}");
+    let t = Arc::clone(&s);
+    finishes(move || t.wait_hunk(3))
+        .unwrap()
+        .expect("the worker survived");
 }
