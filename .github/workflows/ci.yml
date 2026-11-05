@@ -38,3 +38,11 @@ jobs:
       - run: cargo build --release -p rift-diff -p rift-gen
       - name: Summary and full diff of a 1 GiB pair stay under --mem
         run: bench/ci-mem.sh 1G 256M
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.97 check --workspace --all-targets
