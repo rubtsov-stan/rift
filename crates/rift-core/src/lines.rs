@@ -33,13 +33,35 @@ impl LineBuf {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Budget`]-free `Io` out-of-memory when growth fails.
+    /// Returns [`Error::Io`] with kind `OutOfMemory` when the buffer cannot
+    /// grow.
     pub fn push(&mut self, line: &[u8]) -> Result<()> {
-        let oom = |_| std::io::Error::from(std::io::ErrorKind::OutOfMemory);
         self.bytes.try_reserve(line.len()).map_err(oom)?;
         self.ends.try_reserve(1).map_err(oom)?;
         self.bytes.extend_from_slice(line);
         self.ends.push(self.bytes.len());
+        Ok(())
+    }
+
+    /// Appends several lines stored back to back in `bytes`, where `ends`
+    /// gives each line's end offset within `bytes` in increasing order, the
+    /// last one equal to `bytes.len()`. One reservation per vector instead
+    /// of one per line.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] with kind `OutOfMemory` when the buffer cannot
+    /// grow.
+    pub fn push_lines(
+        &mut self,
+        bytes: &[u8],
+        ends: impl ExactSizeIterator<Item = usize>,
+    ) -> Result<()> {
+        self.bytes.try_reserve(bytes.len()).map_err(oom)?;
+        self.ends.try_reserve(ends.len()).map_err(oom)?;
+        let base = self.bytes.len();
+        self.bytes.extend_from_slice(bytes);
+        self.ends.extend(ends.map(|end| base + end));
         Ok(())
     }
 
@@ -71,6 +93,10 @@ impl LineBuf {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         (0..self.len()).map(|i| self.line(i))
     }
+}
+
+fn oom(_: std::collections::TryReserveError) -> Error {
+    std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
 }
 
 /// Random access to lines by number.
@@ -146,10 +172,19 @@ impl LineAccess for MemLines<'_> {
             });
         }
         buf.clear();
-        for i in range.start.0..range.end.0 {
-            buf.push(self.line(i).expect("checked against line_count"))?;
+        let (first, last) = (
+            usize::try_from(range.start.0).expect("below line_count"),
+            usize::try_from(range.end.0).expect("at most line_count"),
+        );
+        if first >= last {
+            return Ok(());
         }
-        Ok(())
+        let base = self.starts[first];
+        let bytes = &self.data[base..self.starts[last]];
+        buf.push_lines(
+            bytes,
+            self.starts[first + 1..=last].iter().map(|&s| s - base),
+        )
     }
 }
 
@@ -181,6 +216,23 @@ mod tests {
             [b"a\r\n".to_vec(), b"b\n".to_vec(), b"c".to_vec()]
         );
         assert_eq!(lines_of(b"\n\n"), [b"\n".to_vec(), b"\n".to_vec()]);
+    }
+
+    #[test]
+    fn push_lines_matches_repeated_push() {
+        let mut one = LineBuf::new();
+        let mut many = LineBuf::new();
+        one.push(b"a\n").unwrap();
+        one.push(b"bc\r\n").unwrap();
+        one.push(b"d").unwrap();
+        many.push_lines(b"a\nbc\r\nd", [2usize, 6, 7].into_iter())
+            .unwrap();
+        assert_eq!(
+            one.iter().collect::<Vec<_>>(),
+            many.iter().collect::<Vec<_>>()
+        );
+        many.push_lines(b"", [].into_iter()).unwrap();
+        assert_eq!(many.len(), 3);
     }
 
     #[test]
