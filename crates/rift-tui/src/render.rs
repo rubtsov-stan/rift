@@ -11,6 +11,7 @@ use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Segment, SegmentS
 
 use crate::app::{App, Mode, Pos, Scratch, rows_in};
 use crate::cache::LineCache;
+use crate::hidden_table::HIDDEN;
 use crate::minimap;
 
 const GLYPHS: [char; 9] = ['·', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -252,19 +253,23 @@ fn sanitize(line: &[u8], cut: bool, out: &mut String, left: &mut usize) {
 }
 
 /// Characters that are control or invisible: they are drawn as escapes.
+/// Cc, the line and paragraph separators, and the generated table of Cf and
+/// `Default_Ignorable_Code_Point`.
 fn is_hidden(c: char) -> bool {
+    let cp = c as u32;
     c.is_control()
-        || matches!(
-            c,
-            '\u{AD}'
-                | '\u{61C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{2028}'..='\u{202E}'
-                | '\u{2060}'..='\u{206F}'
-                | '\u{FEFF}'
-                | '\u{FFF9}'..='\u{FFFB}'
-        )
+        || matches!(c, '\u{2028}' | '\u{2029}')
+        || HIDDEN
+            .binary_search_by(|&(lo, hi)| {
+                if hi < cp {
+                    std::cmp::Ordering::Less
+                } else if lo > cp {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .is_ok()
 }
 
 /// Appends valid text, escaping hidden characters, while `left` columns

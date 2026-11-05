@@ -12,6 +12,7 @@
 
 mod app;
 mod cache;
+mod hidden_table;
 mod minimap;
 mod render;
 mod run;

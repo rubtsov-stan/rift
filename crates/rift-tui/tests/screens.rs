@@ -445,3 +445,47 @@ fn a_line_over_the_budget_is_drawn_from_its_prefix() {
     assert!(s.contains(&"x".repeat(40)), "{s}");
     assert!(!s.contains("exceeds"), "{s}");
 }
+
+#[allow(dead_code)]
+mod table {
+    include!("../src/hidden_table.rs");
+}
+
+fn drawn(c: char) -> String {
+    let text = format!("a{c}b\n");
+    let lines = Canned {
+        lines: vec![text.as_bytes()],
+        fail: None,
+    };
+    show(&lines)
+}
+
+fn assert_escaped(c: char) {
+    let s = drawn(c);
+    let want = format!("a\\u{{{:X}}}b", c as u32);
+    assert!(s.contains(&want), "U+{:04X} not escaped:\n{s}", c as u32);
+    // The screen dump itself has newlines.
+    assert!(c == '\n' || !s.contains(c), "U+{:04X} drawn raw", c as u32);
+}
+
+#[test]
+fn every_format_and_default_ignorable_code_point_is_escaped() {
+    let mut n = 0;
+    for &(lo, hi) in table::HIDDEN {
+        for cp in lo..=hi {
+            assert_escaped(char::from_u32(cp).unwrap());
+            n += 1;
+        }
+    }
+    assert!(n > 4000, "table looks truncated: {n}");
+}
+
+#[test]
+fn every_control_character_is_escaped_except_tab() {
+    for cp in (0..=0x1Fu32).chain(0x7F..=0x9F).filter(|&c| c != 9) {
+        assert_escaped(char::from_u32(cp).unwrap());
+    }
+    assert_escaped('\u{2028}');
+    assert_escaped('\u{2029}');
+    assert!(drawn('\t').contains("a b"));
+}
