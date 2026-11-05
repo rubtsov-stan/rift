@@ -157,4 +157,4 @@ the equal stretches); `cat a b` over the same pair took 6.6 to 6.9 s.
 
 ## License
 
-MIT or Apache-2.0, at your option.
+Rift is dual-licensed under MIT and Apache 2.0, like Rust itself, so you can use it under whichever fits your project. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
