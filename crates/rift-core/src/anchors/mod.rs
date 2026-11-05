@@ -18,14 +18,11 @@
 //! side, plus 8 bytes per such sample for the candidates, trimmed to the
 //! candidate count once the table is gone.
 
-use memchr::memchr;
-
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::Result;
-use crate::index::read_retrying;
 use crate::sample::Sample;
-use crate::source::Source;
-use crate::types::{ByteOffset, Bytes};
+use crate::scan::release_slack;
+use crate::types::Bytes;
 
 /// A line unique in both files: the index of its sample in A and in B.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,10 +38,6 @@ const PAIR_BYTES: u64 = size_of::<Pair>() as u64;
 /// Most occupied slots per slot, as a fraction `NUM / DEN`; past it linear
 /// probing degrades and the caller should thin the samples instead.
 const MAX_LOAD: (u64, u64) = (7, 8);
-
-/// Bytes read from each file when confirming a line, before the rest of
-/// the buffer is used: enough for a typical dump or CSV line in one read.
-const FIRST_READ: usize = 256;
 
 /// No sample in this slot.
 const VACANT: u32 = u32::MAX;
@@ -67,8 +60,8 @@ const _: () = assert!(ENTRY_BYTES == 16);
 /// releases the reservation.
 #[derive(Debug)]
 pub struct Anchors {
-    pairs: Vec<Pair>,
-    reservation: Reservation,
+    pub(crate) pairs: Vec<Pair>,
+    pub(crate) reservation: Reservation,
 }
 
 impl Anchors {
@@ -76,19 +69,6 @@ impl Anchors {
     #[must_use]
     pub fn pairs(&self) -> &[Pair] {
         &self.pairs
-    }
-
-    /// The candidates, for trimming in place.
-    pub(crate) fn pairs_mut(&mut self) -> &mut Vec<Pair> {
-        &mut self.pairs
-    }
-
-    /// Gives spare capacity back to the budget.
-    pub(crate) fn release_slack(&mut self) {
-        let before = self.pairs.capacity();
-        self.pairs.shrink_to_fit();
-        self.reservation
-            .shrink(Bytes((before - self.pairs.capacity()) as u64 * PAIR_BYTES));
     }
 }
 
@@ -145,7 +125,7 @@ pub fn select(samples_a: &[Sample], samples_b: &[Sample], budget: &Budget) -> Re
     let mut anchors = Anchors { pairs, reservation };
     // The table's bytes stay reserved until the trim, which briefly holds
     // the old and the new block.
-    anchors.release_slack();
+    release_slack(&mut anchors.pairs, &mut anchors.reservation);
     anchors.reservation.shrink(Bytes(table_bytes));
     Ok(anchors)
 }
@@ -229,65 +209,10 @@ impl Table {
     }
 }
 
-/// Whether the line starting at `off_a` in `a` has the same bytes as the
-/// line starting at `off_b` in `b`, terminators included. Reads in steps of
-/// the buffer size, so a line of any length fits.
-///
-/// # Errors
-///
-/// [`Error::Io`](crate::Error::Io) from either source.
-///
-/// # Panics
-///
-/// Panics if a buffer is empty.
-pub(crate) fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
-    a: &A,
-    off_a: ByteOffset,
-    b: &B,
-    off_b: ByteOffset,
-    buf_a: &mut [u8],
-    buf_b: &mut [u8],
-) -> Result<bool> {
-    let step = buf_a.len().min(buf_b.len());
-    assert!(step > 0, "empty comparison buffer");
-    let mut want = FIRST_READ.min(step);
-    let mut pos = 0u64;
-    loop {
-        let na = fill(a, &mut buf_a[..want], off_a + pos)?;
-        let nb = fill(b, &mut buf_b[..want], off_b + pos)?;
-        let (ca, cb) = (&buf_a[..na], &buf_b[..nb]);
-        if let Some(nl) = memchr(b'\n', ca) {
-            return Ok(cb.len() > nl && ca[..=nl] == cb[..=nl]);
-        }
-        if ca != cb {
-            return Ok(false);
-        }
-        if na < want {
-            // Both sources ended on the same unterminated line.
-            return Ok(true);
-        }
-        pos += na as u64;
-        want = step;
-    }
-}
-
-/// Reads until `buf` is full or the source ends; returns the bytes read.
-fn fill<S: Source + ?Sized>(src: &S, buf: &mut [u8], offset: ByteOffset) -> Result<usize> {
-    let mut n = 0;
-    while n < buf.len() {
-        let got = read_retrying(src, &mut buf[n..], offset + n as u64)?;
-        if got == 0 {
-            break;
-        }
-        n += got;
-    }
-    Ok(n)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::LineNo;
+    use crate::types::{ByteOffset, LineNo};
 
     /// Samples for every line of `data`, with hashes chosen by the test so
     /// collisions can be staged.
@@ -313,24 +238,6 @@ mod tests {
         got.pairs().to_vec()
     }
 
-    /// Whether line `i` of `a` matches line `j` of `b`, checked with
-    /// `buf`-byte buffers and with ample ones, which must agree.
-    fn same(a: &[u8], i: usize, b: &[u8], j: usize, buf: usize) -> bool {
-        let off = |d: &[u8], k: usize| {
-            ByteOffset(
-                d.split_inclusive(|&c| c == b'\n')
-                    .take(k)
-                    .map(|l| l.len() as u64)
-                    .sum(),
-            )
-        };
-        let (oa, ob) = (off(a, i), off(b, j));
-        let small = same_line(a, oa, b, ob, &mut vec![0; buf], &mut vec![0; buf]).unwrap();
-        let large = same_line(a, oa, b, ob, &mut [0; 4096], &mut [0; 4096]).unwrap();
-        assert_eq!(small, large, "buffer size changed the verdict");
-        small
-    }
-
     #[test]
     fn keeps_hashes_unique_in_both_files() {
         let pairs = select_of(&[1, 2, 2, 3, 4], &[3, 1, 5, 4, 4]);
@@ -344,32 +251,6 @@ mod tests {
             [Pair { a: 1, b: 1 }, Pair { a: 3, b: 0 }]
         );
         assert!(select_of(&[], &[1]).is_empty());
-    }
-
-    #[test]
-    fn same_line_compares_bytes_not_hashes() {
-        assert!(same(b"same\nfoo\n", 0, b"same\nbar\n", 0, 64));
-        assert!(!same(b"same\nfoo\n", 1, b"same\nbar\n", 1, 64));
-        assert!(same(b"a\nb\n", 1, b"b\n", 0, 64));
-    }
-
-    #[test]
-    fn lines_longer_than_the_buffer_compare_in_steps() {
-        let long_a = [vec![b'a'; 1000], b"\n".to_vec()].concat();
-        let mut long_b = long_a.clone();
-        assert!(same(&long_a, 0, &long_b, 0, 7));
-        long_b[999] = b'b';
-        assert!(!same(&long_a, 0, &long_b, 0, 7));
-        // Same prefix, but B's line goes on past A's terminator.
-        assert!(!same(b"ab\n", 0, b"abc\n", 0, 2));
-        assert!(!same(b"abc\n", 0, b"ab\n", 0, 2));
-    }
-
-    #[test]
-    fn unterminated_last_lines_match_only_each_other() {
-        assert!(same(b"end", 0, b"end", 0, 2));
-        assert!(!same(b"end", 0, b"end\n", 0, 2));
-        assert!(!same(b"end\n", 0, b"end", 0, 2));
     }
 
     #[test]

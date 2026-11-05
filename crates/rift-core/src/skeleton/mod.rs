@@ -26,13 +26,14 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use memchr::memchr;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::anchors::{self, Anchors, Pair};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::sample::Sample;
-use crate::scan::{ScanConfig, Scanned, scan};
+use crate::scan::{ScanConfig, Scanned, release_slack, scan};
 use crate::segment::{Segment, SegmentStatus};
 use crate::source::Source;
 use crate::strata::MAX_LEVEL;
@@ -203,8 +204,8 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         &bounds,
         src_a,
         src_b,
-        to_usize(buf),
-        to_usize(lanes),
+        Bytes(buf).as_usize(),
+        usize::try_from(lanes).expect("lanes are at most the thread count"),
         TASK_BYTES,
     )?;
     work.shrink(Bytes(buffers));
@@ -306,7 +307,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
         if g > 0 {
             let (a, b) = bounds.at(g);
             let (a, b) = (ByteOffset(a.offset), ByteOffset(b.offset));
-            if !anchors::same_line(src_a, a, src_b, b, buf_a, buf_b)? {
+            if !same_line(src_a, a, src_b, b, buf_a, buf_b)? {
                 set(&verdicts.false_anchors, g);
             }
         }
@@ -368,7 +369,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
 /// Reduces the candidates, ordered by A, to a longest chain increasing in
 /// B. Patience sorting: `O(m log m)` time, 8 bytes per candidate.
 fn longest_increasing(anchors: &mut Anchors, budget: &Budget) -> Result<()> {
-    let pairs = anchors.pairs_mut();
+    let pairs = &mut anchors.pairs;
     let m = pairs.len();
     if m == 0 {
         return Ok(());
@@ -403,13 +404,9 @@ fn longest_increasing(anchors: &mut Anchors, budget: &Budget) -> Result<()> {
     pairs.truncate(len);
     drop(tails);
     drop(prev);
-    anchors.release_slack();
+    release_slack(&mut anchors.pairs, &mut anchors.reservation);
     drop(work);
     Ok(())
-}
-
-fn to_usize(n: u64) -> usize {
-    usize::try_from(n).expect("buffer size fits usize")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -533,6 +530,54 @@ fn push(
     segments.push(Segment { a, b, status });
 }
 
+/// Bytes read from each file when confirming a line, before the rest of
+/// the buffer is used: enough for a typical dump or CSV line in one read.
+const FIRST_READ: usize = 256;
+
+/// Whether the line starting at `off_a` in `a` has the same bytes as the
+/// line starting at `off_b` in `b`, terminators included. Reads in steps of
+/// the buffer size, so a line of any length fits.
+///
+/// # Panics
+///
+/// Panics if a buffer is empty.
+fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
+    a: &A,
+    off_a: ByteOffset,
+    b: &B,
+    off_b: ByteOffset,
+    buf_a: &mut [u8],
+    buf_b: &mut [u8],
+) -> Result<bool> {
+    let step = buf_a.len().min(buf_b.len());
+    assert!(step > 0, "empty comparison buffer");
+    // Never ask past the end, so every read can be exact.
+    let left = |src: Bytes, at: ByteOffset, want: usize| {
+        Bytes(src.0.saturating_sub(at.0)).as_usize().min(want)
+    };
+    let mut want = FIRST_READ.min(step);
+    let mut pos = 0u64;
+    loop {
+        let (at_a, at_b) = (off_a + pos, off_b + pos);
+        let (na, nb) = (left(a.len(), at_a, want), left(b.len(), at_b, want));
+        let (ca, cb) = (&mut buf_a[..na], &mut buf_b[..nb]);
+        a.read_exact_at(ca, at_a)?;
+        b.read_exact_at(cb, at_b)?;
+        if let Some(nl) = memchr(b'\n', ca) {
+            return Ok(cb.len() > nl && ca[..=nl] == cb[..=nl]);
+        }
+        if ca != cb {
+            return Ok(false);
+        }
+        if na < want {
+            // Both sources ended on the same unterminated line.
+            return Ok(true);
+        }
+        pos += na as u64;
+        want = step;
+    }
+}
+
 /// Position of the first byte that differs between `len` bytes at
 /// `start_a` in A and at `start_b` in B, or `None` if all match. Streams
 /// through the two buffers.
@@ -548,7 +593,7 @@ fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
     let step = buf_a.len().min(buf_b.len()) as u64;
     let mut pos = 0;
     while pos < len {
-        let n = to_usize((len - pos).min(step));
+        let n = Bytes((len - pos).min(step)).as_usize();
         let (a, b) = (&mut buf_a[..n], &mut buf_b[..n]);
         src_a.read_exact_at(a, ByteOffset(start_a + pos))?;
         src_b.read_exact_at(b, ByteOffset(start_b + pos))?;
@@ -580,6 +625,50 @@ mod tests {
                 s
             })
             .collect()
+    }
+
+    /// Whether line `i` of `a` matches line `j` of `b`, checked with
+    /// `buf`-byte buffers and with ample ones, which must agree.
+    fn same(a: &[u8], i: usize, b: &[u8], j: usize, buf: usize) -> bool {
+        let off = |d: &[u8], k: usize| {
+            ByteOffset(
+                d.split_inclusive(|&c| c == b'\n')
+                    .take(k)
+                    .map(|l| l.len() as u64)
+                    .sum(),
+            )
+        };
+        let (oa, ob) = (off(a, i), off(b, j));
+        let small = same_line(a, oa, b, ob, &mut vec![0; buf], &mut vec![0; buf]).unwrap();
+        let large = same_line(a, oa, b, ob, &mut [0; 4096], &mut [0; 4096]).unwrap();
+        assert_eq!(small, large, "buffer size changed the verdict");
+        small
+    }
+
+    #[test]
+    fn same_line_compares_bytes_not_hashes() {
+        assert!(same(b"same\nfoo\n", 0, b"same\nbar\n", 0, 64));
+        assert!(!same(b"same\nfoo\n", 1, b"same\nbar\n", 1, 64));
+        assert!(same(b"a\nb\n", 1, b"b\n", 0, 64));
+    }
+
+    #[test]
+    fn lines_longer_than_the_buffer_compare_in_steps() {
+        let long_a = [vec![b'a'; 1000], b"\n".to_vec()].concat();
+        let mut long_b = long_a.clone();
+        assert!(same(&long_a, 0, &long_b, 0, 7));
+        long_b[999] = b'b';
+        assert!(!same(&long_a, 0, &long_b, 0, 7));
+        // Same prefix, but B's line goes on past A's terminator.
+        assert!(!same(b"ab\n", 0, b"abc\n", 0, 2));
+        assert!(!same(b"abc\n", 0, b"ab\n", 0, 2));
+    }
+
+    #[test]
+    fn unterminated_last_lines_match_only_each_other() {
+        assert!(same(b"end", 0, b"end", 0, 2));
+        assert!(!same(b"end", 0, b"end\n", 0, 2));
+        assert!(!same(b"end\n", 0, b"end", 0, 2));
     }
 
     #[test]
@@ -630,7 +719,7 @@ mod tests {
         let want: Vec<bool> = (0..gaps)
             .map(|g| {
                 let ((a0, b0), (a1, b1)) = (bounds.at(g), bounds.at(g + 1));
-                let r = |x: Pos, y: Pos| to_usize(x.offset)..to_usize(y.offset);
+                let r = |x: Pos, y: Pos| Bytes(x.offset).as_usize()..Bytes(y.offset).as_usize();
                 a[r(a0, a1)] != b[r(b0, b1)]
             })
             .collect();

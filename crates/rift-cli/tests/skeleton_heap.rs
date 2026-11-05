@@ -5,7 +5,7 @@
 //! counters. Needs the pair from `bench/data.sh` and a release build:
 //!
 //! ```sh
-//! cargo test -p rift-core --release --test skeleton_heap -- --ignored
+//! cargo test -p rift-diff --release --test skeleton_heap -- --ignored
 //! ```
 
 use std::fs::File;
