@@ -97,9 +97,11 @@ row() {
   fi
   size=$(wc -c < "$scratch/out" | tr -d ' ')
   heap=
-  case $tool in rift*summary*)
-    # "peak heap 9.8 MiB of 64.0 MiB"
-    heap=$(awk '/^peak heap/ {print $3, $4}' "$scratch/out") ;;
+  case $tool in
+    # "peak heap 9.8 MiB of 64.0 MiB": on stdout for --summary, on stderr
+    # for --stats, where the diff itself is stdout.
+    rift*summary*) heap=$(awk '/^peak heap/ {print $3, $4}' "$scratch/out") ;;
+    rift*stats*) heap=$(awk '/^peak heap/ {print $3, $4}' "$scratch/err") ;;
   esac
   echo "| $pair | $tool | $cache | $wall s | $(human "$rss") | $(human "$size") | $heap | exit $rc |"
 }
@@ -141,10 +143,8 @@ for item in "$@"; do
   body="$body
 $(row "$label" "rift --summary --mem $mem" "$rift" --summary --mem "$mem" "$a" "$b")"
 
-  # FULL DIFF HOOK: `rift a b` (unified diff) does not exist yet. When it
-  # does, add: row "$label" "rift --mem $mem" "$rift" --mem "$mem" "$a" "$b"
   body="$body
-$(skip "$label" "rift --mem $mem" "full diff not implemented")"
+$(row "$label" "rift --stats --mem $mem" "$rift" --stats --mem "$mem" "$a" "$b")"
 
   if [ $((total * 2)) -gt "$ram" ]; then
     why="needs more memory than available ($(human "$total") of input, $(human "$ram") RAM)"
@@ -169,7 +169,7 @@ $hw
 
 ### Seeds and commands
 $seeds
-- summary: \`rift --summary --mem $mem a b\`
+- summary: \`rift --summary --mem $mem a b\`; full diff: \`rift --stats --mem $mem a b\`
 - diff: \`diff a b\` (GNU when labelled so); git: \`git diff --no-index a b\`
 - timing: \`$timecmd COMMAND\`, stdout redirected to a file (output column is its size)
 
