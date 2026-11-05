@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use rift_core::Bytes;
-use rift_gen::{Config, Kind, Profile};
+use rift_gen::{Config, Kind, Profile, Rows};
 
 /// Generate a pair of files with a known mutation manifest.
 #[derive(Debug, Parser)]
@@ -23,6 +23,9 @@ struct Args {
     /// Line content.
     #[arg(long, value_enum, default_value_t = Profile::Sql)]
     profile: Profile,
+    /// Row format for the nokey and shuffled profiles.
+    #[arg(long, value_enum, default_value_t = Rows::Csv)]
+    rows: Rows,
     /// Probability that a mutation starts at a given line.
     #[arg(long, default_value_t = 0.001)]
     change_ratio: f64,
@@ -37,6 +40,7 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut config = Config::new(args.seed, args.size.0, args.profile);
+    config.rows = args.rows;
     config.change_ratio = args.change_ratio;
     if let Some(kinds) = args.kinds {
         config.kinds = kinds;

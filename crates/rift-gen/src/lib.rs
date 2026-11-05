@@ -12,7 +12,7 @@ pub mod synthetic;
 
 use std::io::{self, Write};
 
-pub use profile::Profile;
+pub use profile::{NOKEY_POOL, Profile, Rows};
 pub use rng::Rng;
 
 /// Kind of mutation applied to a region. Line numbers are 0-based.
@@ -103,6 +103,8 @@ pub struct Config {
     pub size: u64,
     /// Line content.
     pub profile: Profile,
+    /// Row format of the `nokey` and `shuffled` profiles.
+    pub rows: Rows,
     /// Probability that a mutation starts at a given line.
     pub change_ratio: f64,
     /// Kinds eligible for random selection.
@@ -112,16 +114,30 @@ pub struct Config {
 impl Config {
     /// Settings with every kind enabled, except `Long` below 64 MiB where a
     /// 1 MiB line would dominate the file.
+    ///
+    /// `nokey` leaves out the kinds that would add a line found once:
+    /// `LowUniq`, `Long`, `Crlf` and `NoEol`. `shuffled` keeps the changes
+    /// a key can name, `Insert`, `Delete` and `Modify`, and moves blocks on
+    /// its own schedule (see [`Profile::Shuffled`]).
     #[must_use]
     pub fn new(seed: u64, size: u64, profile: Profile) -> Self {
         let kinds = Kind::ALL
             .into_iter()
             .filter(|k| *k != Kind::Long || size >= 64 << 20)
+            .filter(|k| match profile {
+                Profile::Nokey => matches!(
+                    k,
+                    Kind::Insert | Kind::Delete | Kind::Modify | Kind::Move | Kind::Dup
+                ),
+                Profile::Shuffled => matches!(k, Kind::Insert | Kind::Delete | Kind::Modify),
+                _ => true,
+            })
             .collect();
         Self {
             seed,
             size,
             profile,
+            rows: Rows::default(),
             change_ratio: 0.001,
             kinds,
         }
@@ -178,6 +194,10 @@ pub fn parse_manifest(text: &[u8]) -> io::Result<Vec<Mutation>> {
     Ok(out)
 }
 
+/// Probability that a `shuffled` block move starts at a line, when none is
+/// in flight.
+const SHUFFLE_MOVE_RATE: f64 = 0.01;
+
 struct Generator<'c, A, B, M> {
     config: &'c Config,
     rng: Rng,
@@ -189,6 +209,8 @@ struct Generator<'c, A, B, M> {
     line_b: u64,
     bytes_a: u64,
     buf: Vec<u8>,
+    /// The A side of the line being modified.
+    old: Vec<u8>,
     /// A block withheld from B, with the number of B lines still to pass
     /// before it is emitted.
     pending_move: Option<(Mutation, Vec<u8>, u64)>,
@@ -197,7 +219,7 @@ struct Generator<'c, A, B, M> {
 impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
     fn new(config: &Config, a: A, b: B, manifest: M) -> Generator<'_, A, B, M> {
         let mut rng = Rng::new(config.seed);
-        let lines = profile::Lines::new(config.profile, &mut rng);
+        let lines = profile::Lines::new(config.profile, config.rows, &mut rng);
         Generator {
             config,
             rng,
@@ -209,6 +231,7 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
             line_b: 0,
             bytes_a: 0,
             buf: Vec::with_capacity(4096),
+            old: Vec::new(),
             pending_move: None,
         }
     }
@@ -216,8 +239,24 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
     fn run(mut self) -> io::Result<()> {
         self.manifest.write_all(b"kind\tline_a\tline_b\tcount\n")?;
         let no_eol = self.config.kinds.contains(&Kind::NoEol) && self.rng.chance(0.5);
+        if let Some(header) = self.lines.header() {
+            self.fixed_line(header)?;
+        }
         while self.bytes_a < self.config.size {
             self.flush_move_if_due()?;
+            if self.config.profile == Profile::Shuffled
+                && self.pending_move.is_none()
+                && self.rng.chance(SHUFFLE_MOVE_RATE)
+            {
+                // At least four times the block's lines pass, in both
+                // files, before it lands, so the block, not what it jumps
+                // over, is the part out of order.
+                let count = self.rng.range(1, 50);
+                let (m, block) = self.withhold(count)?;
+                let distance = self.rng.range(4 * count, 4 * count + 500);
+                self.pending_move = Some((m, block, distance));
+                continue;
+            }
             let kind = self.pick_kind();
             match kind {
                 None => {
@@ -229,6 +268,9 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
         }
         if let Some((m, block, _)) = self.pending_move.take() {
             self.emit_move(m, &block)?;
+        }
+        if let Some(footer) = self.lines.footer() {
+            self.fixed_line(footer)?;
         }
         if no_eol {
             self.next_line();
@@ -284,7 +326,7 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
                 for _ in 0..count {
                     self.next_line();
                     self.only_a(b"\n")?;
-                    self.next_line();
+                    self.changed_line();
                     self.only_b(b"\n")?;
                 }
             }
@@ -292,19 +334,7 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
                 if self.pending_move.is_some() {
                     return Ok(());
                 }
-                let m = Mutation {
-                    kind,
-                    line_a: self.line_a,
-                    line_b: 0,
-                    count,
-                };
-                let mut block = Vec::new();
-                for _ in 0..count {
-                    self.next_line();
-                    self.buf.push(b'\n');
-                    block.extend_from_slice(&self.buf);
-                    self.only_a(b"")?;
-                }
+                let (m, block) = self.withhold(count)?;
                 let distance = self.rng.range(count + 1, 2000);
                 self.pending_move = Some((m, block, distance));
             }
@@ -346,9 +376,30 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
         Ok(())
     }
 
+    /// Writes a block of `count` lines to A only and returns it, for a
+    /// move to emit in B later.
+    fn withhold(&mut self, count: u64) -> io::Result<(Mutation, Vec<u8>)> {
+        let m = Mutation {
+            kind: Kind::Move,
+            line_a: self.line_a,
+            line_b: 0,
+            count,
+        };
+        let mut block = Vec::new();
+        for _ in 0..count {
+            self.next_line();
+            self.buf.push(b'\n');
+            block.extend_from_slice(&self.buf);
+            self.only_a(b"")?;
+        }
+        Ok((m, block))
+    }
+
     fn flush_move_if_due(&mut self) -> io::Result<()> {
         let due = match &mut self.pending_move {
             Some((_, _, left)) if *left == 0 => true,
+            // Counted down in `both` instead.
+            Some(_) if self.config.profile == Profile::Shuffled => false,
             Some((_, _, left)) => {
                 *left -= 1;
                 false
@@ -375,6 +426,27 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
         self.lines.next_line(&mut self.rng, &mut self.buf);
     }
 
+    /// Replaces the line in the buffer with one that differs from it,
+    /// under the same key where the profile has one.
+    fn changed_line(&mut self) {
+        self.old.clear();
+        self.old.extend_from_slice(&self.buf);
+        loop {
+            self.buf.clear();
+            self.lines.same_key(&mut self.rng, &mut self.buf);
+            if self.buf != self.old {
+                break;
+            }
+        }
+    }
+
+    /// A header or footer line, in both files and outside the manifest.
+    fn fixed_line(&mut self, line: &str) -> io::Result<()> {
+        self.buf.clear();
+        self.buf.extend_from_slice(line.as_bytes());
+        self.both(b"\n")
+    }
+
     fn record(&mut self, kind: Kind, count: u64) -> io::Result<()> {
         self.write_manifest(Mutation {
             kind,
@@ -396,6 +468,11 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
     }
 
     fn both(&mut self, end: &[u8]) -> io::Result<()> {
+        if self.config.profile == Profile::Shuffled
+            && let Some((_, _, left)) = &mut self.pending_move
+        {
+            *left = left.saturating_sub(1);
+        }
         self.only_a(end)?;
         self.only_b(end)
     }
@@ -419,6 +496,8 @@ impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
 #[cfg(test)]
 #[allow(clippy::cast_possible_truncation, reason = "test files are small")]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use super::*;
 
     fn pair(config: &Config) -> (Vec<u8>, Vec<u8>, Vec<Mutation>) {
@@ -458,7 +537,7 @@ mod tests {
             cfg.change_ratio = 0.01;
             let (a, b, muts) = pair(&cfg);
             let (la, lb) = (lines(&a), lines(&b));
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = HashSet::new();
             for mu in &muts {
                 seen.insert(mu.kind);
                 let n = usize::try_from(mu.count).unwrap();
@@ -521,6 +600,160 @@ mod tests {
         let (a, _, muts) = pair(&cfg);
         let long = muts.iter().find(|x| x.kind == Kind::Long).unwrap();
         assert!(lines(&a)[long.line_a as usize].len() > 1 << 20);
+    }
+
+    #[test]
+    fn nokey_has_no_line_found_once() {
+        for rows in [Rows::Csv, Rows::Sql, Rows::Ndjson] {
+            let mut cfg = Config::new(7, 2 << 20, Profile::Nokey);
+            cfg.rows = rows;
+            cfg.change_ratio = 0.01;
+            let (a, b, muts) = pair(&cfg);
+            assert_ne!(a, b);
+            for data in [&a, &b] {
+                let mut seen = HashMap::new();
+                for l in lines(data) {
+                    *seen.entry(l).or_insert(0) += 1;
+                }
+                assert!(seen.len() <= NOKEY_POOL, "{rows:?}");
+                assert!(
+                    seen.values().all(|&n| n > 1),
+                    "{rows:?} has a line found once"
+                );
+            }
+            let (la, lb) = (lines(&a), lines(&b));
+            let mut kinds = HashSet::new();
+            for mu in &muts {
+                kinds.insert(mu.kind);
+                let (ia, ib, n) = (mu.line_a as usize, mu.line_b as usize, mu.count as usize);
+                match mu.kind {
+                    Kind::Modify => {
+                        for i in 0..n {
+                            assert_ne!(la[ia + i], lb[ib + i], "{rows:?} {mu:?}");
+                        }
+                    }
+                    Kind::Move | Kind::Dup => assert_eq!(&la[ia..ia + n], &lb[ib..ib + n]),
+                    _ => {}
+                }
+            }
+            for k in [Kind::Insert, Kind::Delete, Kind::Modify, Kind::Move] {
+                assert!(kinds.contains(&k), "{rows:?} never produced {k:?}");
+            }
+        }
+    }
+
+    /// The key of a `shuffled` row.
+    fn key(rows: Rows, line: &[u8]) -> &[u8] {
+        let field = |sep: u8| line.split(|&c| c == sep).next().unwrap();
+        match rows {
+            Rows::Csv => field(b','),
+            Rows::Sql => field(b'\t'),
+            Rows::Ndjson => {
+                let rest = &line[b"{\"id\":\"".len()..];
+                &rest[..rest.iter().position(|&c| c == b'"').unwrap()]
+            }
+        }
+    }
+
+    /// Rows of a `shuffled` file by key, without the header and footer.
+    fn by_key(rows: Rows, data: &[u8]) -> HashMap<&[u8], &[u8]> {
+        let mut all = lines(data);
+        assert!(all.len() > 2);
+        all.remove(0);
+        if rows == Rows::Sql {
+            assert_eq!(all.pop(), Some(&b"\\."[..]));
+        }
+        let mut out = HashMap::new();
+        for l in all {
+            let k = key(rows, l);
+            assert!(out.insert(k, l).is_none(), "duplicate key {k:?}");
+        }
+        out
+    }
+
+    #[test]
+    fn shuffled_changes_by_key_are_the_manifest() {
+        for rows in [Rows::Csv, Rows::Sql, Rows::Ndjson] {
+            let mut cfg = Config::new(7, 1 << 20, Profile::Shuffled);
+            cfg.rows = rows;
+            cfg.change_ratio = 0.01;
+            let (a, b, muts) = pair(&cfg);
+            let (la, lb) = (lines(&a), lines(&b));
+            assert_eq!(la[0], lb[0], "{rows:?} header");
+            let (ka, kb) = (by_key(rows, &a), by_key(rows, &b));
+            let at_b: HashMap<&[u8], usize> = lb.iter().enumerate().map(|(i, l)| (*l, i)).collect();
+            let in_a: HashSet<&[u8]> = la.iter().copied().collect();
+
+            let (mut added, mut removed, mut changed) = (vec![], vec![], vec![]);
+            let mut moves = 0;
+            for mu in &muts {
+                let (ia, ib, n) = (mu.line_a as usize, mu.line_b as usize, mu.count as usize);
+                match mu.kind {
+                    Kind::Insert => added.extend(lb[ib..ib + n].iter().map(|l| key(rows, l))),
+                    Kind::Delete => removed.extend(la[ia..ia + n].iter().map(|l| key(rows, l))),
+                    Kind::Modify => {
+                        for i in 0..n {
+                            assert_eq!(key(rows, la[ia + i]), key(rows, lb[ib + i]));
+                            changed.push(key(rows, la[ia + i]));
+                        }
+                    }
+                    Kind::Move => {
+                        assert_eq!(&la[ia..ia + n], &lb[ib..ib + n]);
+                        // Lines in both files that the block jumps over in
+                        // B. One still in flight when A ends lands early.
+                        let start = (0..ia)
+                            .rev()
+                            .find_map(|i| at_b.get(la[i]))
+                            .map_or(0, |&p| p + 1);
+                        let crossed = lb[start..ib].iter().filter(|l| in_a.contains(*l)).count();
+                        let footer = usize::from(rows == Rows::Sql);
+                        let last = ib + n + footer == lb.len();
+                        assert!(
+                            last || crossed >= 4 * n,
+                            "{rows:?} {mu:?} crosses {crossed}"
+                        );
+                        moves += 1;
+                    }
+                    k => panic!("{rows:?} produced {k:?}"),
+                }
+            }
+            let keys = |from: &HashMap<&[u8], &[u8]>, pick: &dyn Fn(&[u8], &[u8]) -> bool| {
+                let mut v: Vec<Vec<u8>> = from
+                    .iter()
+                    .filter(|(k, l)| pick(k, l))
+                    .map(|(k, _)| k.to_vec())
+                    .collect();
+                v.sort_unstable();
+                v
+            };
+            let sorted = |v: Vec<&[u8]>| {
+                let mut v: Vec<Vec<u8>> = v.into_iter().map(<[u8]>::to_vec).collect();
+                v.sort_unstable();
+                v
+            };
+            assert_eq!(sorted(added), keys(&kb, &|k, _| !ka.contains_key(k)));
+            assert_eq!(sorted(removed), keys(&ka, &|k, _| !kb.contains_key(k)));
+            assert_eq!(
+                sorted(changed),
+                keys(&ka, &|k, l| kb.get(k).is_some_and(|m| *m != l))
+            );
+            assert!(moves > 10, "{rows:?} moved {moves} blocks");
+        }
+    }
+
+    #[test]
+    fn shuffled_without_changes_only_reorders() {
+        let mut cfg = Config::new(3, 1 << 20, Profile::Shuffled);
+        cfg.change_ratio = 0.0;
+        let (a, b, muts) = pair(&cfg);
+        assert_ne!(a, b);
+        let sorted = |d: &[u8]| {
+            let mut v = lines(d);
+            v.sort_unstable();
+            v.into_iter().map(<[u8]>::to_vec).collect::<Vec<_>>()
+        };
+        assert_eq!(sorted(&a), sorted(&b));
+        assert!(muts.iter().all(|m| m.kind == Kind::Move));
     }
 
     #[test]
