@@ -148,13 +148,22 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
         },
     };
     let gaps = bounds.chain.len() + 1;
-    let threads = rayon::current_num_threads();
-    let buf =
-        (budget.available(Half::Skeleton).0 / (8 * 2 * threads as u64)).clamp(MIN_BUF, MAX_BUF);
-    let bitmap = 8 * gaps.div_ceil(64) as u64;
-    let buffers = 2 * buf * threads as u64;
-    let mut work = budget.try_reserve(Half::Skeleton, Bytes(buffers + 2 * bitmap))?;
-    let verdicts = compare_gaps(&bounds, src_a, src_b, to_usize(buf), TASK_BYTES)?;
+    let bitmaps = 2 * 8 * gaps.div_ceil(64) as u64;
+    // As many lanes as there are threads and pairs of the smallest buffers
+    // that fit; the buffers then take an eighth of what is free, at most.
+    let free = budget.available(Half::Skeleton).0.saturating_sub(bitmaps);
+    let lanes = (free / (2 * MIN_BUF)).clamp(1, rayon::current_num_threads() as u64);
+    let buf = (free / (8 * 2 * lanes)).clamp(MIN_BUF, MAX_BUF);
+    let buffers = 2 * buf * lanes;
+    let mut work = budget.try_reserve(Half::Skeleton, Bytes(buffers + bitmaps))?;
+    let verdicts = compare_gaps(
+        &bounds,
+        src_a,
+        src_b,
+        to_usize(buf),
+        to_usize(lanes),
+        TASK_BYTES,
+    )?;
     work.shrink(Bytes(buffers));
 
     // A false anchor is demoted: the gap it closes is marked as differing
@@ -229,9 +238,9 @@ impl Verdicts {
 /// Compares every aligned gap, and reads the anchor line of every gap that
 /// differs, which is how those anchors get confirmed.
 ///
-/// Tasks own the gaps that start in consecutive `task_bytes` of A and run
-/// on the rayon pool, each with two `buf`-byte buffers; at most one task
-/// runs per thread, so the buffers stay within what the caller reserved.
+/// Tasks own the gaps that start in consecutive `task_bytes` of A. They are
+/// dealt round-robin to `lanes` jobs on the rayon pool, each job with two
+/// `buf`-byte buffers, so the buffers stay within what the caller reserved.
 /// Inside a task, consecutive aligned gaps stream as one range, so a stretch
 /// of equal gaps costs sequential reads of the buffer size, and an anchor
 /// line is read right after the bytes before it, while still cached.
@@ -240,6 +249,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
     buf: usize,
+    lanes: usize,
     task_bytes: u64,
 ) -> Result<Verdicts> {
     let gaps = bounds.chain.len() + 1;
@@ -264,47 +274,50 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
         t if t >= tasks => gaps,
         t => bounds.first_gap_from(t * task_bytes),
     };
-    (0..tasks).into_par_iter().try_for_each_init(
-        || (vec![0u8; buf], vec![0u8; buf]),
-        |(buf_a, buf_b), task| -> Result<()> {
-            let (lo, hi) = (first_gap(task), first_gap(task + 1));
-            let mut i = lo;
-            while i < hi {
-                if !bounds.aligned(i) {
-                    differs(i, buf_a, buf_b)?;
-                    i += 1;
-                    continue;
-                }
-                let mut j = i + 1;
-                while j < hi && bounds.aligned(j) {
-                    j += 1;
-                }
-                // Gaps i..j have the same shape on both sides, so one stream
-                // covers them and a mismatch position names its gap.
-                while i < j {
-                    let (start_a, start_b) = bounds.at(i);
-                    let len = bounds.at(j).0.offset - start_a.offset;
-                    let Some(at) = first_mismatch(
-                        src_a,
-                        src_b,
-                        start_a.offset,
-                        start_b.offset,
-                        len,
-                        buf_a,
-                        buf_b,
-                    )?
-                    else {
-                        break;
-                    };
-                    let bad = bounds.gap_at(i, j, start_a.offset + at);
-                    differs(bad, buf_a, buf_b)?;
-                    i = bad + 1;
-                }
-                i = j;
+    let run = |task: u64, buf_a: &mut [u8], buf_b: &mut [u8]| -> Result<()> {
+        let (lo, hi) = (first_gap(task), first_gap(task + 1));
+        let mut i = lo;
+        while i < hi {
+            if !bounds.aligned(i) {
+                differs(i, buf_a, buf_b)?;
+                i += 1;
+                continue;
             }
-            Ok(())
-        },
-    )?;
+            let mut j = i + 1;
+            while j < hi && bounds.aligned(j) {
+                j += 1;
+            }
+            // Gaps i..j have the same shape on both sides, so one stream
+            // covers them and a mismatch position names its gap.
+            while i < j {
+                let (start_a, start_b) = bounds.at(i);
+                let len = bounds.at(j).0.offset - start_a.offset;
+                let Some(at) = first_mismatch(
+                    src_a,
+                    src_b,
+                    start_a.offset,
+                    start_b.offset,
+                    len,
+                    buf_a,
+                    buf_b,
+                )?
+                else {
+                    break;
+                };
+                let bad = bounds.gap_at(i, j, start_a.offset + at);
+                differs(bad, buf_a, buf_b)?;
+                i = bad + 1;
+            }
+            i = j;
+        }
+        Ok(())
+    };
+    (0..lanes).into_par_iter().try_for_each(|lane| {
+        let (mut buf_a, mut buf_b) = (vec![0u8; buf], vec![0u8; buf]);
+        (lane as u64..tasks)
+            .step_by(lanes)
+            .try_for_each(|task| run(task, &mut buf_a, &mut buf_b))
+    })?;
     Ok(verdicts)
 }
 
@@ -569,7 +582,7 @@ mod tests {
         assert!(!false_anchors.is_empty());
         for task_bytes in [1, 3, 64, 100, 1 << 20] {
             for buf in [1, 5, 4096] {
-                let got = compare_gaps(&bounds, &a[..], &b[..], buf, task_bytes).unwrap();
+                let got = compare_gaps(&bounds, &a[..], &b[..], buf, 3, task_bytes).unwrap();
                 let bits: Vec<bool> = (0..gaps).map(|g| got.differs(g)).collect();
                 assert_eq!(bits, want, "task_bytes {task_bytes}, buf {buf}");
                 let false_got: Vec<usize> = (0..gaps).filter(|&g| got.false_anchor(g)).collect();

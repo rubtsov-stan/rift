@@ -3,7 +3,9 @@
 use proptest::prelude::*;
 use rift_core::scan::{ScanConfig, scan};
 use rift_core::skeleton::{Skeleton, build, build_pair};
-use rift_core::{Budget, Bytes, LineAccess, LineNo, MemLines, Segment, SegmentStatus, Source};
+use rift_core::{
+    Budget, Bytes, Half, LineAccess, LineNo, MemLines, Segment, SegmentStatus, Source,
+};
 
 fn config(level: u32) -> ScanConfig {
     ScanConfig {
@@ -250,4 +252,21 @@ fn a_false_anchor_is_demoted_and_never_equal() {
     assert_eq!(differs[0].a, LineNo(k - 1)..LineNo(k + 1));
     assert_eq!(differs[0].b, LineNo(k - 1)..LineNo(k + 1));
     assert_eq!(map.anchors(), 399);
+}
+
+/// Comparison buffers for every core do not fit, buffers for one do: the
+/// build runs on fewer threads instead of failing.
+#[test]
+fn comparison_threads_shrink_to_fit_the_budget() {
+    let a = lines(50);
+    let budget = Budget::new(Bytes::mib(4));
+    let mut sa = scan(&a[..], &budget, &config(0)).unwrap();
+    let mut sb = scan(&a[..], &budget, &config(0)).unwrap();
+    let free = budget.available(Half::Skeleton).0;
+    let _held = budget
+        .try_reserve(Half::Skeleton, Bytes(free - (24 << 10)))
+        .unwrap();
+    let map = build(&a[..], &a[..], &mut sa, &mut sb, &budget).unwrap();
+    assert!(map.is_identical());
+    assert_eq!(map.level(), 0, "fewer threads, not a coarser stratum");
 }
