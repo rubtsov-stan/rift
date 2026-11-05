@@ -308,7 +308,9 @@ for size in $sizes; do
     rm -rf "$pair"
     # shellcheck disable=SC2086
     if [ "$limiter" = systemd ]; then
-      systemd-run --user --scope -q -p MemoryMax=1G -p MemorySwapMax=0 $niceio \
+      # tmpfs pages count against the cgroup of the process that writes
+      # them, so the cap covers the pair rift-gen writes plus its own 1 GiB.
+      systemd-run --user --scope -q -p MemoryMax=$((2 * size + GIB)) -p MemorySwapMax=0 $niceio \
         "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || gen_failed $? "$raw/gen-$prof-$size.log"
     else
       $niceio "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || gen_failed $? "$raw/gen-$prof-$size.log"
