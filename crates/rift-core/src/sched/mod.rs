@@ -8,13 +8,14 @@
 //! refine each segment once; an evicted hunk is recomputed only when asked
 //! for again, so the cache must hold what a front end asks for in one frame.
 //!
-//! Memory: the whole scheduler lives in the Refine half of the [`Budget`].
-//! Half of that half is reserved once at construction as the cache block;
-//! it pays for the per-segment row table and for every cached hunk. The
-//! other half, `work_cap`, is what jobs reserve their working set from, so
-//! `sum(active jobs) + cache <= B/2` holds by construction and a job whose
-//! estimate exceeds `work_cap` can never run as is: it gets
-//! [`Job::too_large`] instead, with `work_cap` as its limit. Bookkeeping that
+//! Memory: the whole scheduler lives in the Refine half of the [`Budget`],
+//! in what is free of it at construction; a front end reserves its own
+//! buffers first. The row table is reserved once, and what is left is split
+//! in two equal parts: the cache, reserved at once, and `work_cap`, what
+//! jobs reserve their working set from. So `sum(active jobs) + cache <= B/2`
+//! holds by construction, a job whose estimate exceeds `work_cap` can never
+//! run as is (it gets [`Job::too_large`] instead, with `work_cap` as its
+//! limit), and the cache can hold any hunk a job is allowed to return. Bookkeeping that
 //! grows with threads and pending requests (`running`, `wanted`) is not
 //! charged. A hunk handed out through [`DiffView::hunk`] stays allocated
 //! while the front end holds the `Arc`, after its charge was released by
@@ -33,12 +34,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 
-use crate::budget::{Budget, Half, Reservation};
+use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::edit::{Edit, Hunk};
 use crate::error::Result;
 use crate::segment::{Segment, SegmentStatus};
 use crate::types::{Bytes, LineNo};
 use crate::view::{DiffView, HunkState, Progress};
+pub use cache::HUNK_OVERHEAD;
 use cache::{Cache, State};
 
 /// Segments on each side of the visible window that count as neighbours.
@@ -69,7 +71,8 @@ impl Cancel {
 /// that an evicted hunk recomputes to the same script.
 pub trait Job: Send + Sync + 'static {
     /// Peak working set of refining `segment`. Count at least
-    /// `size_of::<Edit>()` per line so the finished hunk also fits the cache.
+    /// `size_of::<Edit>()` per line plus [`HUNK_OVERHEAD`] so the finished
+    /// hunk also fits the cache.
     fn estimate(&self, segment: &Segment) -> Bytes;
 
     /// Refines `segment` within its estimate, checking `cancel` along the way.
@@ -77,7 +80,9 @@ pub trait Job: Send + Sync + 'static {
 
     /// Called instead of [`run`](Job::run) when the estimate exceeds `limit`,
     /// the most the scheduler can ever reserve for one job. The job resamples
-    /// within `limit` or returns an approximate script.
+    /// within `limit` or returns an approximate script; either way the hunk,
+    /// counted like the cache counts it, stays within `limit`. A whole
+    /// replacement, two edits, always does.
     fn too_large(&self, segment: &Segment, limit: Bytes, cancel: &Cancel) -> Hunk;
 }
 
@@ -127,18 +132,28 @@ impl<J: Job> Scheduler<J> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Budget`](crate::Error::Budget) when the Refine half
-    /// cannot hold the cache block, and [`Error::Io`](crate::Error::Io) when
-    /// a worker thread cannot be spawned.
+    /// Returns [`Error::Budget`](crate::Error::Budget) when the free part
+    /// of the Refine half cannot hold the row table plus a cache and a work
+    /// share of [`HUNK_OVERHEAD`] and two edits each, and
+    /// [`Error::Io`](crate::Error::Io) when a worker thread cannot be
+    /// spawned.
     pub fn new(job: J, segments: Vec<Segment>, budget: &Budget, threads: usize) -> Result<Self> {
-        let half = budget.capacity(Half::Refine);
-        let cache_block = Bytes(half.0 / 2);
-        let work_cap = Bytes(half.0 - cache_block.0);
-        let reservation = budget.try_reserve(Half::Refine, cache_block)?;
+        let free = budget.available(Half::Refine);
         let table = Cache::table_bytes(segments.len());
-        let cache_cap = Bytes(cache_block.0.saturating_sub(table.0));
+        let share = free.0.saturating_sub(table.0) / 2;
+        let least = HUNK_OVERHEAD.0 + 2 * size_of::<Edit>() as u64;
+        if share < least {
+            return Err(BudgetExceeded {
+                half: Half::Refine,
+                requested: Bytes(table.0 + 2 * least),
+                available: free,
+            }
+            .into());
+        }
+        let work_cap = Bytes(share);
+        let reservation = budget.try_reserve(Half::Refine, Bytes(table.0 + share))?;
         let equal = |i: usize| segments[i].status == SegmentStatus::Equal;
-        let cache = Cache::new(segments.len(), equal, cache_cap);
+        let cache = Cache::new(segments.len(), equal, Bytes(share));
         let total = segments
             .iter()
             .filter(|s| s.status != SegmentStatus::Equal)
@@ -365,11 +380,12 @@ impl Queue {
             return;
         }
         self.cache.mark_done(segment);
-        // A hunk larger than the whole cache is dropped and the
-        // segment stays Idle, so a front end that keeps asking recomputes it
-        // every time. Unreachable while estimates count size_of::<Edit>()
-        // per line, since work_cap == cache block.
-        self.cache.insert(segment, Arc::new(hunk));
+        // A hunk larger than the whole cache would be dropped and a waiter
+        // would recompute it forever. The cache is as large as work_cap and
+        // a job's hunk stays within its reservation, so this cannot happen
+        // while jobs keep to the estimate rule.
+        let kept = self.cache.insert(segment, Arc::new(hunk));
+        debug_assert!(kept, "hunk of segment {segment} exceeds the cache");
     }
 }
 

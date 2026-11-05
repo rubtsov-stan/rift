@@ -36,9 +36,13 @@ struct Row {
 
 const _: () = assert!(size_of::<Row>() == 24);
 
-/// Heap bytes a cached hunk holds: the `Arc` header, the struct, the edits.
+/// Heap bytes a cached hunk holds besides its edits: the `Arc` header and
+/// the struct.
+pub const HUNK_OVERHEAD: Bytes = Bytes((2 * size_of::<usize>() + size_of::<Hunk>()) as u64);
+
+/// Heap bytes a cached hunk holds: the overhead and the edits.
 pub(super) fn hunk_bytes(hunk: &Hunk) -> u64 {
-    (2 * size_of::<usize>() + size_of::<Hunk>() + hunk.edits.capacity() * size_of::<Edit>()) as u64
+    HUNK_OVERHEAD.0 + (hunk.edits.capacity() * size_of::<Edit>()) as u64
 }
 
 #[derive(Debug)]

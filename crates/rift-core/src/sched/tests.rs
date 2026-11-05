@@ -113,12 +113,12 @@ impl Job for Fake {
     }
 }
 
-/// A budget whose cache holds exactly `hunks` scripts of the fake job beyond
-/// the row table; the work cap is the same size as the cache block.
+/// A budget whose cache holds exactly `hunks` scripts of the fake job; the
+/// work cap is the same size as the cache.
 fn budget(n: usize, hunks: u64) -> Budget {
     let one = hunk_bytes(&script(&segments(1, |_| false)[0], false));
-    let cache_block = Cache::table_bytes(n).0 + hunks * one + one / 2;
-    Budget::new(Bytes(4 * cache_block))
+    let half = Cache::table_bytes(n).0 + 2 * (hunks * one + one / 2);
+    Budget::new(Bytes(2 * half))
 }
 
 fn wait_all<J: Job>(s: &Scheduler<J>) {
@@ -457,7 +457,7 @@ fn budget_is_never_exceeded_under_concurrency() {
         let mut rng = Rng(seed);
         let budget = budget(n, 6);
         let half = budget.capacity(Half::Refine);
-        let work_cap = Bytes(half.0 - half.0 / 2);
+        let work_cap = Bytes((half.0 - Cache::table_bytes(n).0) / 2);
         let estimates: Vec<u64> = (0..n)
             .map(|_| 1 + rng.below(usize::try_from(work_cap.0 * 5 / 4).unwrap()) as u64)
             .collect();
@@ -527,4 +527,52 @@ fn visible_segments_include_an_insert_at_the_top() {
     assert_eq!(vis(0..1), 0..2, "the insert at the top shows with line 0");
     assert_eq!(vis(0..10), 0..3);
     assert_eq!(vis(1..10), 1..3);
+}
+
+/// Runs `f` on its own thread and fails the test if it has not returned
+/// within a few seconds, so a hang shows up as a failure.
+fn finishes<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::thread::Result<T> {
+    let (done, finished) = channel();
+    let handle = std::thread::spawn(move || {
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let _ = done.send(());
+        out
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("did not finish: hang");
+    handle.join().expect("result is caught")
+}
+
+#[test]
+fn a_row_table_larger_than_the_cache_block_is_refused_not_spun_on() {
+    // 1000 rows of 24 bytes against a 4 KiB Refine half: a cache of size
+    // zero would refuse every hunk and wait_hunk would recompute forever.
+    let n = 1000;
+    let budget = Budget::new(Bytes(8 << 10));
+    match Scheduler::new(Fake::new(), segments(n, |_| false), &budget, 1) {
+        Err(crate::Error::Budget(_)) => {}
+        Err(e) => panic!("unexpected error {e}"),
+        Ok(s) => {
+            let s = Arc::new(s);
+            finishes(move || s.wait_hunk(n - 1)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn refine_bytes_held_before_construction_do_not_stall_the_workers() {
+    let n = 4;
+    let budget = budget(n, 4);
+    let half = budget.capacity(Half::Refine);
+    let _front_end = budget.try_reserve(Half::Refine, Bytes(half.0 / 2)).unwrap();
+    // Every estimate is as large as a job may get.
+    let job = Fake {
+        estimate: Box::new(|_| Bytes(u64::MAX / 2)),
+        ..Fake::new()
+    };
+    let s = Arc::new(Scheduler::new(job, segments(n, |_| false), &budget, 1).unwrap());
+    let t = Arc::clone(&s);
+    finishes(move || t.wait_hunk(2)).unwrap();
+    assert!(budget.used(Half::Refine) <= budget.capacity(Half::Refine));
 }
