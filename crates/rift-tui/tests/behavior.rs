@@ -110,7 +110,8 @@ fn paging_moves_by_a_screen_and_stops_at_the_ends() {
         app.handle_key(key(KeyCode::PageDown));
     }
     draw(&mut app, &mut term);
-    assert_eq!(last_visible(&m), 99..100);
+    // The last line stops at the bottom: the final 10 rows stay on screen.
+    assert_eq!(last_visible(&m), 90..100);
 }
 
 #[test]

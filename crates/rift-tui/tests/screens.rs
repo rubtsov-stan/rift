@@ -323,3 +323,31 @@ fn empty() {
         );
     });
 }
+
+#[test]
+fn paging_past_the_end_keeps_the_last_line_at_the_bottom() {
+    let m = Mock::build(&specs(), true);
+    with_app(&m, |app| {
+        // The first frame tells the app how tall the view is.
+        screen(app, W, H);
+        for _ in 0..5 {
+            app.handle_key(key(KeyCode::PageDown));
+        }
+        assert_eq!(
+            screen(app, W, H),
+            r"D ·············█····█···█·······························
+~ ····································█···█·············
+v ······················▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀····
+ +     5 │ line 0000004 was added here
+    7  6 │ line 0000006 the quick brown fox
+    8  7 │ line 0000007 the quick brown fox
+~-  9    │ line 0000008 was removed here
+~+     8 │ line 0000007 was added here
+~+     9 │ line 0000008 was added here
+   10 10 │ line 0000009 the quick brown fox
+   11 11 │ line 0000010 the quick brown fox
+ A 11  B 11  diff 1/2                       refined 2/2
+"
+        );
+    });
+}

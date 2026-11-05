@@ -20,7 +20,7 @@ pub enum Action {
 ///
 /// A row is one line of an Equal segment, one edit line of a refined hunk, or
 /// the single placeholder row of a pending hunk.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Pos {
     pub seg: usize,
     pub off: u64,
@@ -127,7 +127,7 @@ impl<'a> App<'a> {
             KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
             KeyCode::Char('n') => self.next_diff(),
             KeyCode::Char('p' | 'N') => self.prev_diff(),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_down(page),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.page_down(page),
             KeyCode::PageUp | KeyCode::Char('b') => self.scroll_up(page),
             KeyCode::Char('g' | ':') => self.mode = Mode::Goto(None),
             _ => {}
@@ -186,7 +186,33 @@ impl<'a> App<'a> {
         }
     }
 
-    pub(crate) fn scroll_down(&mut self, mut n: u64) {
+    /// Scrolls down but stops with the last row at the bottom of the view.
+    /// Never moves up: a jump to a difference near the end can sit below the
+    /// last full page.
+    fn page_down(&mut self, n: u64) {
+        let old = self.pos;
+        self.scroll_down(n);
+        let max = self.max_top();
+        if self.pos > max {
+            self.pos = old.max(max);
+        }
+    }
+
+    /// The highest top row that still fills the view down to the last row.
+    fn max_top(&mut self) -> Pos {
+        let Some(last) = self.view.segments().len().checked_sub(1) else {
+            return self.pos;
+        };
+        let saved = self.pos;
+        self.pos = Pos {
+            seg: last,
+            off: self.rows_of(last) - 1,
+        };
+        self.scroll_up(u64::from(self.rows.max(1) - 1));
+        std::mem::replace(&mut self.pos, saved)
+    }
+
+    fn scroll_down(&mut self, mut n: u64) {
         let last = self.view.segments().len().saturating_sub(1);
         loop {
             let rows = self.rows_of(self.pos.seg);
