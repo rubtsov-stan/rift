@@ -91,7 +91,7 @@ impl Painter<'_> {
             Kind::Insert => (self.files[1], run.b),
             _ => (self.files[0], run.a),
         };
-        let read = file.read_lines(LineNo(first)..LineNo(first + n), &mut self.scratch.lines);
+        let batch = file.read_lines(LineNo(first)..LineNo(first + n), &mut self.scratch.lines);
         let (mark, color) = match (run.kind, run.approx) {
             (Kind::Equal, _) => (' ', None),
             (kind, true) => (
@@ -122,14 +122,24 @@ impl Painter<'_> {
             pre.push_str(" │ ");
             let txt = &mut self.scratch.text;
             txt.clear();
-            match &read {
-                Ok(()) => sanitize(
-                    self.scratch.lines.line(usize::try_from(i).expect("small")),
-                    txt,
-                    room,
-                ),
+            // One bad line (too long for the reader) must not blank its
+            // neighbours: after a failed batch, ask for each line alone.
+            let single;
+            let (read, at) = if batch.is_ok() {
+                (&batch, usize::try_from(i).expect("small"))
+            } else {
+                let from = LineNo(first + i);
+                single = file.read_lines(from..from + 1, &mut self.scratch.lines);
+                (&single, 0)
+            };
+            let mut left = room;
+            match read {
+                Ok(()) => sanitize(self.scratch.lines.line(at), txt, &mut left),
                 Err(e) => {
-                    let _ = write!(txt, "<{e}>");
+                    let msg = &mut self.scratch.err;
+                    msg.clear();
+                    let _ = write!(msg, "<{e}>");
+                    push_clean(txt, msg, &mut left);
                 }
             }
             let y = self.row + u16::try_from(i).expect("rows fit the screen");
@@ -227,27 +237,62 @@ impl Painter<'_> {
     }
 }
 
-/// Appends at most `max` chars of `line` to `out`: no terminator, tabs as
-/// spaces, control bytes and invalid UTF-8 replaced. Reuses `out`.
-fn sanitize(line: &[u8], out: &mut String, max: usize) {
+/// Appends `line` to `out` while `left` columns remain: no terminator, tabs
+/// as a space, invalid UTF-8 as U+FFFD, everything else that could change
+/// the terminal or the reading order as a visible `\u{..}` escape.
+fn sanitize(line: &[u8], out: &mut String, left: &mut usize) {
     let line = line.strip_suffix(b"\n").unwrap_or(line);
     let line = line.strip_suffix(b"\r").unwrap_or(line);
-    let mut left = max;
     for chunk in line.utf8_chunks() {
-        for c in chunk.valid().chars() {
-            if left == 0 {
+        push_clean(out, chunk.valid(), left);
+        if !chunk.invalid().is_empty() && *left > 0 {
+            *left -= 1;
+            out.push('\u{FFFD}');
+        }
+    }
+}
+
+/// Characters that are control or invisible: they are drawn as escapes.
+fn is_hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{AD}'
+                | '\u{61C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+        )
+}
+
+/// Appends valid text, escaping hidden characters, while `left` columns
+/// remain. An escape that does not fit ends the text.
+fn push_clean(out: &mut String, text: &str, left: &mut usize) {
+    for c in text.chars() {
+        if c == '\t' {
+            if *left == 0 {
                 return;
             }
-            left -= 1;
-            out.push(match c {
-                '\t' => ' ',
-                c if c.is_control() => '·',
-                c => c,
-            });
-        }
-        if !chunk.invalid().is_empty() && left > 0 {
-            left -= 1;
-            out.push('\u{FFFD}');
+            *left -= 1;
+            out.push(' ');
+        } else if is_hidden(c) {
+            let digits = (32 - (c as u32).leading_zeros()).div_ceil(4).max(1) as usize;
+            let width = digits + 4;
+            if *left < width {
+                *left = 0;
+                return;
+            }
+            *left -= width;
+            let _ = write!(out, "\\u{{{:X}}}", c as u32);
+        } else {
+            if *left == 0 {
+                return;
+            }
+            *left -= 1;
+            out.push(c);
         }
     }
 }

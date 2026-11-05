@@ -7,7 +7,7 @@ use common::{Mock, Spec};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use rift_core::MemLines;
+use rift_core::{Error, LineAccess, LineBuf, LineNo, MemLines, Result};
 use rift_tui::{Action, App};
 
 const W: u16 = 56;
@@ -350,4 +350,99 @@ v ······················▀▀▀▀▀▀▀▀▀▀▀�
 "
         );
     });
+}
+
+/// Serves the given bytes for every line, or fails.
+struct Canned<'a> {
+    lines: Vec<&'a [u8]>,
+    fail: Option<&'static str>,
+    /// Longest line served whole, like a budgeted reader.
+    cap: usize,
+}
+
+impl LineAccess for Canned<'_> {
+    fn line_count(&self) -> u64 {
+        self.lines.len() as u64
+    }
+    fn read_lines(&self, range: std::ops::Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
+        buf.clear();
+        if let Some(msg) = self.fail {
+            return Err(std::io::Error::other(msg).into());
+        }
+        for i in range.start.0..range.end.0 {
+            let line = self.lines[usize::try_from(i).unwrap()];
+            if line.len() > self.cap {
+                return Err(Error::LineTooLong {
+                    line: LineNo(i),
+                    cap: rift_core::Bytes(self.cap as u64),
+                });
+            }
+            buf.push(line)?;
+        }
+        Ok(())
+    }
+    fn read_line_prefix(
+        &self,
+        line: LineNo,
+        max: rift_core::Bytes,
+        buf: &mut LineBuf,
+    ) -> Result<rift_core::Bytes> {
+        buf.clear();
+        let bytes = self.lines[usize::try_from(line.0).unwrap()];
+        buf.push(&bytes[..bytes.len().min(usize::try_from(max.0).unwrap())])?;
+        Ok(rift_core::Bytes(bytes.len() as u64))
+    }
+}
+
+fn show(lines: &Canned<'_>) -> String {
+    let m = Mock::build(&[Spec::Equal(lines.lines.len() as u64)], true);
+    let mut app = App::new(&m.view, lines, lines);
+    screen(&mut app, 70, 8)
+}
+
+#[test]
+fn file_text_is_shown_as_visible_escapes() {
+    let lines = Canned {
+        lines: vec![
+            "a\u{202E}b\n".as_bytes(),
+            "c\u{2066}d\u{200B}e\u{FEFF}\n".as_bytes(),
+            b"f\x1b[31mg\x07\n",
+        ],
+        fail: None,
+        cap: 1 << 20,
+    };
+    let s = show(&lines);
+    assert!(s.contains(r"a\u{202E}b"), "{s}");
+    assert!(s.contains(r"c\u{2066}d\u{200B}e\u{FEFF}"), "{s}");
+    assert!(s.contains(r"f\u{1B}[31mg\u{7}"), "{s}");
+    for raw in ['\u{202E}', '\u{2066}', '\u{200B}', '\u{FEFF}', '\x1b', '·'] {
+        assert!(!s.contains(raw), "{raw:?} drawn raw:\n{s}");
+    }
+}
+
+#[test]
+fn error_text_is_sanitized() {
+    let lines = Canned {
+        lines: vec![b"x\n"],
+        fail: Some("boom \u{202E}\x1b[31m"),
+        cap: 1,
+    };
+    let s = show(&lines);
+    assert!(s.contains(r"boom \u{202E}\u{1B}[31m"), "{s}");
+    assert!(!s.contains('\u{202E}') && !s.contains('\x1b'), "{s}");
+}
+
+#[test]
+fn a_line_over_the_budget_fails_alone() {
+    let huge = vec![b'x'; 1 << 20];
+    let lines = Canned {
+        lines: vec![b"before\n", &huge, b"after\n"],
+        fail: None,
+        cap: 64,
+    };
+    let s = show(&lines);
+    assert!(s.contains("before"), "{s}");
+    assert!(s.contains("after"), "{s}");
+    assert!(s.contains("exceeds buffer"), "{s}");
+    assert!(!s.contains("xxxxxxxx"), "{s}");
 }

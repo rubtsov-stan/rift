@@ -39,6 +39,7 @@ pub(crate) struct Scratch {
     pub lines: LineBuf,
     pub text: String,
     pub prefix: String,
+    pub err: String,
     pub status: String,
     pub minimap: Minimap,
 }
