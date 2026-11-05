@@ -235,9 +235,60 @@ impl<S: Source + ?Sized> LineAccess for IndexedLines<'_, S> {
             }
         }
     }
+
+    fn read_line_part(
+        &self,
+        line: LineNo,
+        from: Bytes,
+        max: Bytes,
+        buf: &mut LineBuf,
+    ) -> Result<bool> {
+        let mut scratch = self.scratch.lock().unwrap_or_else(PoisonError::into_inner);
+        let start = self.line_start(line, &mut scratch)?;
+        buf.clear();
+        buf.push(&[])?;
+        if start >= self.source.len().0 {
+            return ended(line.0, line + 1).map(|()| true);
+        }
+        self.line_part(start, from.0, max.0, &mut scratch, buf)
+    }
 }
 
 impl<S: Source + ?Sized> IndexedLines<'_, S> {
+    /// Reads up to `max` bytes of the line starting at file offset `start`,
+    /// from `from` bytes into it, into `buf` through `scratch`. True when
+    /// the piece ends the line: it holds the terminator, or the file ends.
+    fn line_part(
+        &self,
+        start: u64,
+        from: u64,
+        max: u64,
+        scratch: &mut [u8],
+        buf: &mut LineBuf,
+    ) -> Result<bool> {
+        let end = self.source.len().0;
+        let mut at = start + from;
+        let mut left = max;
+        while left > 0 {
+            let want = Bytes(left.min(scratch.len() as u64)).as_usize();
+            let n = read_retrying(self.source, &mut scratch[..want], ByteOffset(at))?;
+            if n == 0 {
+                return Ok(true);
+            }
+            let (part, done) = match memchr::memchr(b'\n', &scratch[..n]) {
+                Some(nl) => (nl + 1, true),
+                None => (n, false),
+            };
+            buf.extend_last(&scratch[..part])?;
+            if done {
+                return Ok(true);
+            }
+            at += part as u64;
+            left -= part as u64;
+        }
+        Ok(at >= end)
+    }
+
     /// Byte offset where `line` starts: from the checkpoint before it, scan
     /// forward through `scratch`, counting line ends without keeping bytes.
     fn line_start(&self, line: LineNo, scratch: &mut [u8]) -> Result<u64> {
@@ -398,6 +449,54 @@ mod tests {
             Bytes(5)
         );
         assert_eq!(buf.line(0), b"next\n");
+    }
+
+    #[test]
+    fn line_parts_match_memory_for_every_piece_size_and_scratch() {
+        let mut data = b"a\n\nbc\r\n".to_vec();
+        data.extend_from_slice(&[b'x'; 300]);
+        data.extend_from_slice(b"\nshort\n");
+        data.extend_from_slice(&[b'y'; 77]);
+        let mem = MemLines::new(&data);
+        let budget = Budget::new(Bytes::mib(1));
+        for interval in [1, 2, 100] {
+            let index = index_of(&data, interval);
+            for scratch in [1u64, 3, 64, 4096] {
+                let access =
+                    IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch))
+                        .unwrap();
+                for max in [1u64, 2, 7, 100, 1 << 20] {
+                    for i in 0..mem.line_count() {
+                        let mut got = Vec::new();
+                        let mut buf = LineBuf::new();
+                        let mut from = 0;
+                        loop {
+                            let done = access
+                                .read_line_part(LineNo(i), Bytes(from), Bytes(max), &mut buf)
+                                .unwrap();
+                            let piece = buf.line(0);
+                            assert!(piece.len() as u64 <= max);
+                            got.extend_from_slice(piece);
+                            from += piece.len() as u64;
+                            if done {
+                                break;
+                            }
+                            assert_eq!(piece.len() as u64, max, "short piece before the end");
+                        }
+                        assert_eq!(
+                            got,
+                            mem.line(i).unwrap(),
+                            "line {i} interval {interval} scratch {scratch} max {max}"
+                        );
+                    }
+                }
+                let mut buf = LineBuf::new();
+                assert!(matches!(
+                    access.read_line_part(LineNo(mem.line_count()), Bytes(0), Bytes(4), &mut buf),
+                    Err(Error::LineOutOfRange { .. })
+                ));
+            }
+        }
     }
 
     #[test]

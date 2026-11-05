@@ -312,6 +312,10 @@ impl LineAccess for Counted<'_> {
         self.prefix_reads.lock().unwrap().push(line.0);
         self.inner.read_line_prefix(line, max, buf)
     }
+
+    fn read_line_part(&self, l: LineNo, from: Bytes, max: Bytes, b: &mut LineBuf) -> Result<bool> {
+        self.inner.read_line_part(l, from, max, b)
+    }
 }
 
 #[test]
@@ -491,6 +495,10 @@ impl LineAccess for Flaky<'_> {
             return Err(std::io::Error::other("disk on fire").into());
         }
         self.inner.read_line_prefix(line, max, buf)
+    }
+
+    fn read_line_part(&self, l: LineNo, from: Bytes, max: Bytes, b: &mut LineBuf) -> Result<bool> {
+        self.inner.read_line_part(l, from, max, b)
     }
 }
 

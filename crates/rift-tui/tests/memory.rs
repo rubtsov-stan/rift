@@ -102,6 +102,10 @@ impl LineAccess for Text {
         Ok(Bytes(line.len() as u64))
     }
 
+    fn read_line_part(&self, _: LineNo, _: Bytes, _: Bytes, _: &mut LineBuf) -> Result<bool> {
+        unreachable!("the interface reads prefixes only")
+    }
+
     fn read_lines(&self, range: Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
         buf.clear();
         for _ in range.start.0..range.end.0 {
@@ -179,6 +183,10 @@ impl LineAccess for Long {
         buf.clear();
         buf.push(&[b'z'; 4096][..usize::try_from(max.0).unwrap().min(4096)])?;
         Ok(Bytes(100_000))
+    }
+
+    fn read_line_part(&self, _: LineNo, _: Bytes, _: Bytes, _: &mut LineBuf) -> Result<bool> {
+        unreachable!("the interface reads prefixes only")
     }
 }
 

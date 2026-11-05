@@ -143,6 +143,31 @@ pub trait LineAccess: Sync {
     /// `LineOutOfRange` if `line` is not below the line count, `Io` on a read
     /// failure.
     fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes>;
+
+    /// Replaces the contents of `buf` with one entry holding `max` bytes of
+    /// `line` starting `from` bytes into it, fewer only where the line ends,
+    /// and returns whether that piece ends the line.
+    ///
+    /// For lines too long for [`read_lines`](LineAccess::read_lines): the
+    /// unified writer and the refiner stream such a line in pieces of `max`
+    /// bytes, advancing `from` by each piece's length, so memory stays at
+    /// `max` plus the implementation's fixed buffers and the time at one
+    /// read of the line. `from` must not exceed the line's length.
+    ///
+    /// No default, for the same reason as
+    /// [`read_line_prefix`](LineAccess::read_line_prefix).
+    ///
+    /// # Errors
+    ///
+    /// `LineOutOfRange` if `line` is not below the line count, `Io` on a read
+    /// failure.
+    fn read_line_part(
+        &self,
+        line: LineNo,
+        from: Bytes,
+        max: Bytes,
+        buf: &mut LineBuf,
+    ) -> Result<bool>;
 }
 
 impl<L: LineAccess + ?Sized> LineAccess for &L {
@@ -156,6 +181,16 @@ impl<L: LineAccess + ?Sized> LineAccess for &L {
 
     fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
         (**self).read_line_prefix(line, max, buf)
+    }
+
+    fn read_line_part(
+        &self,
+        line: LineNo,
+        from: Bytes,
+        max: Bytes,
+        buf: &mut LineBuf,
+    ) -> Result<bool> {
+        (**self).read_line_part(line, from, max, buf)
     }
 }
 
@@ -233,6 +268,25 @@ impl LineAccess for MemLines<'_> {
         buf.push(&bytes[..keep])?;
         Ok(Bytes(bytes.len() as u64))
     }
+
+    fn read_line_part(
+        &self,
+        line: LineNo,
+        from: Bytes,
+        max: Bytes,
+        buf: &mut LineBuf,
+    ) -> Result<bool> {
+        let count = self.line_count();
+        let bytes = self
+            .line(line.0)
+            .ok_or(Error::LineOutOfRange { line, count })?;
+        let start = usize::try_from(from.0).map_or(bytes.len(), |f| f.min(bytes.len()));
+        let end = usize::try_from(max.0)
+            .map_or(bytes.len(), |m| start.saturating_add(m).min(bytes.len()));
+        buf.clear();
+        buf.push(&bytes[start..end])?;
+        Ok(end == bytes.len())
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +341,38 @@ mod tests {
         assert_eq!(buf.line(0), b"");
         assert!(matches!(
             m.read_line_prefix(LineNo(3), Bytes(1), &mut buf),
+            Err(Error::LineOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn line_parts_cover_the_line_once() {
+        let m = MemLines::new(b"abcdefg\nxy");
+        let mut buf = LineBuf::new();
+        let mut got = Vec::new();
+        let mut from = 0;
+        loop {
+            let done = m
+                .read_line_part(LineNo(0), Bytes(from), Bytes(3), &mut buf)
+                .unwrap();
+            got.extend_from_slice(buf.line(0));
+            from += buf.line(0).len() as u64;
+            if done {
+                break;
+            }
+        }
+        assert_eq!(got, b"abcdefg\n");
+        assert!(
+            m.read_line_part(LineNo(1), Bytes(0), Bytes(2), &mut buf)
+                .unwrap()
+        );
+        assert_eq!(buf.line(0), b"xy");
+        assert!(
+            !m.read_line_part(LineNo(1), Bytes(0), Bytes(1), &mut buf)
+                .unwrap()
+        );
+        assert!(matches!(
+            m.read_line_part(LineNo(2), Bytes(0), Bytes(1), &mut buf),
             Err(Error::LineOutOfRange { .. })
         ));
     }

@@ -381,6 +381,10 @@ impl LineAccess for Canned<'_> {
         buf.push(&bytes[..bytes.len().min(usize::try_from(max.0).unwrap())])?;
         Ok(Bytes(bytes.len() as u64))
     }
+
+    fn read_line_part(&self, _: LineNo, _: Bytes, _: Bytes, _: &mut LineBuf) -> Result<bool> {
+        unreachable!("the interface reads prefixes only")
+    }
 }
 
 fn show(lines: &Canned<'_>) -> String {

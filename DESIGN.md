@@ -212,8 +212,10 @@ only way the core sees bytes. Implemented for `[u8]` in the core and for
 **`LineAccess`, `LineBuf`, `MemLines`** (`lines`). `read_lines(range, buf)`
 fills a caller-owned `LineBuf` with the bytes of consecutive lines,
 terminators included, reusing its two vectors, so a loop over lines
-allocates nothing after the first call. `MemLines` indexes a byte slice for
-tests. A trailing unterminated line counts as a line; an empty input has
+allocates nothing after the first call. `read_line_part(line, from, max,
+buf)` returns `max` bytes of a line from byte `from`, so a line longer than
+any buffer can be written or compared in pieces. `MemLines` indexes a byte
+slice for tests. A trailing unterminated line counts as a line; an empty input has
 none.
 
 **`Budget`, `Half`, `Reservation`** (`budget`). The memory invariant as a
