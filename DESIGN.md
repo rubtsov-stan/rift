@@ -174,8 +174,12 @@ spike and may be revised against its results.
 - **Interactivity.** The difference map appears after two passes over the
   disk. The visible hunk is ready within 100 ms of a jump when its segment
   fits the budget.
-- **Performance.** `--summary` takes at most twice the time of a sequential
-  read of both files on the same machine.
+- **Performance.** `--summary` takes at most 2.2x the time of sequentially
+  reading both files on the same machine. Equal segments are byte-verified,
+  so the design reads both files twice: once to scan, once to compare the
+  stretches between anchors. 2x is its floor, not a reachable target.
+  Met: on a 10 GiB pair (Apple M1, seed 7) `--summary` takes 2.03x to
+  2.13x the time of `cat a b` over three alternating rounds.
 - **Honesty.** Approximate regions are marked in the terminal interface and
   in the final statistics.
 - **Packaging.** One binary for macOS and Linux, installed with one command;
