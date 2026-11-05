@@ -157,6 +157,30 @@ before the main work.
 | H2. Scanning is bound by the disk, not the CPU | scanner throughput against `cat file > /dev/null` on the same machine | profile, batch the hashing |
 | H3. Lazy refinement of the visible hunk fits in 100 ms | key-to-frame latency in the terminal interface | show a coarse hunk first, then refine |
 
+## MVP criteria
+
+The MVP is done when every item below is confirmed reproducibly by a
+script in the repository. The numbers are targets; they were set before the
+spike and may be revised against its results.
+
+- **Memory.** Two synthetic 50 GB files with 0.1% of lines changed: peak
+  heap stays at or below `--mem` (default 256 MiB), confirmed by the
+  allocator counter and by peak RSS.
+- **Correctness.** At least 10 000 proptest cases in which the edit script
+  applied to A yields exactly B, plus differential tests against
+  `git diff --no-index --patience` on a corpus of small files.
+- **Compatibility.** The unified diff output applies with `patch` without
+  errors, Approx regions included. Exit codes follow `diff`: 0, 1, 2.
+- **Interactivity.** The difference map appears after two passes over the
+  disk. The visible hunk is ready within 100 ms of a jump when its segment
+  fits the budget.
+- **Performance.** `--summary` takes at most twice the time of a sequential
+  read of both files on the same machine.
+- **Honesty.** Approximate regions are marked in the terminal interface and
+  in the final statistics.
+- **Packaging.** One binary for macOS and Linux, installed with one command;
+  a README with the design, the invariants and reproducible benchmarks.
+
 ## Crates
 
 The core (scanner, strata, skeleton, Myers, budget) is written in this
