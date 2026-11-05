@@ -74,10 +74,10 @@ differ, 2 on an error. A `--mem` below about 12 MiB is refused with a
 budget error.
 
 In the terminal view, `n` and `p` jump to the next and previous
-difference, space and `b` page down and up, `g` (or `:`) goes to a line
-of the first file, and `q` quits. A hunk still being refined shows as a
-pending row and fills in by itself; an approximate one is drawn in
-yellow and marked with `~`.
+difference, space and `b` page down and up, `g` or `:` goes to a line of
+the first file, and `q` quits. A hunk Rift is still refining shows as a
+pending row and fills in by itself. Approximate hunks are yellow and
+marked with `~`.
 
 ## What is guaranteed
 
