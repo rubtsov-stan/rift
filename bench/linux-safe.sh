@@ -297,6 +297,9 @@ core_runs() {
   run_one "$g" "$p" "$s" "rift --stats --mem 1G" all $((GIB + GIB / 2)) 1 count "$rift" --stats --mem 1G "$a" "$bb"
 }
 
+# The log lives in the scratch directory, which the exit trap removes.
+gen_failed() { rc=$1; tail -n 20 "$2" >&2; die "rift-gen failed (exit $rc)"; }
+
 small=${sizes%% *}
 pair=$scratch/pair
 for size in $sizes; do
@@ -306,9 +309,9 @@ for size in $sizes; do
     # shellcheck disable=SC2086
     if [ "$limiter" = systemd ]; then
       systemd-run --user --scope -q -p MemoryMax=1G -p MemorySwapMax=0 $niceio \
-        "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || die "rift-gen failed"
+        "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || gen_failed $? "$raw/gen-$prof-$size.log"
     else
-      $niceio "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || die "rift-gen failed"
+      $niceio "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || gen_failed $? "$raw/gen-$prof-$size.log"
     fi
     cp "$pair/manifest.tsv" "$raw/manifest-$prof-$size.tsv" 2>/dev/null || true
     core_runs generated "$prof" "$size" "$pair/a" "$pair/b"
