@@ -417,12 +417,14 @@ fn worker<J: Job>(shared: &Shared<J>) {
 }
 
 /// Indices of the segments that show lines of A in `range`. A segment with
-/// no A lines (a pure insert at A line `x`) counts with line `x - 1`.
+/// no A lines (a pure insert at A line `x`) counts with line `x - 1`, or
+/// with line 0 at the top of the file.
 fn visible_segments(segments: &[Segment], range: Range<LineNo>) -> Range<usize> {
     if range.is_empty() {
         return 0..0;
     }
-    let lo = segments.partition_point(|s| s.a.end <= range.start);
+    let lo =
+        segments.partition_point(|s| s.a.end.0.max(u64::from(s.a.is_empty())) <= range.start.0);
     let hi = segments.partition_point(|s| s.a.start.0 < range.end.0 + u64::from(s.a.is_empty()));
     lo..hi.max(lo)
 }

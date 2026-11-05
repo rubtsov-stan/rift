@@ -514,3 +514,17 @@ fn budget_is_never_exceeded_under_concurrency() {
         );
     }
 }
+
+#[test]
+fn visible_segments_include_an_insert_at_the_top() {
+    let seg = |a: Range<u64>, b: Range<u64>| Segment {
+        a: LineNo(a.start)..LineNo(a.end),
+        b: LineNo(b.start)..LineNo(b.end),
+        status: SegmentStatus::Differs,
+    };
+    let segs = vec![seg(0..0, 0..5), seg(0..10, 5..15), seg(10..10, 15..16)];
+    let vis = |r: Range<u64>| visible_segments(&segs, LineNo(r.start)..LineNo(r.end));
+    assert_eq!(vis(0..1), 0..2, "the insert at the top shows with line 0");
+    assert_eq!(vis(0..10), 0..3);
+    assert_eq!(vis(1..10), 1..3);
+}
