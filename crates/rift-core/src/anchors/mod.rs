@@ -1,6 +1,13 @@
-//! Anchor selection: line hashes that occur once in each file.
+//! Anchor selection: pairs of samples, one per file, whose lines should
+//! match.
 //!
-//! The samples of the file with fewer of them go into an open-addressing
+//! Candidates come from a [`CandidateSource`]. [`select`] is the one place
+//! that decides which sources run; today that is [`UniqueLines`] alone.
+//! A source sees only the samples and the budget, and returns pairs of
+//! sample indices, so the skeleton chains and confirms candidates the same
+//! way whichever source found them.
+//!
+//! [`UniqueLines`] keeps line hashes that occur once in each file. The samples of the file with fewer of them go into an open-addressing
 //! table keyed by the line hash; the other file only probes it, since a
 //! hash absent from the smaller side cannot be an anchor anyway. Each entry
 //! records the sample index on each side, or that the hash occurred more
@@ -72,17 +79,63 @@ impl Anchors {
     }
 }
 
-/// Selects the lines whose hash occurs exactly once among the samples of
-/// each file. `O(n_a + n_b)` expected time for the table and `O(m log m)`
-/// to order `m` candidates by A.
+/// Finds anchor candidates among the samples of two files.
+///
+/// An implementation returns [`Anchors`] whose pairs are ordered by `a`,
+/// strictly increasing in `a`, with no `b` used twice, and whose
+/// reservation, taken from [`Half::Skeleton`], covers the pairs it holds.
+/// A candidate is a hash match: the skeleton confirms the ones it keeps
+/// byte by byte, so a source never reads the files.
+pub trait CandidateSource {
+    /// Candidates among `samples_a` and `samples_b`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Budget`](crate::Error::Budget) when the skeleton half cannot
+    /// hold the source's working set; the caller thins the samples and
+    /// tries again.
+    fn select(
+        &self,
+        samples_a: &[Sample],
+        samples_b: &[Sample],
+        budget: &Budget,
+    ) -> Result<Anchors>;
+}
+
+/// Candidates from every source in use, as the skeleton and the resampler
+/// chain them. Today that is [`UniqueLines`] alone.
 ///
 /// # Errors
 ///
+/// As for the sources' [`CandidateSource::select`].
+pub fn select(samples_a: &[Sample], samples_b: &[Sample], budget: &Budget) -> Result<Anchors> {
+    UniqueLines.select(samples_a, samples_b, budget)
+}
+
+/// Lines whose hash occurs exactly once among the samples of each file.
+/// `O(n_a + n_b)` expected time for the table and `O(m log m)` to order
+/// `m` candidates by A.
+///
+/// [`CandidateSource::select`] fails with
 /// [`Error::Budget`](crate::Error::Budget) when the skeleton half cannot
 /// hold the table at its highest load plus the candidates, or when a side
 /// has more samples than a `u32` index can name; thinning the samples
 /// fixes both.
-pub fn select(samples_a: &[Sample], samples_b: &[Sample], budget: &Budget) -> Result<Anchors> {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UniqueLines;
+
+impl CandidateSource for UniqueLines {
+    fn select(
+        &self,
+        samples_a: &[Sample],
+        samples_b: &[Sample],
+        budget: &Budget,
+    ) -> Result<Anchors> {
+        unique_lines(samples_a, samples_b, budget)
+    }
+}
+
+fn unique_lines(samples_a: &[Sample], samples_b: &[Sample], budget: &Budget) -> Result<Anchors> {
     let swapped = samples_b.len() < samples_a.len();
     let (small, big) = if swapped {
         (samples_b, samples_a)
