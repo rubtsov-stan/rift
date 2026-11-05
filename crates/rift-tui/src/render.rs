@@ -78,6 +78,12 @@ impl Painter<'_> {
         self.info.vis.end = self.info.vis.end.max(lines.end);
     }
 
+    /// Inserted lines count with the A line they follow, `at - 1`; at the top
+    /// of the file they follow nothing, so the first line stands in.
+    fn show_insert(&mut self, at: u64) {
+        self.show(at.saturating_sub(1)..at.max(1));
+    }
+
     /// Draws as much of `run` as fits and returns the rows drawn.
     fn run(&mut self, buf: &mut Buffer, run: &Run) -> u64 {
         let n = run.len.min(u64::from(self.end - self.row));
@@ -165,7 +171,11 @@ impl Painter<'_> {
             self.width.into(),
             style,
         );
-        self.show(seg.a.start.0..seg.a.end.0);
+        if seg.a.is_empty() {
+            self.show_insert(seg.a.start.0);
+        } else {
+            self.show(seg.a.start.0..seg.a.end.0);
+        }
         self.row += 1;
         1
     }
@@ -209,7 +219,7 @@ impl Painter<'_> {
                 approx,
             };
             if kind == Kind::Insert {
-                self.show(cursor..cursor);
+                self.show_insert(cursor);
             }
             done += self.run(buf, &run);
         }
@@ -347,8 +357,9 @@ impl App<'_> {
         let mut info = painter.info;
         if info.vis.start == u64::MAX {
             info.vis = 0..0;
-        } else if info.vis.end <= info.vis.start && info.vis.start < len_a {
-            info.vis.end = info.vis.start + 1;
+        } else {
+            info.vis.end = info.vis.end.min(len_a);
+            info.vis.start = info.vis.start.min(info.vis.end);
         }
         info
     }

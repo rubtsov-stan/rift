@@ -185,7 +185,37 @@ fn inserted_lines_count_with_the_a_line_they_follow() {
     let mut term = Terminal::new(TestBackend::new(60, 3)).unwrap();
     chars(&mut app, "n");
     draw(&mut app, &mut term);
-    assert_eq!(last_visible(&m), 2..3);
+    assert_eq!(last_visible(&m), 1..2);
+}
+
+fn visible_for(specs: &[Spec], keys: &str) -> std::ops::Range<u64> {
+    let m = Mock::build(specs, true);
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 3)).unwrap();
+    chars(&mut app, keys);
+    draw(&mut app, &mut term);
+    last_visible(&m)
+}
+
+#[test]
+fn inserts_at_the_end_of_a_report_the_last_a_line() {
+    let ins = Spec::Diff {
+        del: 0,
+        mid: 0,
+        ins: 2,
+    };
+    assert_eq!(visible_for(&[Spec::Equal(2), ins], "n"), 1..2);
+}
+
+#[test]
+fn inserts_at_the_top_report_the_first_a_line() {
+    let ins = Spec::Diff {
+        del: 0,
+        mid: 0,
+        ins: 2,
+    };
+    assert_eq!(visible_for(&[ins, Spec::Equal(2)], ""), 0..1);
 }
 
 #[test]
