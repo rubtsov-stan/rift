@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Segment, SegmentStatus};
+use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Progress, Segment, SegmentStatus};
 
 use crate::app::{App, Mode, Pos, Scratch, rows_in};
 use crate::cache::LineCache;
@@ -330,8 +330,14 @@ impl App<'_> {
         if mini > 0 {
             self.draw_minimap(buf, Rect::new(area.x, area.y, area.width, mini), &info);
         }
-        self.draw_status(buf, Rect::new(area.x, area.bottom() - 1, area.width, 1));
-        self.drawn_progress = Some(self.view.progress());
+        // One reading feeds both the bar and the next redraw decision.
+        let progress = self.view.progress();
+        self.draw_status(
+            buf,
+            Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            progress,
+        );
+        self.drawn_progress = Some(progress);
         self.pending_shown = info.pending;
         let vis = LineNo(info.vis.start)..LineNo(info.vis.end);
         if self.reported.as_ref() != Some(&vis) {
@@ -456,7 +462,7 @@ impl App<'_> {
         }
     }
 
-    fn draw_status(&mut self, buf: &mut Buffer, area: Rect) {
+    fn draw_status(&mut self, buf: &mut Buffer, area: Rect, pr: Progress) {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         buf.set_style(area, style);
         let sc = &mut self.scratch;
@@ -491,7 +497,6 @@ impl App<'_> {
         }
         buf.set_stringn(area.x, area.y, &sc.status, area.width.into(), style);
 
-        let pr = self.view.progress();
         if pr.total == 0 {
             return;
         }

@@ -10,7 +10,7 @@ use common::{Mock, Spec};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use rift_core::{Bytes, LineAccess, LineBuf, LineNo, MemLines, Result};
+use rift_core::{Bytes, DiffView, LineAccess, LineBuf, LineNo, MemLines, Result};
 use rift_tui::{Action, App, run};
 
 fn key(c: KeyCode) -> KeyEvent {
@@ -358,4 +358,58 @@ fn a_huge_line_is_read_once_while_the_window_stays() {
     let mut wide = Terminal::new(TestBackend::new(140, 8)).unwrap();
     draw(&mut app, &mut wide);
     assert_eq!(reads_of_huge(&lines), 3);
+}
+
+/// Reports 1/3 on its first progress query and 3/3 afterwards, as if
+/// refinement finished between the status bar and the next tick.
+struct Racing<'a> {
+    inner: &'a common::MockView,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl DiffView for Racing<'_> {
+    fn len_a(&self) -> u64 {
+        self.inner.len_a()
+    }
+    fn len_b(&self) -> u64 {
+        self.inner.len_b()
+    }
+    fn segments(&self) -> &[rift_core::Segment] {
+        self.inner.segments()
+    }
+    fn hunk(&self, segment: usize) -> rift_core::HunkState {
+        self.inner.hunk(segment)
+    }
+    fn progress(&self) -> rift_core::Progress {
+        let first = self
+            .asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            == 0;
+        rift_core::Progress {
+            done: if first { 1 } else { 3 },
+            total: 3,
+        }
+    }
+    fn set_visible(&self, range: std::ops::Range<LineNo>) {
+        self.inner.set_visible(range);
+    }
+}
+
+#[test]
+fn a_bar_that_is_out_of_date_is_redrawn_on_the_next_tick() {
+    let m = mock();
+    let view = Racing {
+        inner: &m.view,
+        asked: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(70, 12)).unwrap();
+    draw(&mut app, &mut term);
+    let shown = format!("{:?}", term.backend().buffer());
+    assert!(shown.contains("refining 1/3"), "{shown}");
+    assert!(app.needs_redraw(), "the bar shows 1/3 but 3/3 is current");
+    draw(&mut app, &mut term);
+    assert!(format!("{:?}", term.backend().buffer()).contains("refined 3/3"));
+    assert!(!app.needs_redraw());
 }
