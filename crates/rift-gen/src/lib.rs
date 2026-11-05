@@ -8,6 +8,7 @@
 
 mod profile;
 mod rng;
+pub mod synthetic;
 
 use std::io::{self, Write};
 

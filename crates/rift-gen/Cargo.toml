@@ -14,3 +14,6 @@ anyhow.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rift-core = { path = "../rift-core", features = ["counting-alloc"] }
