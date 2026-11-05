@@ -440,3 +440,33 @@ fn paging_after_the_hunk_under_the_cursor_is_evicted_does_not_panic() {
     app.handle_key(key(KeyCode::PageUp));
     draw(&mut app, &mut term);
 }
+
+#[test]
+fn ctrl_and_alt_letters_do_not_trigger_plain_actions() {
+    let m = mock();
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    for mods in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        for c in ['q', 'n', 'p', 'b', 'g', ' '] {
+            let k = KeyEvent::new(KeyCode::Char(c), mods);
+            assert_eq!(app.handle_key(k), Action::Continue, "{mods:?}-{c}");
+        }
+    }
+    draw(&mut app, &mut term);
+    assert_eq!(last_visible(&m).start, 0, "nothing moved");
+    // Not in the go-to prompt either: a modified digit is no digit.
+    chars(&mut app, "g");
+    let ctrl_5 = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::CONTROL);
+    app.handle_key(ctrl_5);
+    chars(&mut app, "\n");
+    draw(&mut app, &mut term);
+    assert_eq!(last_visible(&m).start, 0);
+    // Shift is part of typing a capital.
+    let shift_n = KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+    chars(&mut app, "n");
+    app.handle_key(shift_n);
+    draw(&mut app, &mut term);
+    // Moved to the first difference, and Shift-N found nothing before it.
+    assert_eq!(last_visible(&m).start, 40);
+}

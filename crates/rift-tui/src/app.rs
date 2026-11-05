@@ -104,11 +104,18 @@ impl<'a> App<'a> {
     /// Applies one key press.
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         self.message = "";
+        let held = key.modifiers;
+        if key.code == KeyCode::Char('c') && held.contains(KeyModifiers::CONTROL) {
+            return Action::Quit;
+        }
+        // Ctrl-C is the only shortcut; Ctrl-N is not `n`.
+        if matches!(key.code, KeyCode::Char(_))
+            && held.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return Action::Continue;
+        }
         if let Mode::Goto(n) = self.mode {
             match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return Action::Quit;
-                }
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let d = u64::from(c as u8 - b'0');
                     self.mode =
@@ -127,9 +134,7 @@ impl<'a> App<'a> {
             return Action::Continue;
         }
         let page = u64::from(self.rows.max(2) - 1);
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('c') if ctrl => return Action::Quit,
             KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
             KeyCode::Char('n') => self.next_diff(),
             KeyCode::Char('p' | 'N') => self.prev_diff(),
