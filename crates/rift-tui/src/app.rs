@@ -205,11 +205,13 @@ impl<'a> App<'a> {
         let last = self.view.segments().len().saturating_sub(1);
         loop {
             let rows = self.rows_of(self.pos.seg);
-            if self.pos.off + n < rows {
+            // A hunk evicted since the last frame has shrunk to one row.
+            self.pos.off = self.pos.off.min(rows - 1);
+            if self.pos.off.saturating_add(n) < rows {
                 self.pos.off += n;
                 return;
             }
-            n -= rows - self.pos.off;
+            n = n.saturating_sub(rows - self.pos.off);
             if self.pos.seg >= last {
                 self.pos.off = rows - 1;
                 return;

@@ -166,6 +166,13 @@ impl Mock {
 }
 
 impl MockView {
+    /// Forgets a refined hunk, as the cache does on eviction.
+    pub fn evict(&self, segment: usize) {
+        let mut st = self.state.lock().unwrap();
+        st.shown[segment] = HunkState::Pending;
+        st.done -= 1;
+    }
+
     /// Starts recording which segments `hunk` is asked for.
     pub fn log_hunk_calls(&self) {
         *self.calls.lock().unwrap() = Some(Vec::new());

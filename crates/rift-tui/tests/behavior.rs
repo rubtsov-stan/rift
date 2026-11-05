@@ -413,3 +413,30 @@ fn a_bar_that_is_out_of_date_is_redrawn_on_the_next_tick() {
     assert!(format!("{:?}", term.backend().buffer()).contains("refined 3/3"));
     assert!(!app.needs_redraw());
 }
+
+#[test]
+fn paging_after_the_hunk_under_the_cursor_is_evicted_does_not_panic() {
+    let m = Mock::build(
+        &[
+            Spec::Equal(2),
+            Spec::Diff {
+                del: 8,
+                mid: 0,
+                ins: 8,
+            },
+            Spec::Equal(40),
+        ],
+        true,
+    );
+    let (a, b) = (MemLines::new(&m.a), MemLines::new(&m.b));
+    let mut app = App::new(&m.view, &a, &b);
+    let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    // Top row is deep inside the 16-row hunk.
+    chars(&mut app, "g8\n");
+    draw(&mut app, &mut term);
+    m.view.evict(1);
+    // The hunk is now one placeholder row; the key arrives before the frame.
+    app.handle_key(key(KeyCode::PageDown));
+    app.handle_key(key(KeyCode::PageUp));
+    draw(&mut app, &mut term);
+}
