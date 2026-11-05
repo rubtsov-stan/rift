@@ -15,11 +15,13 @@
 //! jobs reserve their working set from. So `sum(active jobs) + cache <= B/2`
 //! holds by construction, a job whose estimate exceeds `work_cap` can never
 //! run as is (it gets [`Job::too_large`] instead, with `work_cap` as its
-//! limit), and the cache can hold any hunk a job is allowed to return. Bookkeeping that
-//! grows with threads and pending requests (`running`, `wanted`) is not
-//! charged. A hunk handed out through [`DiffView::hunk`] stays allocated
-//! while the front end holds the `Arc`, after its charge was released by
-//! eviction; a front end keeps hunks only for the frame it draws.
+//! limit), and the cache can hold any hunk a job is allowed to return.
+//! Bookkeeping that grows with threads and pending requests (`running`,
+//! `wanted`) is not charged. A hunk handed out through [`DiffView::hunk`]
+//! or [`Scheduler::wait_hunk`] stays allocated while the front end holds
+//! the `Arc`, after its charge was released by eviction; the terminal
+//! interface keeps hunks only for the frame it draws, and the unified
+//! writer only while it copies one edit out.
 //!
 //! Threads: a small fixed pool of worker threads, not rayon, so a worker
 //! waiting for budget blocks nothing else.
