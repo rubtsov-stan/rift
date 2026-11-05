@@ -84,16 +84,17 @@ marked with `~`.
 - The output is a correct edit script: applied to the first file it
   gives exactly the second, byte for byte, line endings and a missing
   final newline included.
-- A line is shown as unchanged only after its bytes were compared;
-  hashes only propose matches.
-- The heap stays at or under `--mem`. Every allocation on the data path
-  is reserved from the budget first, files are read with `pread` into
-  fixed buffers (no `mmap`), and the tests and CI check the peak with a
+- Rift shows a line as unchanged only after comparing its bytes; hashes
+  only propose matches.
+- The heap stays at or under `--mem`. Rift reserves every allocation on
+  the data path from the budget first and reads files with `pread` into
+  fixed buffers, never `mmap`. The tests and CI check the peak with a
   counting allocator.
-- A region Rift could not refine within the budget is marked approximate
-  in every output: `approx` after the hunk header in the unified diff
-  (where `diff -p` puts a function name, so `patch` ignores it), yellow
-  rows in the terminal view, and a count with `--stats`.
+- Rift marks a region it could not refine within the budget as
+  approximate in every output. The unified diff puts `approx` after the
+  hunk header, where `diff -p` puts a function name and `patch` ignores
+  it. The terminal view draws the region in yellow, and `--stats` counts
+  it.
 
 ## What is not guaranteed
 
