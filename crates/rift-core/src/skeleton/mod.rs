@@ -285,8 +285,9 @@ impl Verdicts {
 /// dealt round-robin to `lanes` jobs on the rayon pool, each job with two
 /// `buf`-byte buffers, so the buffers stay within what the caller reserved.
 /// Inside a task, consecutive aligned gaps stream as one range, so a stretch
-/// of equal gaps costs sequential reads of the buffer size, and an anchor
-/// line is read right after the bytes before it, while still cached.
+/// of equal gaps costs sequential reads of the buffer size. The anchor
+/// lines of differing gaps are read where they come, cold, spread over
+/// the lanes.
 fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     bounds: &Bounds<'_>,
     src_a: &A,

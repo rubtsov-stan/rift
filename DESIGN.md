@@ -49,9 +49,10 @@ Anchors are verified lazily, during the gap comparison. Each anchor opens
 the gap that runs to the next one, so its line is the first line of that
 gap. When the gap is compared and found equal, the anchor's bytes were
 part of the comparison. When the gap differs, the anchor's two lines are
-read right after the bytes before them, while those pages are still
-cached. An anchor whose lines differ is demoted: the gap it closes and
-the gap it opens merge into one `Differs` segment. A false anchor can
+read on their own by the comparison task that owns the gap: one cold
+read per file, since a differing gap is not streamed. An anchor whose
+lines differ is demoted: the gap it closes and the gap it opens merge
+into one `Differs` segment. A false anchor can
 therefore only coarsen the map; no line is ever marked `Equal` without
 a byte comparison. Confirming every candidate before the subsequence is
 built costs one random read per candidate and file, which on a pair
@@ -59,8 +60,9 @@ larger than the page cache amounts to a third pass over the disk. On the
 1 GiB generated pair (seed 7, Apple M1, warm cache) it took 1.6 s of a
 2.3 s run, even on eight threads. Reading only the anchors of differing
 gaps, but after the comparison had finished, took the 10 GiB pair from
-13 s to between 23 and 27 s with a cold cache, because those reads no
-longer hit pages the comparison had just loaded.
+13 s to between 23 and 27 s with a cold cache, because those reads ran
+one after another on a single thread instead of inside the parallel
+comparison tasks.
 
 ### Memory invariant
 
