@@ -34,5 +34,5 @@ pub use lines::{LineAccess, LineBuf, MemLines};
 pub use sample::Sample;
 pub use segment::{Segment, SegmentStatus};
 pub use source::Source;
-pub use types::{ByteOffset, Bytes, LineHash, LineNo};
+pub use types::{ByteOffset, Bytes, LineHash, LineNo, ParseBytesError};
 pub use view::{DiffView, HunkState, Progress};

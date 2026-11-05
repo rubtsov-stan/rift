@@ -5,8 +5,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
+use rift_core::Bytes;
 use rift_gen::{Config, Kind, Profile};
 
 /// Generate a pair of files with a known mutation manifest.
@@ -16,9 +17,9 @@ struct Args {
     /// Seed for every random decision.
     #[arg(long, default_value_t = 1)]
     seed: u64,
-    /// Target size of A: bytes, or with a K, M or G suffix (binary units).
+    /// Target size of A: bytes, or with a K, M, G or T unit (binary, optional iB).
     #[arg(long, default_value = "1M")]
-    size: String,
+    size: Bytes,
     /// Line content.
     #[arg(long, value_enum, default_value_t = Profile::Sql)]
     profile: Profile,
@@ -33,23 +34,9 @@ struct Args {
     out: PathBuf,
 }
 
-fn parse_size(s: &str) -> anyhow::Result<u64> {
-    let (num, mult) = match s.as_bytes().last() {
-        Some(b'K' | b'k') => (&s[..s.len() - 1], 1u64 << 10),
-        Some(b'M' | b'm') => (&s[..s.len() - 1], 1 << 20),
-        Some(b'G' | b'g') => (&s[..s.len() - 1], 1 << 30),
-        _ => (s, 1),
-    };
-    let n: u64 = num.parse().with_context(|| format!("bad size {s:?}"))?;
-    match n.checked_mul(mult) {
-        Some(v) => Ok(v),
-        None => bail!("size {s:?} overflows"),
-    }
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let mut config = Config::new(args.seed, parse_size(&args.size)?, args.profile);
+    let mut config = Config::new(args.seed, args.size.0, args.profile);
     config.change_ratio = args.change_ratio;
     if let Some(kinds) = args.kinds {
         config.kinds = kinds;
