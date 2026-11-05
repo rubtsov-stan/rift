@@ -160,6 +160,11 @@ impl Refiner {
         };
         diff.solve(0..a.len(), 0..b.len(), 0);
         let approx = diff.approx;
+        debug_assert_eq!(
+            ws.bytes(),
+            estimate,
+            "workspace must not grow while solving"
+        );
 
         verify(
             &mut ws,
@@ -193,8 +198,8 @@ impl Workspace {
         let q = n.min(m);
         Ok(Self {
             scratch: filled(Bytes(scratch_words(s as u64)).as_usize(), 0)?,
-            pairs: filled(q, [0, 0])?,
-            anchors: filled(q, [0, 0])?,
+            pairs: empty(q)?,
+            anchors: empty(q)?,
             removed: filled(n, false)?,
             added: filled(m, false)?,
         })
@@ -211,9 +216,16 @@ impl Workspace {
 
 /// A vector of exactly `len` copies of `v`, without panicking on OOM.
 fn filled<T: Clone>(len: usize, v: T) -> Result<Vec<T>> {
-    let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(oom)?;
+    let mut out = empty(len)?;
     out.resize(len, v);
+    Ok(out)
+}
+
+/// An empty vector with room for exactly `cap` items, without panicking
+/// on OOM. The stacks start empty so a later `resize` never reallocates.
+fn empty<T>(cap: usize) -> Result<Vec<T>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(cap).map_err(oom)?;
     Ok(out)
 }
 
