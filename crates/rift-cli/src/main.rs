@@ -1,15 +1,16 @@
 //! Command-line entry point for Rift.
 #![deny(unsafe_code)]
 
+mod full;
 mod source;
 mod summary;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
-use rift_core::Source;
 use rift_core::alloc::CountingAlloc;
 
 use crate::source::FileSource;
@@ -32,6 +33,13 @@ struct Args {
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
     #[arg(long, default_value = "256M", value_parser = rift_core::Bytes::parse_budget)]
     mem: rift_core::Bytes,
+    /// Browse the diff in the terminal instead of printing it.
+    #[arg(short, long, conflicts_with = "summary")]
+    interactive: bool,
+    /// After a diff, print peak heap, time and approximate regions to
+    /// standard error.
+    #[arg(long)]
+    stats: bool,
 }
 
 fn run(args: &Args) -> anyhow::Result<ExitCode> {
@@ -40,8 +48,17 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
     if args.summary {
         return summary::run(&a, &b, args.mem);
     }
-    println!("{} bytes, {} bytes", a.len(), b.len());
-    Ok(ExitCode::SUCCESS)
+    let files = full::Files {
+        a: Arc::new(a),
+        b: Arc::new(b),
+        path_a: &args.a,
+        path_b: &args.b,
+    };
+    if args.interactive {
+        full::interactive(&files, args.mem)
+    } else {
+        full::unified(&files, args.mem, args.stats)
+    }
 }
 
 fn main() -> ExitCode {

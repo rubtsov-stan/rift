@@ -1523,8 +1523,10 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
+ "ratatui",
  "rift-core",
  "rift-gen",
+ "rift-tui",
  "tempfile",
 ]
 

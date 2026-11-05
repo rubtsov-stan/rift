@@ -73,7 +73,7 @@ pub fn run<A: Source, B: Source>(a: &A, b: &B, mem: Bytes) -> anyhow::Result<Exi
 
 /// A byte count in the largest binary unit that keeps it at least 1.
 #[allow(clippy::cast_precision_loss, reason = "display only")]
-fn human(b: Bytes) -> String {
+pub fn human(b: Bytes) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     let Some(unit) = (0..UNITS.len()).rev().find(|&u| b.0 >> (10 * (u + 1)) > 0) else {
         return format!("{} B", b.0);
