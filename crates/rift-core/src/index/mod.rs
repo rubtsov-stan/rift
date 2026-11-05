@@ -204,6 +204,67 @@ impl<S: Source + ?Sized> LineAccess for IndexedLines<'_, S> {
             }
         }
     }
+
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
+        let mut scratch = self.scratch.lock().unwrap_or_else(PoisonError::into_inner);
+        let start = self.line_start(line, &mut scratch)?;
+        buf.clear();
+        buf.push(&[])?;
+        // Bytes of the line seen so far; the first min(len, max) are kept.
+        let mut len = 0u64;
+        loop {
+            let n = read_retrying(self.source, &mut scratch, ByteOffset(start + len))?;
+            if n == 0 {
+                if len == 0 {
+                    return ended(line.0, line + 1).map(|()| Bytes(0));
+                }
+                return Ok(Bytes(len));
+            }
+            let (part, done) = match memchr::memchr(b'\n', &scratch[..n]) {
+                Some(nl) => (nl + 1, true),
+                None => (n, false),
+            };
+            let room = usize::try_from(max.0.saturating_sub(len)).unwrap_or(usize::MAX);
+            let keep = room.min(part);
+            if keep > 0 {
+                buf.extend_last(&scratch[..keep])?;
+            }
+            len += part as u64;
+            if done {
+                return Ok(Bytes(len));
+            }
+        }
+    }
+}
+
+impl<S: Source + ?Sized> IndexedLines<'_, S> {
+    /// Byte offset where `line` starts: from the checkpoint before it, scan
+    /// forward through `scratch`, counting line ends without keeping bytes.
+    fn line_start(&self, line: LineNo, scratch: &mut [u8]) -> Result<u64> {
+        let count = self.index.line_count();
+        let start = self
+            .index
+            .checkpoint_before(line)
+            .ok_or(Error::LineOutOfRange { line, count })?;
+        let mut at = start.line.0;
+        let mut pos = start.offset.0;
+        while at < line.0 {
+            let n = read_retrying(self.source, scratch, ByteOffset(pos))?;
+            if n == 0 {
+                return ended(at, line + 1).map(|()| pos);
+            }
+            let mut consumed = n;
+            for nl in memchr_iter(b'\n', &scratch[..n]) {
+                at += 1;
+                if at == line.0 {
+                    consumed = nl + 1;
+                    break;
+                }
+            }
+            pos += consumed as u64;
+        }
+        Ok(pos)
+    }
 }
 
 /// The source ended at `line`; fine only if the request was satisfied.
@@ -262,6 +323,81 @@ mod tests {
         let mut buf = LineBuf::new();
         access.read_lines(LineNo(range.start)..LineNo(range.end), &mut buf)?;
         Ok(buf.iter().map(<[u8]>::to_vec).collect())
+    }
+
+    #[test]
+    fn line_prefix_matches_memory_for_every_cap_and_scratch() {
+        let long = vec![b'x'; 5000];
+        let mut data = b"a\n\nbc\r\n".to_vec();
+        data.extend_from_slice(&long);
+        data.extend_from_slice(b"\nshort\n");
+        data.extend_from_slice(&long);
+        data.extend_from_slice(b"tail");
+        let mem = MemLines::new(&data);
+        let budget = Budget::new(Bytes::mib(1));
+        for interval in [1, 2, 3, 100] {
+            let index = index_of(&data, interval);
+            for scratch in [1u64, 3, 64, 4096, 20_000] {
+                let access =
+                    IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch))
+                        .unwrap();
+                for max in [0u64, 1, 2, 7, 4999, 5001, 1 << 20] {
+                    for i in 0..mem.line_count() {
+                        let (mut got, mut want) = (LineBuf::new(), LineBuf::new());
+                        let len = access
+                            .read_line_prefix(LineNo(i), Bytes(max), &mut got)
+                            .unwrap();
+                        let want_len = mem
+                            .read_line_prefix(LineNo(i), Bytes(max), &mut want)
+                            .unwrap();
+                        assert_eq!(
+                            len, want_len,
+                            "line {i} interval {interval} scratch {scratch} max {max}"
+                        );
+                        assert_eq!(
+                            got.line(0),
+                            want.line(0),
+                            "line {i} interval {interval} scratch {scratch} max {max}"
+                        );
+                    }
+                }
+                let mut buf = LineBuf::new();
+                assert!(matches!(
+                    access.read_line_prefix(LineNo(mem.line_count()), Bytes(4), &mut buf),
+                    Err(Error::LineOutOfRange { .. })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn line_prefix_holds_only_max_bytes_of_a_line_larger_than_the_budget() {
+        // A 4 MiB line under a 64 KiB budget: read_lines cannot return it,
+        // the prefix read can.
+        let mut data = vec![b'y'; 4 << 20];
+        data.push(b'\n');
+        data.extend_from_slice(b"next\n");
+        let index = index_of(&data, 1);
+        let budget = Budget::new(Bytes(128 << 10));
+        let access =
+            IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(16 << 10)).unwrap();
+        let mut buf = LineBuf::new();
+        assert!(matches!(
+            access.read_lines(LineNo(0)..LineNo(1), &mut buf),
+            Err(Error::LineTooLong { .. })
+        ));
+        let len = access
+            .read_line_prefix(LineNo(0), Bytes(200), &mut buf)
+            .unwrap();
+        assert_eq!(len, Bytes((4 << 20) + 1));
+        assert_eq!(buf.line(0), &data[..200]);
+        assert_eq!(
+            access
+                .read_line_prefix(LineNo(1), Bytes(200), &mut buf)
+                .unwrap(),
+            Bytes(5)
+        );
+        assert_eq!(buf.line(0), b"next\n");
     }
 
     #[test]

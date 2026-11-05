@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use crate::error::{Error, Result};
-use crate::types::LineNo;
+use crate::types::{Bytes, LineNo};
 
 /// A reusable buffer holding the bytes of consecutive lines.
 ///
@@ -65,6 +65,18 @@ impl LineBuf {
         Ok(())
     }
 
+    /// Appends `bytes` to the last line held. Used to assemble one line
+    /// from several reads.
+    pub(crate) fn extend_last(&mut self, bytes: &[u8]) -> Result<()> {
+        debug_assert!(!self.ends.is_empty(), "extend_last needs a line to extend");
+        self.bytes.try_reserve(bytes.len()).map_err(oom)?;
+        self.bytes.extend_from_slice(bytes);
+        if let Some(end) = self.ends.last_mut() {
+            *end = self.bytes.len();
+        }
+        Ok(())
+    }
+
     /// Number of lines held.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -111,6 +123,26 @@ pub trait LineAccess: Sync {
     /// `LineOutOfRange` if `range.end` exceeds the line count, `Io` on a read
     /// failure.
     fn read_lines(&self, range: Range<LineNo>, buf: &mut LineBuf) -> Result<()>;
+
+    /// Replaces the contents of `buf` with the first `max` bytes of `line`
+    /// (all of it if shorter) and returns the line's full length,
+    /// terminator included.
+    ///
+    /// For display: the terminal interface shows lines through this so a
+    /// redraw holds at most `max` bytes per line, however long the line is.
+    /// Memory stays at `max` plus the implementation's fixed buffers; the
+    /// full length is found by reading past the prefix without keeping it,
+    /// so the time is linear in the line's length.
+    ///
+    /// There is no default implementation: the only general one would read
+    /// the whole line through [`read_lines`](LineAccess::read_lines), which
+    /// breaks the memory bound.
+    ///
+    /// # Errors
+    ///
+    /// `LineOutOfRange` if `line` is not below the line count, `Io` on a read
+    /// failure.
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes>;
 }
 
 impl<L: LineAccess + ?Sized> LineAccess for &L {
@@ -120,6 +152,10 @@ impl<L: LineAccess + ?Sized> LineAccess for &L {
 
     fn read_lines(&self, range: Range<LineNo>, buf: &mut LineBuf) -> Result<()> {
         (**self).read_lines(range, buf)
+    }
+
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
+        (**self).read_line_prefix(line, max, buf)
     }
 }
 
@@ -186,6 +222,17 @@ impl LineAccess for MemLines<'_> {
             self.starts[first + 1..=last].iter().map(|&s| s - base),
         )
     }
+
+    fn read_line_prefix(&self, line: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
+        let count = self.line_count();
+        let bytes = self
+            .line(line.0)
+            .ok_or(Error::LineOutOfRange { line, count })?;
+        let keep = usize::try_from(max.0).map_or(bytes.len(), |m| m.min(bytes.len()));
+        buf.clear();
+        buf.push(&bytes[..keep])?;
+        Ok(Bytes(bytes.len() as u64))
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +263,32 @@ mod tests {
             [b"a\r\n".to_vec(), b"b\n".to_vec(), b"c".to_vec()]
         );
         assert_eq!(lines_of(b"\n\n"), [b"\n".to_vec(), b"\n".to_vec()]);
+    }
+
+    #[test]
+    fn prefix_is_capped_and_reports_the_full_length() {
+        let m = MemLines::new(b"short\nmuch longer line\r\nend");
+        let mut buf = LineBuf::new();
+        assert_eq!(
+            m.read_line_prefix(LineNo(1), Bytes(4), &mut buf).unwrap(),
+            Bytes(18)
+        );
+        assert_eq!(buf.len(), 1);
+        assert_eq!(buf.line(0), b"much");
+        assert_eq!(
+            m.read_line_prefix(LineNo(0), Bytes(100), &mut buf).unwrap(),
+            Bytes(6)
+        );
+        assert_eq!(buf.line(0), b"short\n");
+        assert_eq!(
+            m.read_line_prefix(LineNo(2), Bytes(0), &mut buf).unwrap(),
+            Bytes(3)
+        );
+        assert_eq!(buf.line(0), b"");
+        assert!(matches!(
+            m.read_line_prefix(LineNo(3), Bytes(1), &mut buf),
+            Err(Error::LineOutOfRange { .. })
+        ));
     }
 
     #[test]
