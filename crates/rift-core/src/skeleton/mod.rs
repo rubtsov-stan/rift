@@ -333,18 +333,20 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
                 j += 1;
             }
             // Gaps i..j have the same shape on both sides, so one stream
-            // covers them and a mismatch position names its gap.
+            // covers them and a mismatch position names its gap. A stream
+            // that restarts after a mismatch starts with a small read.
+            let mut first = u64::MAX;
             while i < j {
                 let (start_a, start_b) = bounds.at(i);
                 let len = bounds.at(j).0.offset - start_a.offset;
                 let Some(at) = first_mismatch(
                     src_a,
                     src_b,
-                    start_a.offset,
-                    start_b.offset,
+                    (start_a.offset, start_b.offset),
                     len,
                     buf_a,
                     buf_b,
+                    first,
                 )?
                 else {
                     break;
@@ -352,6 +354,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
                 let bad = bounds.gap_at(i, j, start_a.offset + at);
                 differs(bad, buf_a, buf_b)?;
                 i = bad + 1;
+                first = FIRST_READ as u64;
             }
             i = j;
         }
@@ -579,21 +582,27 @@ fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
 }
 
 /// Position of the first byte that differs between `len` bytes at
-/// `start_a` in A and at `start_b` in B, or `None` if all match. Streams
-/// through the two buffers.
+/// `starts.0` in A and at `starts.1` in B, or `None` if all match. Streams
+/// through the two buffers. Reads start at `first` bytes and double up to
+/// the buffer size: the caller restarts the stream after every mismatch,
+/// and when mismatches are close a full first read would copy mostly bytes
+/// the next restart reads again.
 fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
-    start_a: u64,
-    start_b: u64,
+    starts: (u64, u64),
     len: u64,
     buf_a: &mut [u8],
     buf_b: &mut [u8],
+    first: u64,
 ) -> Result<Option<u64>> {
-    let step = buf_a.len().min(buf_b.len()) as u64;
+    let (start_a, start_b) = starts;
+    let max = buf_a.len().min(buf_b.len()) as u64;
+    let mut step = first.clamp(1, max);
     let mut pos = 0;
     while pos < len {
         let n = Bytes((len - pos).min(step)).as_usize();
+        step = (2 * step).min(max);
         let (a, b) = (&mut buf_a[..n], &mut buf_b[..n]);
         src_a.read_exact_at(a, ByteOffset(start_a + pos))?;
         src_b.read_exact_at(b, ByteOffset(start_b + pos))?;
@@ -686,6 +695,59 @@ mod tests {
         longest_increasing(&mut anchors, &budget).unwrap();
         let chain: Vec<(u32, u32)> = anchors.pairs().iter().map(|p| (p.a, p.b)).collect();
         assert_eq!(chain, [(0, 1), (1, 2), (3, 4), (4, 5)]);
+    }
+
+    /// Counts the bytes read through it.
+    struct Counted<'a>(&'a [u8], AtomicU64);
+
+    impl Source for Counted<'_> {
+        fn len(&self) -> Bytes {
+            Source::len(self.0)
+        }
+
+        fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> std::io::Result<usize> {
+            let n = self.0.read_at(buf, offset)?;
+            self.1.fetch_add(n as u64, Ordering::Relaxed);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn close_mismatches_do_not_each_read_a_full_buffer() {
+        // 4 000 one-line gaps of 16 bytes, every tenth one changed: 400
+        // mismatches in 64 KB.
+        let a: Vec<u8> = (0..4000)
+            .flat_map(|i| format!("line {i:010}\n").into_bytes())
+            .collect();
+        let mut b = a.clone();
+        for g in (0..4000).step_by(10) {
+            b[g * 16 + 3] = b'#';
+        }
+        let (sa, sb) = (samples(&a), samples(&b));
+        let chain: Vec<Pair> = (1..4000).map(|i| Pair { a: i, b: i }).collect();
+        let end = |d: &[u8]| Pos {
+            line: 4000,
+            offset: d.len() as u64,
+        };
+        let bounds = Bounds {
+            chain: &chain,
+            samples_a: &sa,
+            samples_b: &sb,
+            end_a: end(&a),
+            end_b: end(&b),
+        };
+        let (ca, cb) = (
+            Counted(&a, AtomicU64::new(0)),
+            Counted(&b, AtomicU64::new(0)),
+        );
+        let verdicts = compare_gaps(&bounds, &ca, &cb, 1 << 20, 1, 1 << 20).unwrap();
+        assert_eq!((0..4000).filter(|&g| verdicts.differs(g)).count(), 400);
+        let read = ca.1.load(Ordering::Relaxed);
+        assert!(
+            read < 8 * a.len() as u64,
+            "read {read} bytes of A for a {} byte file",
+            a.len()
+        );
     }
 
     /// Splitting the comparison into tasks of any size gives the same
