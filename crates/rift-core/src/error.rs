@@ -34,6 +34,9 @@ pub enum Error {
     /// invariant.
     #[error("invalid edit script: {0}")]
     InvalidScript(String),
+    /// Key mode could not compare the files.
+    #[error(transparent)]
+    Keyed(#[from] crate::keyed::KeyError),
 }
 
 /// Result alias with the crate error.

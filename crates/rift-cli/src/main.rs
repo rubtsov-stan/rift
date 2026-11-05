@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 
 mod full;
+mod keyed;
 mod source;
 mod summary;
 
@@ -40,6 +41,11 @@ struct Args {
     /// standard error.
     #[arg(long)]
     stats: bool,
+    /// Compare records by key instead of lines, regardless of row order:
+    /// csv:N (column, from 1), csv:NAME (header), json:PATH (dotted field)
+    /// or copy:NAME (COPY column of a Postgres dump).
+    #[arg(long, value_name = "SPEC", conflicts_with_all = ["summary", "interactive"])]
+    key: Option<rift_core::keyed::KeySpec>,
 }
 
 /// `rift tui A B` is `rift -i A B`. With fewer than two more arguments
@@ -54,6 +60,9 @@ fn tui_alias(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
 fn run(args: &Args) -> anyhow::Result<ExitCode> {
     let a = FileSource::open(&args.a).with_context(|| format!("open {}", args.a.display()))?;
     let b = FileSource::open(&args.b).with_context(|| format!("open {}", args.b.display()))?;
+    if let Some(spec) = &args.key {
+        return keyed::run(&a, &b, spec, args.mem, args.stats);
+    }
     if args.summary {
         return summary::run(&a, &b, args.mem);
     }

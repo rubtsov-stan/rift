@@ -20,6 +20,7 @@ mod view;
 pub mod anchors;
 pub mod diff;
 pub mod index;
+pub mod keyed;
 pub mod refine;
 pub mod scan;
 pub mod sched;
