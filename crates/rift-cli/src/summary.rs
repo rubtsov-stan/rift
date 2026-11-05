@@ -62,11 +62,7 @@ pub fn run<A: Source, B: Source>(a: &A, b: &B, mem: Bytes) -> anyhow::Result<Exi
     if more > 0 {
         println!("  ... and {more} more");
     }
-    println!(
-        "peak heap {:.1} MiB of {:.1} MiB",
-        mib(alloc::peak()),
-        mib(mem)
-    );
+    println!("peak heap {} of {}", human(alloc::peak()), human(mem));
     println!("time {:.2} s", elapsed.as_secs_f64());
     Ok(if map.is_identical() {
         ExitCode::SUCCESS
@@ -75,7 +71,13 @@ pub fn run<A: Source, B: Source>(a: &A, b: &B, mem: Bytes) -> anyhow::Result<Exi
     })
 }
 
+/// A byte count in the largest binary unit that keeps it at least 1.
 #[allow(clippy::cast_precision_loss, reason = "display only")]
-fn mib(b: Bytes) -> f64 {
-    b.0 as f64 / f64::from(1 << 20)
+fn human(b: Bytes) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    let Some(unit) = (0..UNITS.len()).rev().find(|&u| b.0 >> (10 * (u + 1)) > 0) else {
+        return format!("{} B", b.0);
+    };
+    let value = b.0 as f64 / (1u64 << (10 * (unit + 1))) as f64;
+    format!("{value:.1} {}", UNITS[unit])
 }

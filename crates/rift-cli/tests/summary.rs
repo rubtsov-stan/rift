@@ -106,3 +106,13 @@ fn ranges_past_the_first_ten_are_counted() {
     );
     assert!(stdout.contains("approx   0 segments"), "{stdout}");
 }
+
+#[test]
+fn a_tiny_pair_under_a_huge_budget_reports_kibibytes_of_heap() {
+    let (_dir, a, b) = files(b"x\nsame\n", b"y\nsame\n");
+    let out = rift(&a, &b, "1T");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    let peak = stdout.lines().find(|l| l.starts_with("peak heap")).unwrap();
+    assert!(peak.contains(" KiB of 1.0 TiB"), "{peak}");
+}
