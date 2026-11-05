@@ -28,6 +28,11 @@ proptest = "1.12.0"
 tempfile = "3.27.0"
 divan = "0.1.21"
 imara-diff = "0.2.0"
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "macros", "transport-io"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "io-std", "sync", "time"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+schemars = "1.2.3"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
