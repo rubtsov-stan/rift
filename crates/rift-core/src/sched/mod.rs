@@ -77,8 +77,8 @@ pub trait Job: Send + Sync + 'static {
     /// hunk also fits the cache.
     fn estimate(&self, segment: &Segment) -> Bytes;
 
-    /// Refines `segment` within its estimate, which `reservation` holds,
-    /// checking `cancel` along the way.
+    /// Refines `segment`, number `index` in the map, within its estimate,
+    /// which `reservation` holds, checking `cancel` along the way.
     ///
     /// # Errors
     ///
@@ -86,6 +86,7 @@ pub trait Job: Send + Sync + 'static {
     /// goes to whoever waits for the hunk.
     fn run(
         &self,
+        index: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
@@ -102,6 +103,7 @@ pub trait Job: Send + Sync + 'static {
     /// As for [`run`](Job::run).
     fn too_large(
         &self,
+        index: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
@@ -481,9 +483,9 @@ fn worker<J: Job>(shared: &Shared<J>) {
         let mut reservation = reservation;
         let out = panic::catch_unwind(AssertUnwindSafe(|| {
             if too_large {
-                shared.job.too_large(segment, &mut reservation, &cancel)
+                shared.job.too_large(i, segment, &mut reservation, &cancel)
             } else {
-                shared.job.run(segment, &mut reservation, &cancel)
+                shared.job.run(i, segment, &mut reservation, &cancel)
             }
         }));
         drop(reservation);

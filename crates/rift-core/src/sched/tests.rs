@@ -101,13 +101,20 @@ impl Job for Fake {
         (self.estimate)(segment)
     }
 
-    fn run(&self, segment: &Segment, _: &mut Reservation, cancel: &Cancel) -> Result<Hunk> {
+    fn run(
+        &self,
+        _: usize,
+        segment: &Segment,
+        _: &mut Reservation,
+        cancel: &Cancel,
+    ) -> Result<Hunk> {
         self.enter(segment, cancel);
         Ok(script(segment, false))
     }
 
     fn too_large(
         &self,
+        _: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
@@ -444,18 +451,24 @@ impl Job for Watch {
         self.inner.estimate(segment)
     }
 
-    fn run(&self, segment: &Segment, r: &mut Reservation, cancel: &Cancel) -> Result<Hunk> {
+    fn run(&self, i: usize, segment: &Segment, r: &mut Reservation, c: &Cancel) -> Result<Hunk> {
         assert_eq!(r.bytes(), self.estimate(segment));
         self.check(self.estimate(segment));
-        self.inner.run(segment, r, cancel)
+        self.inner.run(i, segment, r, c)
     }
 
-    fn too_large(&self, segment: &Segment, r: &mut Reservation, cancel: &Cancel) -> Result<Hunk> {
+    fn too_large(
+        &self,
+        i: usize,
+        segment: &Segment,
+        r: &mut Reservation,
+        c: &Cancel,
+    ) -> Result<Hunk> {
         let limit = r.bytes();
         assert_eq!(limit, self.work_cap);
         assert!(self.estimate(segment) > limit);
         self.check(limit);
-        self.inner.too_large(segment, r, cancel)
+        self.inner.too_large(i, segment, r, c)
     }
 }
 
@@ -594,14 +607,26 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
         fn estimate(&self, _: &Segment) -> Bytes {
             Bytes(8)
         }
-        fn run(&self, segment: &Segment, _: &mut Reservation, _: &Cancel) -> Result<Hunk> {
+        fn run(
+            &self,
+            _: usize,
+            segment: &Segment,
+            _: &mut Reservation,
+            _: &Cancel,
+        ) -> Result<Hunk> {
             assert!(id(segment) != 1, "boom");
             if id(segment) == 2 {
                 return Err(io::Error::other("disk on fire").into());
             }
             Ok(script(segment, false))
         }
-        fn too_large(&self, s: &Segment, _: &mut Reservation, _: &Cancel) -> Result<Hunk> {
+        fn too_large(
+            &self,
+            _: usize,
+            s: &Segment,
+            _: &mut Reservation,
+            _: &Cancel,
+        ) -> Result<Hunk> {
             Ok(script(s, true))
         }
     }

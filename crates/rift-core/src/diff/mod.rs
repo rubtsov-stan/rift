@@ -348,6 +348,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> J
 
     fn run(
         &self,
+        _index: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
@@ -359,6 +360,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> J
 
     fn too_large(
         &self,
+        _index: usize,
         segment: &Segment,
         reservation: &mut Reservation,
         cancel: &Cancel,
