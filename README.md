@@ -6,6 +6,8 @@ gigabytes, under a heap limit you set on the command line (`--mem`,
 first file to get the second, and has a terminal view that lets you jump
 through the differences before the whole diff is done.
 
+![rift --summary on a 64 MiB pair, then the terminal view jumping between differences](docs/demo.gif)
+
 Use it on database dumps before and after a migration, CSV or NDJSON
 exports, generated fixtures and large golden files: inputs where `diff`
 or `git diff` run out of memory.
