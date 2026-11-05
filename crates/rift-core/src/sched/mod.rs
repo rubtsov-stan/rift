@@ -365,7 +365,7 @@ impl Queue {
             return;
         }
         self.cache.mark_done(segment);
-        // ponytail: a hunk larger than the whole cache is dropped and the
+        // A hunk larger than the whole cache is dropped and the
         // segment stays Idle, so a front end that keeps asking recomputes it
         // every time. Unreachable while estimates count size_of::<Edit>()
         // per line, since work_cap == cache block.
