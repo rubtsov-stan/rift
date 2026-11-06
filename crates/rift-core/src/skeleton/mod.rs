@@ -487,7 +487,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
 
 /// Reduces the candidates, ordered by A, to a longest chain increasing in
 /// B, and hands every candidate left out to `off_chain`, in A order.
-/// Patience sorting: `O(m log m)` time, 8 bytes per candidate.
+/// Patience sorting: `O(m log m)` time, 12 bytes per candidate.
 pub(crate) fn longest_increasing(
     anchors: &mut Anchors,
     budget: &Budget,
@@ -498,21 +498,32 @@ pub(crate) fn longest_increasing(
     if m == 0 {
         return Ok(());
     }
-    let work = budget.try_reserve(Half::Skeleton, Bytes(8 * m as u64))?;
-    // tails[k]: candidate ending the best chain of length k + 1 found so far.
+    let work = budget.try_reserve(Half::Skeleton, Bytes(12 * m as u64))?;
+    // tails[k]: candidate ending the best chain of length k + 1 found so
+    // far, and ends[k] its B sample, so the search reads one dense array.
     let mut tails: Vec<u32> = Vec::with_capacity(m);
+    let mut ends: Vec<u32> = Vec::with_capacity(m);
     let mut prev: Vec<u32> = Vec::with_capacity(m);
-    for i in 0..m {
-        let b = pairs[i].b;
-        let k = tails.partition_point(|&t| pairs[t as usize].b < b);
+    for (i, p) in pairs.iter().enumerate() {
+        let b = p.b;
+        // Most candidates extend the longest chain, as in files that
+        // mostly agree; they skip the search.
+        let k = if ends.last().is_none_or(|&e| e < b) {
+            ends.len()
+        } else {
+            ends.partition_point(|&e| e < b)
+        };
         prev.push(if k == 0 { NO_PREV } else { tails[k - 1] });
         let i = anchors::index(i);
         if k == tails.len() {
             tails.push(i);
+            ends.push(b);
         } else {
             tails[k] = i;
+            ends[k] = b;
         }
     }
+    drop(ends);
     // Walk the chain back into `tails`, then gather it to the front of
     // `pairs`: chain[j] sits at or after position j, so nothing is
     // overwritten before it is read.
