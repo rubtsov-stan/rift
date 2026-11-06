@@ -956,16 +956,22 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn small_budgets_take_more_passes_with_the_same_result() {
-        let (a, b) = pair(3000, 7);
+        // Miri: 300 rows and 8 and 12 KiB budgets (13 and 7 passes); the
+        // native run keeps 3000 rows and 24 and 64 KiB.
+        let (n, one_pass, budgets, floor) = if cfg!(miri) {
+            (300, 1 << 20, [8 << 10, 12 << 10], 5)
+        } else {
+            (3000, 1 << 22, [24 << 10, 64 << 10], 50)
+        };
+        let (a, b) = pair(n, 7);
         let want = expected(&a, &b);
-        assert!(want.len() > 50);
+        assert!(want.len() > floor);
         let (ca, cb) = (csv(&a), csv(&b));
-        let (one, report) = run(&ca, &cb, "csv:1", 1 << 22).unwrap();
+        let (one, report) = run(&ca, &cb, "csv:1", one_pass).unwrap();
         assert_eq!(report.passes, 1);
         assert_eq!(one, want);
-        for mem in [24 << 10, 64 << 10] {
+        for mem in budgets {
             let (many, report) = run(&ca, &cb, "csv:1", mem).unwrap();
             assert!(report.passes > 1, "{mem}: {report:?}");
             assert_eq!(report.changes, want.len() as u64);
