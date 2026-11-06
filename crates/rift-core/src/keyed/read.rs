@@ -29,13 +29,18 @@ use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineNo};
 
 /// Fewest bytes in a chunk; a smaller window is parsed by one thread.
-const MIN_CHUNK: usize = if cfg!(test) { 8 } else { 64 << 10 };
+// Fuzz builds cut small windows into chunks too, as the tests do.
+const MIN_CHUNK: usize = if cfg!(test) || cfg!(fuzzing) {
+    8
+} else {
+    64 << 10
+};
 /// Suspects one read counts at most.
-pub(crate) const SUSPECTS: usize = 64;
+pub const SUSPECTS: usize = 64;
 
 /// One record in a reader's window.
 #[derive(Debug)]
-pub(crate) struct Record<'b> {
+pub struct Record<'b> {
     /// The record without its line terminator.
     pub bytes: &'b [u8],
     /// Where the key is in `bytes`.
@@ -51,21 +56,27 @@ pub(crate) struct Record<'b> {
 /// A 63-bit key hash that is never 0, so a table slot can use 0 for empty
 /// and the top bit for its own flag. Keys of different `COPY` tables hash
 /// apart through the table's seed.
-pub(crate) fn key_hash(key: &[u8], seed: u64) -> u64 {
+#[must_use]
+pub fn key_hash(key: &[u8], seed: u64) -> u64 {
     (xxh3_64_with_seed(key, seed) >> 1) | 1
 }
 
 /// Names of the `COPY` tables seen so far, shared by both files so a name
 /// gets the same id in each.
 #[derive(Debug)]
-pub(crate) struct Tables {
+pub struct Tables {
     names: Vec<(Box<[u8]>, u64)>,
     /// Refine half: the names and the list.
     res: Reservation,
 }
 
 impl Tables {
-    pub(crate) fn new(budget: &Budget) -> Result<Self> {
+    /// No names yet; the list's memory comes from the refine half.
+    ///
+    /// # Errors
+    ///
+    /// A budget error from the reservation.
+    pub fn new(budget: &Budget) -> Result<Self> {
         Ok(Self {
             names: Vec::new(),
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
@@ -98,16 +109,20 @@ fn id(i: usize) -> u32 {
 /// hash shares the matched key's table slot fingerprint. A later read of
 /// its file counts it.
 #[derive(Debug)]
-pub(crate) struct Suspect {
+pub struct Suspect {
+    /// The file it was seen in.
     pub side: Side,
+    /// Its `COPY` table.
     pub table: u32,
+    /// Its key hash.
     pub hash: u64,
+    /// Its key.
     pub key: Vec<u8>,
 }
 
 /// Which records a read keeps, by key hash, and which suspects it counts.
 #[derive(Debug)]
-pub(crate) struct Filter<'p> {
+pub struct Filter<'p> {
     lo: u64,
     hi: u64,
     suspects: &'p [Suspect],
@@ -118,7 +133,8 @@ pub(crate) struct Filter<'p> {
 impl<'p> Filter<'p> {
     /// Keeps hashes in `lo..hi` and counts the first [`SUSPECTS`] of
     /// `suspects`.
-    pub(crate) fn new(lo: u64, hi: u64, suspects: &'p [Suspect]) -> Self {
+    #[must_use]
+    pub fn new(lo: u64, hi: u64, suspects: &'p [Suspect]) -> Self {
         let suspects = &suspects[..suspects.len().min(SUSPECTS)];
         let mask = suspects.iter().fold(0, |m, s| m | bit(s.hash));
         Self {
@@ -384,7 +400,7 @@ impl Ctx<'_> {
 
 /// Reads one file's records, front to back, any number of times.
 #[derive(Debug)]
-pub(crate) struct Reader<'s, S: ?Sized> {
+pub struct Reader<'s, S: ?Sized> {
     src: &'s S,
     side: Side,
     kind: Kind,
@@ -414,7 +430,11 @@ pub(crate) struct Reader<'s, S: ?Sized> {
 impl<'s, S: Source + ?Sized> Reader<'s, S> {
     /// A reader with a `buf`-byte window cut into at most `chunks`
     /// chunks, from the refine half.
-    pub(crate) fn new(
+    ///
+    /// # Errors
+    ///
+    /// A budget error if the refine half cannot hold the window.
+    pub fn new(
         src: &'s S,
         side: Side,
         spec: &KeySpec,
@@ -492,7 +512,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
 
     /// Goes back to the start of the file. A CSV column found in the
     /// header stays found.
-    pub(crate) fn rewind(&mut self) {
+    pub fn rewind(&mut self) {
         (self.start, self.end, self.pos, self.line) = (0, 0, 0, 0);
         self.eof = false;
         (self.blocks, self.records, self.valid) = (0, 0, 0);
@@ -529,17 +549,20 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
     }
 
     /// Bytes of the file read and split into records so far.
-    pub(crate) fn consumed(&self) -> u64 {
+    #[must_use]
+    pub fn consumed(&self) -> u64 {
         self.pos - (self.end - self.start) as u64
     }
 
     /// `COPY` blocks with the key column since the last rewind.
-    pub(crate) fn blocks(&self) -> u64 {
+    #[must_use]
+    pub fn blocks(&self) -> u64 {
         self.blocks
     }
 
     /// Records since the last rewind.
-    pub(crate) fn records(&self) -> u64 {
+    #[must_use]
+    pub fn records(&self) -> u64 {
         self.records
     }
 
@@ -550,7 +573,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
 
     /// The records the last [`advance`](Self::advance) kept, in file
     /// order.
-    pub(crate) fn kept(&self) -> impl Iterator<Item = Record<'_>> {
+    pub fn kept(&self) -> impl Iterator<Item = Record<'_>> {
         let buf = &self.buf;
         self.chunks[..self.valid].iter().flat_map(move |c| {
             c.recs.iter().map(move |r| {
@@ -574,7 +597,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
     ///
     /// A record without the key, a CSV header without the named column, a
     /// record that does not fit in the buffer, or a read error.
-    pub(crate) fn advance(&mut self, tables: &Mutex<Tables>, filter: &Filter<'_>) -> Result<bool> {
+    pub fn advance(&mut self, tables: &Mutex<Tables>, filter: &Filter<'_>) -> Result<bool> {
         self.valid = 0;
         if !self.eof {
             self.refill()?;

@@ -1,9 +1,9 @@
 //! The terminal interface's drawing of line text, which passes every line
 //! through its sanitizer, on a test backend.
 //!
-//! The sanitizer itself (`rift_tui::render::sanitize`) is private, so the
-//! target draws whole frames through `App::draw` and checks what lands in
-//! the cells: that is what a backend writes to the terminal.
+//! The target draws whole frames through `App::draw` and checks what
+//! lands in the cells, which is what a backend writes to the terminal;
+//! `sanitize` checks the sanitizer alone.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -131,7 +131,7 @@ fn key(byte: u8) -> KeyEvent {
 /// Characters that must never reach the terminal raw: C0 and C1 controls,
 /// bidirectional controls, zero-width and other default-ignorable code
 /// points, line and paragraph separators, interlinear annotation marks.
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(c as u32,
             0xAD | 0x34F | 0x61C | 0x115F..=0x1160 | 0x17B4..=0x17B5 | 0x180B..=0x180F

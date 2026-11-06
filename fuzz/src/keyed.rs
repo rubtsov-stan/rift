@@ -1,5 +1,5 @@
 //! Key mode: the CSV, NDJSON and `COPY` record readers, reached through
-//! `rift_core::keyed::compare` (the readers themselves are private).
+//! `rift_core::keyed::compare`; `keyed_reader` drives the readers alone.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Once;

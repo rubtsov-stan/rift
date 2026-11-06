@@ -23,6 +23,13 @@ rmcp = { version = "3.9.0", default-features = false, features = ["server", "cli
 tokio = { version = "1.54.1", features = ["rt", "io-util"] }
 serde_json = "1.0.154"
 
+# The library builds only with --cfg fuzzing, which rustdoc is not given.
+[lib]
+doctest = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
+
 [profile.release]
 debug = 1
 
@@ -78,6 +85,27 @@ bench = false
 [[bin]]
 name = "mcp_request"
 path = "fuzz_targets/mcp_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyed_reader"
+path = "fuzz_targets/keyed_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sanitize"
+path = "fuzz_targets/sanitize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_tools"
+path = "fuzz_targets/mcp_tools.rs"
 test = false
 doc = false
 bench = false

@@ -8,12 +8,15 @@ cargo-fuzz targets for rift, and `run-linux.sh`, which builds and runs all of th
 |---|---|---|
 | `scan` | `scan::scan` with chunk size, threads and caps from the input | line count, checkpoints and samples match a plain split; samples equal a one-chunk scan's; an index-backed reader returns every line whole, as a prefix and in pieces |
 | `keyed_csv`, `keyed_ndjson`, `keyed_copy` | `keyed::compare` with a CSV, NDJSON or `COPY` key | a small and a large budget report the same changes, or one fails for a budget reason only; a file against itself reports nothing; peak heap within the small budget |
+| `keyed_reader` | the record reader behind key mode, for every key kind, with window and chunk counts from the input | 1, 4 and 16 chunks read the same records; a rewound reader reads them again; keys hash as `key_hash` says and match an independent parse of simple CSV and NDJSON records; a filter on half the hash range keeps that half |
 | `pipeline` | `Diff::new` and `write_unified`, as `rift A B --mem M` runs them | the unified diff applied to A gives B; the verdict matches A == B; peak heap, from the counting allocator, within `--mem` |
 | `unified` | `unified::write_diff` on scripts built from the input | the output applied to A gives B; with one edit moved, the writer accepts the script exactly when `script::validate` does |
 | `tui_render` | `rift_tui::App::draw` on a test backend, after keys from the input | no cell holds a control, bidirectional, zero-width or other default-ignorable character |
+| `sanitize` | the interface's line sanitizer alone | no hidden character in the output; one column per character within the budget; a smaller budget gives a prefix; plain text passes unchanged |
 | `mcp_request` | JSON-RPC parsing, then a `rift-mcp` tool call through an in-process client | no panic or hang; answers keep the documented size bounds |
+| `mcp_tools` | session lookup, the three tools and `render::hunk_text`, without the protocol | as `mcp_request`, and a rendered hunk has one text line per shown line within the line limit |
 
-The checks live in `src/`, one module per target family; `fuzz_targets/` holds one line per target. Each module documents its input layout. The patch applier in `src/lib.rs` is the oracle for both diff targets.
+The checks live in `src/`, one module per target family; `fuzz_targets/` holds one line per target. The direct targets (`keyed_reader`, `sanitize`, `mcp_tools`) reach internals that rift-core, rift-tui and rift-mcp expose only under `--cfg fuzzing`, which cargo-fuzz sets; a normal build has no such items. Each module documents its input layout. The patch applier in `src/lib.rs` is the oracle for both diff targets.
 
 Seeds are in `corpus/<target>/`: hand-written edge cases, and pairs from `rift-gen --size 2K` with seed 7.
 
@@ -39,7 +42,7 @@ The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, la
 ### What it does to the machine
 
 - Writes one directory in tmpfs, `/dev/shm/rift-fuzz-<pid>` (or under `$XDG_RUNTIME_DIR`), after checking with `stat -f` that it is tmpfs with 3 GiB free. It refuses to run otherwise.
-- The clone, `CARGO_HOME`, `CARGO_TARGET_DIR`, the corpora, the targets' temporary files (`TMPDIR`) and the logs live there. After the build only the eight binaries stay; the target directory and crate cache are deleted.
+- The clone, `CARGO_HOME`, `CARGO_TARGET_DIR`, the corpora, the targets' temporary files (`TMPDIR`) and the logs live there. After the build only the eleven binaries stay; the target directory and crate cache are deleted.
 - A trap on exit, error, Ctrl-C and termination stops the running fuzzer and removes the directory.
 - The only disk write is the archive. `systemd-run` leaves a few lines in the journal.
 - No root, no `sudo`, no kernel settings. It never installs a toolchain (`RUSTUP_AUTO_INSTALL=0`).
@@ -53,10 +56,10 @@ The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, la
 2. Copy the input to `fuzz/regressions/<target>/<short-name>` and replay every seed and saved input through the checks, without libFuzzer, on any OS:
 
    ```sh
-   cargo test --manifest-path fuzz/Cargo.toml -- --test-threads=1
+   RUSTFLAGS="--cfg fuzzing" cargo test --manifest-path fuzz/Cargo.toml -- --test-threads=1
    ```
 
-   One thread, because the heap checks read process-wide counters. On macOS, if the libFuzzer build cannot find C++ headers, set `CXXFLAGS="-isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"`.
+   The flag exposes the internals the direct targets use. One thread, because the heap checks read process-wide counters. On macOS, if the libFuzzer build cannot find C++ headers, set `CXXFLAGS="-isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"`.
 3. On Linux, `cargo +nightly fuzz run <target> fuzz/regressions/<target>/<short-name>` reproduces it under the fuzzer's build.
 4. Write a focused test in the crate that owns the bug, fix it, and keep the input in `fuzz/regressions/` so the replay test covers it too.
 

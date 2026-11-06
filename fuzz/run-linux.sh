@@ -28,7 +28,7 @@ set -eu
 GIB=1073741824
 MIB=1048576
 schema=1
-targets="scan keyed_csv keyed_ndjson keyed_copy pipeline unified tui_render mcp_request"
+targets="scan keyed_csv keyed_ndjson keyed_copy keyed_reader pipeline unified tui_render sanitize mcp_request mcp_tools"
 # Per fuzzing process: libFuzzer's own RSS limit, and the cap around it.
 rss_mb=2048
 child=$((rss_mb * MIB + GIB / 2))

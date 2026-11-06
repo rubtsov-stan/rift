@@ -18,4 +18,12 @@ mod render;
 mod run;
 
 pub use app::{Action, App};
+
+/// Internals the fuzz targets drive directly; only in builds with
+/// `--cfg fuzzing`, so the public API is unchanged.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_access {
+    pub use crate::render::sanitize;
+}
 pub use run::{crossterm_events, run};

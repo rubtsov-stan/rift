@@ -15,7 +15,7 @@ use crate::{config, fields};
 
 const TOOLS: [&str; 3] = ["summary", "hunks_at", "next_difference"];
 
-static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
+pub(crate) static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -29,6 +29,15 @@ static DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     std::fs::create_dir_all(&dir).expect("scratch directory");
     dir
 });
+
+/// Writes A and B to the scratch files and returns their paths.
+pub(crate) fn write_pair(a: &[u8], b: &[u8]) -> (String, String) {
+    let (pa, pb) = (DIR.join("a"), DIR.join("b"));
+    std::fs::write(&pa, a).expect("write a");
+    std::fs::write(&pb, b).expect("write b");
+    let path = |p: PathBuf| p.to_string_lossy().into_owned();
+    (path(pa), path(pb))
+}
 
 /// Parses the first field as a client JSON-RPC message, then calls the
 /// tool the first byte picks with the first field as its arguments, on A
@@ -52,11 +61,9 @@ pub fn check(data: &[u8]) {
     let Ok(Value::Object(mut args)) = serde_json::from_slice::<Value>(args) else {
         return;
     };
-    let (pa, pb) = (DIR.join("a"), DIR.join("b"));
-    std::fs::write(&pa, a).expect("write a");
-    std::fs::write(&pb, b).expect("write b");
-    for (k, p) in [("a", &pa), ("b", &pb)] {
-        args.insert(k.into(), p.to_string_lossy().into_owned().into());
+    let (pa, pb) = write_pair(a, b);
+    for (k, p) in [("a", pa), ("b", pb)] {
+        args.insert(k.into(), p.into());
     }
     let tool = TOOLS[usize::from(cfg) % TOOLS.len()];
 

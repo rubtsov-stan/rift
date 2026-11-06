@@ -1,0 +1,3 @@
+COPY t (id) FROM stdin;
+1
+2

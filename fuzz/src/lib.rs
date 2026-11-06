@@ -8,12 +8,21 @@
 //! separated by the first NUL bytes (see [`fields`]). A NUL inside the last
 //! field is data.
 
+#[cfg(not(fuzzing))]
+compile_error!(
+    "the targets reach internals behind `--cfg fuzzing`: cargo fuzz sets it; \
+     for tests, RUSTFLAGS=\"--cfg fuzzing\" cargo test"
+);
+
 use rift_core::Bytes;
 use rift_core::alloc::{self, CountingAlloc};
 
 pub mod keyed;
+pub mod keyed_reader;
 pub mod mcp;
+pub mod mcp_tools;
 pub mod pipeline;
+pub mod sanitize;
 pub mod scan;
 pub mod tui;
 pub mod unified;
@@ -199,15 +208,18 @@ mod tests {
     #[test]
     fn corpora_and_regressions_pass() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let targets: [(&str, Check); 8] = [
+        let targets: [(&str, Check); 11] = [
             ("scan", scan::check),
             ("keyed_csv", keyed::csv),
             ("keyed_ndjson", keyed::ndjson),
             ("keyed_copy", keyed::copy),
+            ("keyed_reader", keyed_reader::check),
             ("pipeline", pipeline::check),
             ("unified", unified::check),
             ("tui_render", tui::check),
+            ("sanitize", sanitize::check),
             ("mcp_request", mcp::check),
+            ("mcp_tools", mcp_tools::check),
         ];
         for (name, check) in targets {
             for dir in ["corpus", "regressions"] {

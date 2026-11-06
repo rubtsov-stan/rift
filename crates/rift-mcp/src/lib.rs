@@ -232,6 +232,29 @@ fn differing(segs: &[Segment]) -> impl Iterator<Item = (usize, &Segment)> {
         .filter(|(_, s)| s.status != SegmentStatus::Equal)
 }
 
+/// Entry points the fuzz targets drive without a client: session lookup,
+/// the tools and the session's diff. Only in builds with `--cfg fuzzing`,
+/// so the public API is unchanged.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+impl Server {
+    pub fn fuzz_session(&self, p: &Pair) -> Result<Arc<Session>, String> {
+        self.session(p)
+    }
+
+    pub async fn fuzz_summary(&self, p: Pair) -> Result<Summary, String> {
+        self.summary(Parameters(p)).await.map(|j| j.0)
+    }
+
+    pub async fn fuzz_hunks_at(&self, a: HunksAt) -> Result<HunkAnswer, String> {
+        self.hunks_at(Parameters(a)).await.map(|j| j.0)
+    }
+
+    pub async fn fuzz_next_difference(&self, a: NextDifference) -> Result<Next, String> {
+        self.next_difference(Parameters(a)).await.map(|j| j.0)
+    }
+}
+
 #[tool_router]
 impl Server {
     /// Sizes of the two files, how many segments are equal, differ or are

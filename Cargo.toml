@@ -39,6 +39,7 @@ schemars = "1.2.3"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"
 unused_qualifications = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

@@ -274,7 +274,7 @@ impl Painter<'_> {
 /// Appends `line` to `out` while `left` columns remain: no terminator, tabs
 /// as a space, invalid UTF-8 as U+FFFD, everything else that could change
 /// the terminal or the reading order as a visible `\u{..}` escape.
-fn sanitize(line: &[u8], cut: bool, out: &mut String, left: &mut usize) {
+pub fn sanitize(line: &[u8], cut: bool, out: &mut String, left: &mut usize) {
     let line = line.strip_suffix(b"\n").unwrap_or(line);
     let line = line.strip_suffix(b"\r").unwrap_or(line);
     let mut chunks = line.utf8_chunks().peekable();

@@ -9,6 +9,14 @@ mod read;
 
 pub use pass::{Report, compare};
 
+/// Internals the fuzz targets drive directly; only in builds with
+/// `--cfg fuzzing`, so the public API is unchanged.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzz_access {
+    pub use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, key_hash};
+}
+
 use std::fmt;
 use std::str::FromStr;
 

@@ -238,6 +238,14 @@ impl Sessions {
     }
 }
 
+#[cfg(fuzzing)]
+#[doc(hidden)]
+impl Session {
+    pub fn fuzz_diff(&self) -> &Diff<FileSource, FileSource> {
+        &self.diff
+    }
+}
+
 impl Session {
     /// Bytes reserved from both halves of the session's budget.
     pub(crate) fn reserved(&self) -> Bytes {
