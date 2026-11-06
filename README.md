@@ -147,6 +147,46 @@ changes sorted by line. A 1 GiB CSV pair takes two passes at the default
   against the process.
 - Windows is not supported.
 
+## MCP server
+
+`rift-mcp` serves a diff to an MCP client over standard input and output,
+so the client reads a few kilobytes about two huge files instead of the
+files. It is not part of the `rift` binary yet; build it from the
+repository:
+
+```sh
+cargo build --release -p rift-mcp    # target/release/rift-mcp
+```
+
+Add it to the client's configuration:
+
+```json
+{
+  "mcpServers": {
+    "rift": { "command": "/path/to/rift-mcp" }
+  }
+}
+```
+
+Three tools, all taking the two paths `a` and `b` and an optional `mem`
+(`64M` by default, at most `256M`):
+
+- `summary`: line and byte counts, segments by status, the first 20
+  differing ranges, and the memory the diff holds.
+- `hunks_at(line, context?, max_lines?)`: the change in or next to a
+  line of A, as unified diff text. Defaults are 3 lines of context and
+  100 lines; the limits are 20 and 500. Text is also capped at 64 KiB
+  and each line at 256 bytes.
+- `next_difference(after_line)`: the first differing range that starts
+  after a line of A. Pass a returned `a.start` to step forward.
+
+The server opens regular files read-only. It refuses symbolic links,
+directories, devices and pipes. It keeps the diff of each pair of files
+between calls, so only the first call scans them. At most 4 diffs are
+alive and their `mem` adds up to at most 512 MiB; a new pair evicts the
+least recently used diff that no call is using, and a diff idle for 5
+minutes is dropped. A changed file is a new pair.
+
 ## Benchmarks
 
 Wall time and peak memory of Rift, `diff` and `git diff --no-index` on

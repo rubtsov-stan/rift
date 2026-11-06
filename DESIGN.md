@@ -411,7 +411,8 @@ them ordered by A, and its default returns none. A moved block annotates
 the diff and never changes the edit script.
 
 **`rift-mcp`**. A crate with an MCP server on standard input and output,
-built on `rmcp`. It answers `initialize` and has no tools yet. The
+built on `rmcp`. It answers `initialize` and serves the tools described
+under "MCP server". The
 workspace manifest already lists what the server needs: `rmcp`, `tokio`,
 `serde`, `serde_json` and `schemars`. `rift-core` gains no dependency.
 
@@ -513,12 +514,19 @@ stays byte-identical.
 ### MCP server
 
 `rift-mcp` lets an MCP client explore the diff of two large files through
-small answers instead of megabytes of text: `summary`, `hunks_at(line)`
-and `next_difference(after_line)`. It keeps the diff of each pair of
-files alive between calls, so it builds the skeleton once, and drops it
-after an idle timeout. It opens regular files only, read-only, and every response
-has a size bound. It reaches the core through `DiffView` and the contracts
-above.
+small answers instead of megabytes of text: `summary`, `hunks_at` and
+`next_difference`. Each pair of files has one `Diff` that stays alive
+between calls, so the skeleton is built once. At most four diffs are
+alive and their `--mem` budgets sum to at most 512 MiB, which bounds the
+server's accounted heap. A new pair evicts idle diffs first, then the
+least recently used one that no call holds, and fails with "busy" when
+every diff is in use. A diff idle for five minutes is dropped. The server
+opens regular files only, read-only, and refuses symbolic links in the
+last path component. Every answer has a size bound: 20 ranges in a
+summary, and at most 500 lines, 64 KiB and 256 bytes per line of diff
+text. It reads a segment's script through `DiffView` and renders it
+itself; the ranges it reports come from segments, so they can be a few
+lines wider than the change.
 
 ### Performance and packaging
 
