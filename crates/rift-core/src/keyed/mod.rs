@@ -1,6 +1,13 @@
 //! Key mode: records compared by a key column, independent of row order.
 //!
-//! Only the types are here so far; the comparison itself is not written.
+//! [`compare`] reads both files in passes, each over one range of key
+//! hashes, and reports every key added, removed or changed. See `pass` for
+//! the method and `read` for what counts as a record.
+
+mod pass;
+mod read;
+
+pub use pass::{Report, compare};
 
 use std::fmt;
 use std::str::FromStr;
@@ -101,6 +108,24 @@ pub struct KeyedChange {
     pub b: Option<LineNo>,
 }
 
+/// One of the two files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Side {
+    /// The first file.
+    A,
+    /// The second file.
+    B,
+}
+
+impl fmt::Display for Side {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Side::A => "a",
+            Side::B => "b",
+        })
+    }
+}
+
 /// Why key mode could not compare two files.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -108,6 +133,26 @@ pub enum KeyError {
     /// A key occurs more than once in one file.
     #[error("duplicate keys: {}", Keys(.0))]
     Duplicate(Vec<Vec<u8>>),
+    /// A record has no value for the key.
+    #[error("line {} of {side} has no key", line.0 + 1)]
+    NoKey {
+        /// The file.
+        side: Side,
+        /// The record's first line.
+        line: LineNo,
+    },
+    /// The CSV header, or every `COPY` header, lacks the key column.
+    #[error("{side} has no column {name:?}")]
+    NoColumn {
+        /// The file.
+        side: Side,
+        /// The column asked for.
+        name: String,
+    },
+    /// So many keys shared a hash with a matched key that duplicates could
+    /// not be told apart from collisions.
+    #[error("too many key hash collisions to check for duplicate keys")]
+    Collisions,
 }
 
 /// The first few keys of a list, for an error message.
