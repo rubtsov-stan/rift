@@ -10,9 +10,9 @@ bench/linux-safe.sh               # 10 s to cancel, then the run; 20 to 60 minut
 bench/linux-safe.sh --yes         # no wait
 ```
 
-Options: `--ref REF` (tag, branch or commit; default `v0.1.0`), `--repo URL`, `--read-only-pair DIR`.
+Options: `--ref REF` (tag, branch or commit; default `v0.1.0`), `--repo URL`, `--read-only-pair DIR`, `--suite standard|le|all` (default `standard`; `le` runs only the low-entropy runs below, `all` runs both).
 
-The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 2) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
+The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 3) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
 Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to clone and fetch crates, GNU `time` at `/usr/bin/time`, `awk`, `tar`. `systemd-run --user`, `ionice`, `taskset`, `lscpu` and `systemd-detect-virt` are used when present. No Python.
 
@@ -34,6 +34,20 @@ Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to c
 Seed 7, profiles `sql` and `csv`, changes at 0.1% (`rift-gen --change-ratio 0.001`, also the default). For each profile and size, three repetitions of `cat a b | wc -c` (through a pipe, so the bytes are really read; output bytes confirm the size), `rift --summary --mem 256M` and `rift --stats --mem 256M` (the diff goes through `wc -c`), and one run each of `rift --stats` at `--mem 64M` and `--mem 1G`. On the 256 MiB pair, three repetitions of `rift --stats --mem 256M`, `diff` and `git diff --no-index`. On the 1 GiB pair also `diff` and `git diff --no-index` (three repetitions) and thread scaling: `rift --summary` on 1, 2, 4 and all CPUs.
 
 Per run: wall, user and sys time, max RSS, exit code, rift's peak heap, output bytes, and systemd's result for the run's scope: `oom-kill` when the cap killed it. Each scope gets its own unit name, and the result is read with `systemctl --user show`, which needs no root. Without systemd the result is `n/a`. Once the cap kills a command on a pair, its remaining repetitions are not run and are recorded as `skipped`. Exit code 1 from `rift`, `diff` and `git diff` means the files differ.
+
+### Low-entropy runs (`--suite le`)
+
+These need a ref whose `rift-gen` has the low-entropy profiles; the script stops after the build if it does not. They also need `timeout`, `patch` (GNU, for `-o -` and `-r -`) and `cmp`, and for the BGL pair `curl`, `unzip` and `sha256sum`.
+
+Pairs at 64 MiB, 256 MiB and 1 GiB, seed 7, 0.1% changes, for ten points: `distinct` with k = 1, 2, 10, 100, 10^4 and 10^6 different lines, `periodic` with period 1000, `runs`, `alternating` and `empty`. A size is dropped when the pair plus a patch cap of the pair's size and 1 GiB does not fit the 60% rule. Per pair:
+
+- `rift --stats --mem 256M` under a 1 GiB cap, its diff counted by `wc -c`: wall time, exact peak heap, approximate lines, diff size.
+- Rift again, unmeasured, into a patch file in the scratch directory, if the pair, the diff (its size now known) and the patch cap fit the 60% rule and the tmpfs. Then `patch -s -r - -o - a d.patch | cmp - b` under the patch cap: the round trip is `ok` when patch exits 0 and the output equals B.
+- On the 64 MiB pairs and BGL, `diff -a a b` under a 2 GiB cap, with the lines starting with `<` or `>` counted: GNU diff's changed lines, the reference for rift's.
+
+Every run is stopped after 600 s and recorded as `timeout`. When rift fails or times out on a point, the point's larger sizes are not run. Then the Loghub BGL pair: the zip from Zenodo record 8196385 (CC BY 4.0) checked by SHA-256, the message part of each line as A (checked by SHA-256, 299 MiB, as `data.sh` builds it), and B from `spike mutate` at 0.1%; it gets the same three steps.
+
+New fields in `results.json` (schema 3), `null` where they do not apply: `approx_lines` (lines of A and B in approximate hunks, from `--stats`), `lines_ab` (lines of A plus B), `approx_share` (the first over the second), `changed_lines` (on a `diff` run, GNU diff's changed lines; on a `patch` run, the `-` and `+` lines of rift's diff it applied) and `roundtrip` (`ok` or `failed`, on a `patch` run). `rift_peak_heap_bytes` is now the exact count rift prints in parentheses where the build prints one. `report.md` adds a table with one row per low-entropy pair.
 
 Thread count is set with `taskset -c 0-<k-1>`, not `RAYON_NUM_THREADS`: rift sizes its threads from `std::thread::available_parallelism()`, which follows the CPU affinity mask. If your CPU 0 is not in the allowed set, `taskset` fails and the scaling rows show it.
 
@@ -59,3 +73,4 @@ These knobs turn safety checks off. They exist so the plan, sizing, report and c
 | `RIFT_BENCH_SHM=DIR` | use `DIR` instead of `/dev/shm` |
 | `RIFT_BENCH_TIME=PATH` | use `PATH` instead of `/usr/bin/time` |
 | `RIFT_BENCH_LIMITER=systemd` | show the plan as if systemd scopes were available |
+| `RIFT_BENCH_LE_SIZES="S ..."` | low-entropy pair sizes in bytes, to run the suite on a few MiB |
