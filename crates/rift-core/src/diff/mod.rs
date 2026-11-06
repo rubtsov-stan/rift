@@ -272,6 +272,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         self.sched.set_background(false);
         let ahead = AHEAD_PER_WORKER * self.threads;
         let front = Cell::new(None::<usize>);
+        let window = Cell::new(None::<usize>);
         let approx = Cell::new((0u64, 0u64));
         let hunk = |i: usize| -> Result<Option<Arc<Hunk>>> {
             if i >= n {
@@ -280,6 +281,11 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             let first_visit = front.get().is_none_or(|f| i > f);
             if first_visit {
                 front.set(Some(i));
+            }
+            // The window moves a quarter of its length at a time: each move
+            // takes the queue lock the workers share.
+            if window.get().is_none_or(|w| i >= w + ahead / 4) {
+                window.set(Some(i));
                 let last = &segs[(i + ahead).min(n - 1)];
                 let start = segs[i].a.start.0.saturating_sub(1);
                 self.sched
