@@ -23,19 +23,21 @@ Seeds are in `corpus/<target>/`: hand-written edge cases, and pairs from `rift-g
 ## Running on Linux
 
 ```sh
-fuzz/run-linux.sh --dry-run          # print the plan, change nothing
-fuzz/run-linux.sh                    # 10 s to cancel, then 30 min per target
-fuzz/run-linux.sh --minutes 60 --yes # longer, no wait
+fuzz/run-linux.sh --dry-run                # print the plan, change nothing
+fuzz/run-linux.sh                          # 10 s to cancel, then 30 min per target
+fuzz/run-linux.sh --time 600 --jobs 4 --yes # 10 min per target, 4 at once, no wait
 ```
 
-Options: `--minutes N` per target (default 30; the plan prints the total), `--ref REF` (default `HEAD`), `--repo URL` (default the checkout the script is in; only committed changes are part of the run, and a URL given here appears in the report).
+Options: `--time S` seconds per target (default 1800; `--minutes N` still works and means `--time $((N * 60))`), `--jobs N` targets at once (default: physical cores minus 2, at least 1), `--ref REF` (default `HEAD`), `--repo URL` (default the checkout the script is in; only committed changes are part of the run, and a URL given here appears in the report).
 
-Needs: Linux, a non-root user, rustup with a nightly toolchain (`rustup toolchain install nightly --profile minimal`; the script stops with that line if nightly is missing), `git`, `awk`, `tar`, network access for crates, and a systemd user session or `prlimit`. `cargo-fuzz` is used from `PATH`, or built into the scratch directory when missing.
+The plan prints the number of jobs, the cores of each slot, the memory cap per target and the total time (targets / jobs, rounded up, times `--time`). Each slot gets whole physical cores, hardware threads of one core together, and the target in it runs under `taskset -c <those cores>`, so libFuzzer's `-fork` workers stay on them.
+
+Needs: Linux, `taskset` (util-linux), a non-root user, rustup with a nightly toolchain (`rustup toolchain install nightly --profile minimal`; the script stops with that line if nightly is missing), `git`, `awk`, `tar`, network access for crates, and a systemd user session or `prlimit`. `cargo-fuzz` is used from `PATH`, or built into the scratch directory when missing.
 
 The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, labelled by CPU model and date, never by hostname or user:
 
 - `report.md`: host, plan, and per target the run time, executions, exec/s, libFuzzer's coverage and features, corpus files and bytes before and after, and crash, timeout and OOM counts;
-- `results.json`: the same, `schema_version` 1;
+- `results.json`: the same, `schema_version` 2;
 - `artifacts/<target>/`: every input that crashed (`crash-*`), timed out (`timeout-*`) or ran out of memory (`oom-*`);
 - `logs/<target>.log`: libFuzzer's output, with the stack trace of each crash (first 8 MiB).
 
@@ -46,8 +48,8 @@ The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, la
 - A trap on exit, error, Ctrl-C and termination stops the running fuzzer and removes the directory.
 - The only disk write is the archive. `systemd-run` leaves a few lines in the journal.
 - No root, no `sudo`, no kernel settings. It never installs a toolchain (`RUSTUP_AUTO_INSTALL=0`).
-- Each target runs as `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0 nice -n 10 ionice -c3 <target> -fork=<k> ...`, with AddressSanitizer. Without a systemd user session it uses `prlimit --as` per process instead, and builds without AddressSanitizer, which needs more address space than such a limit allows; the report says so. With neither, it does not run.
-- Sizing, all within 60% of `MemAvailable`: the build needs 3 GiB of tmpfs, 3 GiB for four compiler jobs and a 2 GiB margin, so the script stops below 13.3 GiB of `MemAvailable`. Fuzzing runs one target at a time with `k` worker processes, each under libFuzzer's 2 GiB RSS limit and counted at 2.5 GiB, plus 0.5 GiB for the parent, 1 GiB of tmpfs and the margin. That gives `k = 2` at 16 GiB of `MemAvailable` and `k = 6` at 32 GiB, never more than one less than the CPU count.
+- Each target runs as `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0 nice -n 10 ionice -c3 taskset -c <cores> <target> -fork=<k> ...`, with AddressSanitizer. Without a systemd user session it uses `prlimit --as` per process instead, and builds without AddressSanitizer, which needs more address space than such a limit allows; the report says so. With neither, it does not run.
+- Sizing, all within 60% of `MemAvailable`: the build needs 3 GiB of tmpfs, 3 GiB for four compiler jobs and a 2 GiB margin, so the script stops below 13.3 GiB of `MemAvailable`. Fuzzing runs `N` targets at once. A fork worker is counted at 2.5 GiB (libFuzzer's 2 GiB RSS limit plus slack), the parent at 0.5 GiB, and 1 GiB of tmpfs and the 2 GiB margin are shared. When `N` targets with one worker each do not fit, `N` is lowered and the plan says so: 2 at 16 GiB of `MemAvailable`, 5 at 32 GiB. Workers per target are then as many as the slot's cores and the remaining memory allow (one at both sizes); the cap is the same for every target.
 - libFuzzer runs in fork mode with `-ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1`, so a crash does not end a target's run; `-timeout=10` per input; leak detection is off, since growing memory hits the RSS limit and lazily built statics would read as leaks.
 
 ## Turning a crash into a regression test
@@ -69,4 +71,4 @@ The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, la
 cargo +nightly fuzz build    # all targets, AddressSanitizer
 ```
 
-The test knobs at the top of `run-linux.sh` (`RIFT_FUZZ_TESTING`, `RIFT_FUZZ_MEMINFO`, `RIFT_FUZZ_SHM`, `RIFT_FUZZ_LIMITER`, `RIFT_FUZZ_BINS`) let you check the plan, the report and the cleanup on another OS with stand-in executables. They turn safety checks off; a real run must not set them.
+The test knobs at the top of `run-linux.sh` (`RIFT_FUZZ_TESTING`, `RIFT_FUZZ_MEMINFO`, `RIFT_FUZZ_SHM`, `RIFT_FUZZ_LIMITER`, `RIFT_FUZZ_BINS`) (plus `RIFT_FUZZ_ALLOWED`, `RIFT_FUZZ_TOPO` and `RIFT_FUZZ_TASKSET_LOG` for the core layout and the pinning arguments) let you check the plan, the report and the cleanup on another OS with stand-in executables. They turn safety checks off; a real run must not set them.

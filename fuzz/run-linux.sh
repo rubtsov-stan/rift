@@ -2,12 +2,17 @@
 # Fuzzing for a Linux host: no root, nothing written to disk except the
 # result archive in the current directory.
 #
-#   fuzz/run-linux.sh [--dry-run] [--yes] [--minutes N] [--ref REF]
+#   fuzz/run-linux.sh [--dry-run] [--yes] [--time S] [--jobs N] [--ref REF]
 #                     [--repo URL]
 #
 #   --dry-run    print the plan and exit
 #   --yes        skip the 10 second wait before the run starts
-#   --minutes N  fuzzing time per target (default 30)
+#   --time S     fuzzing time per target in seconds (default 1800);
+#                --minutes N is the same as --time $((N * 60))
+#   --jobs N     targets fuzzed at once (default: physical cores minus 2,
+#                at least 1). Each one is pinned to its own cores and gets
+#                its own memory cap; N is lowered when they do not fit in
+#                60% of MemAvailable
 #   --ref REF    commit, branch or tag to build (default HEAD)
 #   --repo URL   where to clone from (default the repository this script
 #                is in; uncommitted changes are not part of the run)
@@ -18,6 +23,12 @@
 #   RIFT_FUZZ_MEMINFO=F    read MemAvailable from F instead of /proc/meminfo
 #   RIFT_FUZZ_SHM=DIR      use DIR instead of /dev/shm
 #   RIFT_FUZZ_LIMITER=L    force systemd, prlimit or none (none runs uncapped)
+#   RIFT_FUZZ_ALLOWED=L    the allowed CPUs as a list, "0-11" or "0,2-5", instead
+#                          of Cpus_allowed_list in /proc/self/status
+#   RIFT_FUZZ_TOPO=F       read "cpu,core,socket" lines from F instead of
+#                          lscpu -p=cpu,core,socket
+#   RIFT_FUZZ_TASKSET_LOG=F  use a stand-in for taskset that appends its
+#                          arguments to F and then runs the command unpinned
 #   RIFT_FUZZ_BINS=DIR     skip the clone and build: run the executables in
 #                          DIR (named after the targets) on the corpora of
 #                          this checkout
@@ -27,7 +38,7 @@ set -eu
 
 GIB=1073741824
 MIB=1048576
-schema=1
+schema=2
 targets="scan keyed_csv keyed_ndjson keyed_copy keyed_reader pipeline unified tui_render sanitize mcp_request mcp_tools"
 # Per fuzzing process: libFuzzer's own RSS limit, and the cap around it.
 rss_mb=2048
@@ -40,7 +51,7 @@ parent=$((GIB / 2)) margin=$((2 * GIB)) kept=$GIB
 build_tmpfs=$((3 * GIB)) build_rss=$((3 * GIB)) build_jobs=4
 
 self=$(cd "$(dirname "$0")/.." && pwd)
-repo=$self ref=HEAD yes=0 dry=0 minutes=30
+repo=$self ref=HEAD yes=0 dry=0 secs=1800 jobs=
 testing=${RIFT_FUZZ_TESTING:-0}
 meminfo=${RIFT_FUZZ_MEMINFO:-/proc/meminfo}
 bins=${RIFT_FUZZ_BINS:-}
@@ -53,14 +64,19 @@ while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) dry=1; shift ;;
     --yes) yes=1; shift ;;
-    --minutes) [ $# -ge 2 ] || usage; minutes=$2; shift 2 ;;
+    --time) [ $# -ge 2 ] || usage; secs=$2; shift 2 ;;
+    --minutes) [ $# -ge 2 ] || usage; case $2 in ''|*[!0-9]*) die "--minutes takes a whole number above zero" ;; esac; secs=$(($2 * 60)); shift 2 ;;
+    --jobs) [ $# -ge 2 ] || usage; jobs=$2; shift 2 ;;
     --ref) [ $# -ge 2 ] || usage; ref=$2; shift 2 ;;
     --repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
     *) usage ;;
   esac
 done
-case $minutes in
-  ''|*[!0-9]*|0*) die "--minutes takes a whole number above zero" ;;
+case $secs in
+  ''|*[!0-9]*|0*) die "--time takes a whole number of seconds above zero" ;;
+esac
+case $jobs in
+  *[!0-9]*|0*) die "--jobs takes a whole number above zero" ;;
 esac
 
 # ---- checks that need no scratch directory ---------------------------------
@@ -124,15 +140,67 @@ cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 need_build=$((build_tmpfs + build_rss + margin))
 [ "$need_build" -le "$limit" ] ||
   die "refusing to start: the build needs $((need_build * 100 / 60 / MIB)) MiB of MemAvailable (60% rule), this host has $((avail / MIB)) MiB"
-# Fork-mode workers: as many as fit the 60% budget, leaving one CPU free.
-workers=$(( (limit - kept - parent - margin) / child ))
-[ "$workers" -le $((cpus - 1)) ] || workers=$((cpus - 1))
-[ "$workers" -ge 1 ] || workers=1
-[ $((kept + parent + margin + workers * child)) -le "$limit" ] ||
-  die "refusing to start: one fuzzing process needs $(( (kept + parent + margin + child) * 100 / 60 / MIB)) MiB of MemAvailable (60% rule), this host has $((avail / MIB)) MiB"
-cap=$((parent + workers * child))
+
+# ---- cores -----------------------------------------------------------------
+
+# The CPUs this process may use, then one line per physical core listing
+# its hardware threads (so siblings stay in one slot), grouped by socket.
+allowed_spec=${RIFT_FUZZ_ALLOWED:-$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status 2>/dev/null || true)}
+[ -n "$allowed_spec" ] || allowed_spec="0-$(( $(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN) - 1 ))"
+allowed=$(echo "$allowed_spec" | awk -F, '{ for (i = 1; i <= NF; i++) { n = split($i, r, "-"); if (n == 1) r[2] = r[1]; for (c = r[1]; c <= r[2]; c++) printf "%d ", c } }')
+if [ -n "${RIFT_FUZZ_TOPO:-}" ]; then
+  topo=$(cat "$RIFT_FUZZ_TOPO")
+else
+  topo=$(lscpu -p=cpu,core,socket 2>/dev/null || true)
+fi
+cores=$(echo "$topo" | awk -F, -v a="$allowed" '
+  BEGIN { n = split(a, x, " "); for (i = 1; i <= n; i++) ok[x[i]] = 1 }
+  /^#/ || NF < 3 { next }
+  ($1 in ok) { k = $3 "-" $2; if (!(k in c)) { order[++m] = k; sock[k] = $3 }
+               c[k] = c[k] (c[k] == "" ? "" : ",") $1; seen[$1] = 1 }
+  END { for (i = 1; i <= n; i++) if (!(x[i] in seen)) { k = "c" x[i]; order[++m] = k; sock[k] = 0; c[k] = x[i] }
+        for (i = 1; i <= m; i++) print sock[order[i]] "\t" c[order[i]] }' | sort -s -n -k1,1 | cut -f2)
+phys=$(echo "$cores" | wc -l | tr -d ' ')
+cpus=$(echo "$allowed" | wc -w | tr -d ' ')
+[ "$phys" -ge 1 ] || die "no usable CPU found"
 ntargets=$(echo "$targets" | wc -w | tr -d ' ')
 
+# ---- jobs and memory -------------------------------------------------------
+
+# Every running target is one slot: a systemd scope with MemoryMax=cap,
+# holding a fork-mode parent and w workers. Fixed: tmpfs and the margin.
+jobs_note=
+if [ -z "$jobs" ]; then
+  jobs=$((phys - 2)); [ "$jobs" -ge 1 ] || jobs=1
+  jobs_how="default: $phys physical cores minus 2"
+else
+  jobs_how="--jobs"
+fi
+[ "$jobs" -le "$phys" ] || { jobs_note="--jobs $jobs lowered to $phys, the number of physical cores"; jobs=$phys; }
+[ "$jobs" -le "$ntargets" ] || jobs=$ntargets
+fit=$(( (limit - kept - margin) / (parent + child) ))
+[ "$fit" -ge 1 ] ||
+  die "refusing to start: one fuzzing process needs $(( (kept + parent + margin + child) * 100 / 60 / MIB)) MiB of MemAvailable (60% rule), this host has $((avail / MIB)) MiB"
+if [ "$jobs" -gt "$fit" ]; then
+  jobs_note="jobs lowered from $jobs to $fit: $jobs targets at $(( (parent + child) / MIB )) MiB each would not fit in 60% of MemAvailable"
+  jobs=$fit
+fi
+slots=$(echo "$cores" | awk -v n="$jobs" '
+  { c[NR] = $0 }
+  END { base = int(NR / n); extra = NR % n; k = 0
+        for (s = 1; s <= n; s++) { m = base + (s <= extra); l = ""
+          for (j = 0; j < m; j++) { k++; l = l (l == "" ? "" : ",") c[k] }
+          print l } }')
+# Fork workers per target: the CPUs of the smallest slot, as many as the
+# memory left after the other slots allows.
+min_cpus=$(echo "$slots" | awk -F, 'NR == 1 || NF < m { m = NF } END { print m }')
+mem_workers=$(( ((limit - kept - margin) / jobs - parent) / child ))
+workers=$min_cpus
+[ "$workers" -le "$mem_workers" ] || workers=$mem_workers
+[ "$workers" -ge 1 ] || workers=1
+cap=$((parent + workers * child))
+rounds=$(( (ntargets + jobs - 1) / jobs ))
+wall=$((rounds * secs))
 # The run is labelled by CPU model and date, never by hostname, so the
 # archive and the report can be shared as they are.
 cpu_model=$(lscpu 2>/dev/null | awk -F': +' '$1 == "Model name" {print $2; exit}')
@@ -157,14 +225,20 @@ plan() {
   echo "  toolchain         $nightly (never installed by this script)"
   echo "  build             cargo fuzz build -O -s $sanitizer, $build_jobs jobs; then only the binaries are kept"
   echo "  targets           $targets"
-  echo "  per target        $minutes min, libFuzzer -fork=$workers, -rss_limit_mb=$rss_mb, -timeout=10"
+  echo "  jobs              $jobs targets at once ($jobs_how; $phys physical cores, $cpus threads)"
+  [ -z "$jobs_note" ] || echo "                    note: $jobs_note"
+  i=0
+  echo "$slots" | while IFS= read -r l; do
+    i=$((i + 1)); echo "  slot $i            cores $l"
+  done
+  echo "  per target        $secs s, libFuzzer -fork=$workers, -rss_limit_mb=$rss_mb, -timeout=10"
   case $limiter in
-    systemd) echo "  memory cap        systemd-run --user scope per target, MemoryMax=$(gib "$cap"), MemorySwapMax=0" ;;
-    prlimit) echo "  memory cap        prlimit --as=$(gib "$child") per process (no systemd user scope): address space, not RSS; no AddressSanitizer" ;;
+    systemd) echo "  memory cap        systemd-run --user scope per target, MemoryMax=$(gib "$cap") each ($(gib $((cap * jobs))) for $jobs), MemorySwapMax=0" ;;
+    prlimit) echo "  memory cap        prlimit --as=$(gib "$child") per process, $jobs targets (no systemd user scope): address space, not RSS; no AddressSanitizer" ;;
     none) echo "  memory cap        none (test knobs only)" ;;
   esac
-  echo "  priority          $niceio"
-  echo "  total time        $((ntargets * minutes)) min of fuzzing ($ntargets targets x $minutes min), plus the build"
+  echo "  priority          $niceio, taskset -c <slot cores>"
+  echo "  total time        $((wall / 60)) min $((wall % 60)) s of fuzzing ($ntargets targets in $rounds rounds of $secs s), plus the build"
   echo "  output            rift-fuzz-$label.tar.gz in the current directory"
 }
 
@@ -179,15 +253,20 @@ fi
 # ---- scratch directory and cleanup -----------------------------------------
 
 scratch=$base/rift-fuzz-$$
-unit='' fpid=''
+spids=''
 cleanup() {
-  # Stop a fuzzer still running when the script is interrupted.
-  if [ -n "$unit" ]; then
-    systemctl --user stop "$unit.scope" >/dev/null 2>&1 || true
-  elif [ -n "$fpid" ]; then
-    pkill -TERM -P "$fpid" 2>/dev/null || true
-    kill -TERM "$fpid" 2>/dev/null || true
-  fi
+  # Stop the slot loops first so none starts another target, then the
+  # fuzzers they were running (and, in fork mode, their workers).
+  kids=
+  for sp in $spids; do kids="$kids $(pgrep -P "$sp" 2>/dev/null || true)"; done
+  for sp in $spids; do kill -TERM "$sp" 2>/dev/null || true; done
+  for t in $targets; do
+    systemctl --user stop "rift-fuzz-$$-$t.scope" >/dev/null 2>&1 || true
+  done
+  for c in $kids; do
+    pkill -TERM -P "$c" 2>/dev/null || true
+    kill -TERM "$c" 2>/dev/null || true
+  done
   case $scratch in
     */rift-fuzz-*) rm -rf "$scratch" ;;
   esac
@@ -200,7 +279,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 pkg=$scratch/pkg
-mkdir -p "$pkg/artifacts" "$pkg/logs" "$scratch/bin" "$scratch/corpus" "$scratch/tmp"
+mkdir -p "$pkg/artifacts" "$pkg/logs" "$scratch/bin" "$scratch/corpus" "$scratch/tmp" "$scratch/runs.d"
 facts=$scratch/facts.tsv runs=$scratch/runs.tsv notes=$scratch/notes.txt
 : > "$facts"; : > "$runs"; : > "$notes"
 fact() { printf '%s\t%s\n' "$1" "$2" >> "$facts"; }
@@ -208,6 +287,16 @@ note() { echo "$*" >> "$notes"; echo "note: $*" >&2; }
 loadavg() { cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo n/a; }
 # libFuzzer's fork mode and the mcp target put their files in TMPDIR.
 export TMPDIR="$scratch/tmp"
+
+# taskset pins a target to its slot's cores. Without util-linux's taskset
+# the real run stops; the test stand-in logs its arguments and runs unpinned.
+if [ -n "${RIFT_FUZZ_TASKSET_LOG:-}" ] && [ "$testing" = 1 ]; then
+  mkdir "$scratch/shim"
+  printf '#!/bin/sh\necho "$*" >> "%s"\nshift 2\nexec "$@"\n' "$RIFT_FUZZ_TASKSET_LOG" > "$scratch/shim/taskset"
+  chmod +x "$scratch/shim/taskset"
+  PATH=$scratch/shim:$PATH
+fi
+command -v taskset >/dev/null 2>&1 || die "taskset not found (util-linux); refusing to run without core pinning"
 
 # ---- build -----------------------------------------------------------------
 
@@ -261,8 +350,9 @@ fact rift_ref "$ref"
 fact rift_commit "$commit"
 fact sanitizer "$sanitizer"
 fact limiter "$limiter"
-fact workers "$workers"
-fact minutes_per_target "$minutes"
+fact jobs "$jobs"
+fact workers_per_target "$workers"
+fact seconds_per_target "$secs"
 fact load_before "$(loadavg)"
 
 # ---- fuzzing ---------------------------------------------------------------
@@ -288,12 +378,13 @@ scope_result() {
   echo "${sr:-unknown}"
 }
 
-secs=$((minutes * 60))
-for t in $targets; do
+# run_target T CORES: one target, to completion; its row goes to runs.d/T.
+run_target() {
+  t=$1 cores_list=$2
   corpus=$scratch/corpus/$t art=$pkg/artifacts/$t log=$pkg/logs/$t.log
   mkdir -p "$corpus" "$art"
   before=$(corpus_stats "$corpus")
-  echo "Fuzzing $t for $minutes min" >&2
+  echo "Fuzzing $t for $secs s on cores $cores_list" >&2
   unit=
   case $limiter in
     systemd)
@@ -307,16 +398,14 @@ for t in $targets; do
   # and lazily built statics would read as leaks. $lim is a word list.
   # shellcheck disable=SC2086
   ASAN_OPTIONS=detect_leaks=0 MALLOC_ARENA_MAX=2 RUST_BACKTRACE=1 \
-    $lim "$scratch/bin/$t" -fork="$workers" -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1 \
+    $lim taskset -c "$cores_list" "$scratch/bin/$t" -fork="$workers" -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1 \
     -max_total_time="$secs" -rss_limit_mb="$rss_mb" -timeout=10 -detect_leaks=0 \
     -artifact_prefix="$art/" "$corpus" > "$log" 2>&1 &
   fpid=$!
   ec=0
   wait "$fpid" || ec=$?
-  fpid=
   end=$(date +%s)
   result=$(scope_result "$unit")
-  unit=
   after=$(corpus_stats "$corpus")
   # The last fork-mode status line:
   # #RUNS: cov: C ft: F corp: N exec/s: E oom/timeout/crash: O/T/C time: Ss ...
@@ -332,8 +421,26 @@ for t in $targets; do
   fi
   [ "$ec" = 0 ] || note "$t: libFuzzer exited with $ec"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$t" "$((end - start))" "$stats" "${before% *}" "${before#* }" "${after% *}" "${after#* }" "$nart" "$ec" "$result" >> "$runs"
+    "$t" "$((end - start))" "$stats" "${before% *}" "${before#* }" "${after% *}" "${after#* }" "$nart" "$ec" "$result" > "$scratch/runs.d/$t"
+}
+
+# Target i goes to slot i mod jobs and the slot's targets run one after the
+# other; all last the same time, so a fixed assignment keeps every slot busy.
+s=0
+for sl in $slots; do
+  s=$((s + 1))
+  (
+    i=0
+    for t in $targets; do
+      [ $((i % jobs + 1)) = "$s" ] && run_target "$t" "$sl"
+      i=$((i + 1))
+    done
+  ) &
+  spids="$spids $!"
 done
+for sp in $spids; do wait "$sp" || true; done
+spids=
+for t in $targets; do cat "$scratch/runs.d/$t" >> "$runs" 2>/dev/null || note "$t: no result"; done
 
 fact load_after "$(loadavg)"
 [ "$limiter" != prlimit ] || note "no systemd user scope: caps are prlimit --as address-space limits and the targets ran without AddressSanitizer"
