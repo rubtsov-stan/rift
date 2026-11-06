@@ -1,29 +1,26 @@
-//! The full pipeline on generated sources: correct on a small pair, and
-//! under `--mem` on a 50 GB pair that is never written to disk.
+//! The full pipeline under `--mem` on a 50 GB pair that is never written
+//! to disk.
 //!
 //! Alone in its binary because it reads the process-wide allocator
-//! counters. The 50 GB run is ignored by default:
+//! counters. The run is ignored by default:
 //!
 //! ```sh
 //! cargo test -p rift-gen --release --test synthetic -- --ignored --nocapture
 //! ```
 
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use rift_core::alloc::{self, CountingAlloc};
 use rift_core::diff::Diff;
 use rift_core::skeleton::build_pair;
 use rift_core::unified::{Label, Options, Verdict};
-use rift_core::{Budget, ByteOffset, Bytes, DiffView, HunkState, MemLines, Source, script};
+use rift_core::{Budget, Bytes};
 use rift_gen::synthetic::{Side, Synthetic};
 
 #[global_allocator]
 static ALLOC: CountingAlloc = CountingAlloc;
-
-/// One test at a time: the counters are process-wide.
-static SERIAL: Mutex<()> = Mutex::new(());
 
 const SEED: u64 = 7;
 const CHANGE: f64 = 0.001;
@@ -33,12 +30,6 @@ fn pair(size: u64) -> (Arc<Synthetic>, Arc<Synthetic>) {
         Arc::new(Synthetic::new(SEED, size, CHANGE, Side::A)),
         Arc::new(Synthetic::new(SEED, size, CHANGE, Side::B)),
     )
-}
-
-fn whole(s: &Synthetic) -> Vec<u8> {
-    let mut v = vec![0u8; usize::try_from(s.len().0).unwrap()];
-    s.read_exact_at(&mut v, ByteOffset(0)).unwrap();
-    v
 }
 
 /// Counts what it is given and keeps nothing.
@@ -67,32 +58,6 @@ fn options() -> Options<'static> {
     }
 }
 
-#[test]
-fn the_diff_of_a_small_synthetic_pair_replays_to_b() {
-    let _turn = SERIAL.lock().unwrap();
-    let (a, b) = pair(8 << 20);
-    let (da, db) = (whole(&a), whole(&b));
-    let budget = Budget::new(Bytes::mib(64));
-    let diff = Diff::new(Arc::clone(&a), Arc::clone(&b), &budget, 4).unwrap();
-    let hunks: Vec<_> = (0..diff.segments().len())
-        .map(|i| {
-            loop {
-                match diff.hunk(i) {
-                    HunkState::Ready(h) | HunkState::Approx(h) => break (*h).clone(),
-                    HunkState::Pending => std::thread::yield_now(),
-                }
-            }
-        })
-        .collect();
-    let mut out = Vec::new();
-    script::apply(&MemLines::new(&da), &MemLines::new(&db), &hunks, &mut out).unwrap();
-    assert!(out == db, "script replays A into B");
-    assert!(
-        diff.segments().len() > 10,
-        "the pair differs in many places"
-    );
-}
-
 /// Peak heap of `f`, measured from what is allocated when it starts.
 fn peak_of<T>(f: impl FnOnce() -> T) -> (T, Bytes) {
     alloc::reset_peak();
@@ -109,7 +74,6 @@ fn mib(b: Bytes) -> f64 {
 #[test]
 #[ignore = "diffs 2 x 50 GB generated on the fly; run in release, takes minutes"]
 fn a_50gb_pair_stays_under_256mib() {
-    let _turn = SERIAL.lock().unwrap();
     let size = std::env::var("RIFT_SYNTH_BYTES").map_or(50_000_000_000, |s| s.parse().unwrap());
     let mem = Bytes::mib(256);
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);

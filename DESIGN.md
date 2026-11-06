@@ -402,8 +402,8 @@ field path, or a column of a `pg_dump` COPY block by name. `--key` parses
 `KeyedChange` holds the key's bytes as the file has them, `Added`,
 `Removed` or `Changed`, and the record's first line in A and in B; a side
 is absent only when the kind says so. `KeyError` reaches callers as
-`Error::Keyed`, and its first variant is duplicate keys. Until key mode
-exists, `rift --key` exits 2 with "key mode is not implemented yet".
+`Error::Keyed`, and its first variant is duplicate keys. `rift --key`
+prints the changes described under "Key mode".
 
 **`MovedBlock`** (`moves`). Two line ranges of the same length, one in A
 and one in B, holding the same bytes. `DiffView::moved_blocks` returns
@@ -412,9 +412,9 @@ the diff and never changes the edit script.
 
 **`rift-mcp`**. A crate with an MCP server on standard input and output,
 built on `rmcp`. It answers `initialize` and serves the tools described
-under "MCP server". The
-workspace manifest already lists what the server needs: `rmcp`, `tokio`,
-`serde`, `serde_json` and `schemars`. `rift-core` gains no dependency.
+under "MCP server". The workspace manifest lists what the server needs:
+`rmcp`, `tokio`, `serde`, `serde_json` and `schemars`. `rift-core` gains
+no dependency.
 
 **Generator profiles** (`rift-gen`). `nokey` draws every row from a pool
 of 1024 rows without an id, so in a file of a few MiB no line occurs only

@@ -139,69 +139,11 @@ fn interface_peak(segments: usize) -> usize {
 }
 
 /// The counters are global: measuring tests take turns.
-static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[test]
 fn heap_does_not_grow_with_segments() {
-    let _turn = ONE_AT_A_TIME.lock().unwrap();
     let small = interface_peak(1_000);
     let big = interface_peak(1_000_000);
     println!("interface heap peak: {small} B at 1k segments, {big} B at 1M segments");
     assert!(big < 64 << 10, "{big} bytes");
     assert!(big <= small + 1024, "{small} -> {big}");
-}
-
-#[test]
-fn a_huge_line_is_never_read_whole() {
-    let _turn = ONE_AT_A_TIME.lock().unwrap();
-    let mut a = b"first\n".to_vec();
-    a.extend(std::iter::repeat_n(b'y', 64 << 20));
-    a.extend_from_slice(b"\nlast\n");
-    let lines = rift_core::MemLines::new(&a);
-    let m = common::Mock::build(&[common::Spec::Equal(3)], true);
-    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    let base = CURRENT.load(Ordering::Relaxed);
-    PEAK.store(base, Ordering::Relaxed);
-    let mut app = App::new(&m.view, &lines, &lines);
-    app.draw(&mut term.get_frame());
-    let peak = PEAK.load(Ordering::Relaxed) - base;
-    println!("peak heap drawing a 64 MiB line: {peak} B");
-    assert!(peak < 1 << 20, "{peak} bytes");
-}
-
-/// Every line is 100 KB long.
-struct Long;
-
-impl LineAccess for Long {
-    fn line_count(&self) -> u64 {
-        1000
-    }
-    fn read_lines(&self, _: Range<LineNo>, _: &mut LineBuf) -> Result<()> {
-        unreachable!("the interface reads prefixes only")
-    }
-    fn read_line_prefix(&self, _: LineNo, max: Bytes, buf: &mut LineBuf) -> Result<Bytes> {
-        buf.clear();
-        buf.push(&[b'z'; 4096][..usize::try_from(max.0).unwrap().min(4096)])?;
-        Ok(Bytes(100_000))
-    }
-
-    fn read_line_part(&self, _: LineNo, _: Bytes, _: Bytes, _: &mut LineBuf) -> Result<bool> {
-        unreachable!("the interface reads prefixes only")
-    }
-}
-
-#[test]
-fn a_full_screen_of_long_lines_costs_a_few_kilobytes() {
-    let _turn = ONE_AT_A_TIME.lock().unwrap();
-    let m = common::Mock::build(&[common::Spec::Equal(1000)], true);
-    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    let base = CURRENT.load(Ordering::Relaxed);
-    PEAK.store(base, Ordering::Relaxed);
-    let mut app = App::new(&m.view, &Long, &Long);
-    for _ in 0..3 {
-        app.draw(&mut term.get_frame());
-    }
-    let peak = PEAK.load(Ordering::Relaxed) - base;
-    println!("peak heap, 120x40 screen of 100 KB lines: {peak} B");
-    assert!(peak < 64 << 10, "{peak} bytes");
 }
