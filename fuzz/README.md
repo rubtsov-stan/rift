@@ -20,6 +20,11 @@ The checks live in `src/`, one module per target family; `fuzz_targets/` holds o
 
 Seeds are in `corpus/<target>/`: hand-written edge cases, and pairs from `rift-gen --size 2K` with seed 7.
 
+## Two ways to run
+
+- On a Linux machine you own: `run-linux.sh`, below. Several targets at once, each pinned to its own cores and memory cap, results in one archive.
+- In CI: the `Fuzz` workflow, [at the end](#in-ci).
+
 ## Running on Linux
 
 ```sh
@@ -72,3 +77,16 @@ cargo +nightly fuzz build    # all targets, AddressSanitizer
 ```
 
 The test knobs at the top of `run-linux.sh` (`RIFT_FUZZ_TESTING`, `RIFT_FUZZ_MEMINFO`, `RIFT_FUZZ_SHM`, `RIFT_FUZZ_LIMITER`, `RIFT_FUZZ_BINS`) (plus `RIFT_FUZZ_ALLOWED`, `RIFT_FUZZ_TOPO` and `RIFT_FUZZ_TASKSET_LOG` for the core layout and the pinning arguments) let you check the plan, the report and the cleanup on another OS with stand-in executables. They turn safety checks off; a real run must not set them.
+
+## In CI
+
+`.github/workflows/fuzz.yml` runs every night and on demand:
+
+```sh
+gh workflow run fuzz.yml
+gh run list --workflow fuzz.yml
+```
+
+Each target gets its own runner and 10 minutes of fuzzing (`-max_total_time=600`). The corpus of each target is restored from and saved to the Actions cache, starting from the seeds in `corpus/<target>/`, so it grows from run to run. GitHub evicts caches that go unused for 7 days.
+
+A crash, timeout or out-of-memory input fails that job, and only that job: the other targets keep running. The run shows red in the Actions tab, and the failing job uploads an artifact `fuzz-<target>` with the input (`crash-*`, `timeout-*` or `oom-*`) and the libFuzzer log. Download it with `gh run download <run-id> -n fuzz-<target>` and continue as in "Turning a crash into a regression test".
