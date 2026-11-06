@@ -77,6 +77,15 @@ The skeleton keeps to its half by choosing the stratum adaptively. Refinements
 take memory through a semaphore counted in bytes. A region whose estimated
 working set does not fit is split at a lower stratum, or marked approximate.
 
+At a stratum low enough to sample every line, the samples and the anchor
+table take about 45 bytes per line of A plus B: 24 bytes per `Sample`, about
+16 bytes of anchor table, and overhead (45.0 to 45.9 measured). Only the
+skeleton half caps this, so files of very short lines peak far above their
+size: a 1 MiB pair of empty lines takes 94 MB at `--mem 256M`, against 3.9 MB
+at `--mem 16M`, where the stratum rises. A test in `rift-gen` bounds small
+pairs by 4 MiB plus 48 bytes per line. Numbers per profile follow with the
+low-entropy measurements.
+
 The budget covers the heap. Files are read through `pread` into fixed-size
 buffers, never through `mmap`, so resident memory does not grow with file
 pages. A counting global allocator tracks current and peak heap, and tests
