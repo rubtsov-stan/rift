@@ -26,6 +26,12 @@ struct Args {
     /// Row format for the nokey and shuffled profiles.
     #[arg(long, value_enum, default_value_t = Rows::Csv)]
     rows: Rows,
+    /// Different lines of a `distinct` file.
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
+    distinct: u64,
+    /// Lines in one period of a `periodic` file.
+    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(1..))]
+    period: u64,
     /// Probability that a mutation starts at a given line.
     #[arg(long, default_value_t = 0.001)]
     change_ratio: f64,
@@ -41,6 +47,8 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut config = Config::new(args.seed, args.size.0, args.profile);
     config.rows = args.rows;
+    config.distinct = args.distinct;
+    config.period = args.period;
     config.change_ratio = args.change_ratio;
     if let Some(kinds) = args.kinds {
         config.kinds = kinds;
