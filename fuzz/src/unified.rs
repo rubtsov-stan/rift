@@ -95,15 +95,14 @@ fn build(a: &[&[u8]], ops: &[u8], unterminated_b: bool) -> Built {
     Built { hunks, b }
 }
 
-/// A timestamp from the first 14 bytes of `bytes`, kept to the range a
-/// file's mtime and a real zone offset (under ±18 h) can produce, so that
-/// the local time stays inside `i64`.
+/// A timestamp from the first 16 bytes of `bytes`: any second, any
+/// offset.
 fn timestamp(bytes: &[u8]) -> Option<Timestamp> {
     let secs = i64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
     let nanos = u32::from_le_bytes(bytes.get(8..12)?.try_into().ok()?) % 1_000_000_000;
-    let utc_offset = i32::from(i16::from_le_bytes(bytes.get(12..14)?.try_into().ok()?)) * 2;
+    let utc_offset = i32::from_le_bytes(bytes.get(12..16)?.try_into().ok()?);
     Some(Timestamp {
-        secs: secs.clamp(i64::MIN + 86_400, i64::MAX - 86_400),
+        secs,
         nanos,
         utc_offset,
     })
@@ -112,7 +111,7 @@ fn timestamp(bytes: &[u8]) -> Option<Timestamp> {
 /// Writes a script built from the input as a unified diff.
 ///
 /// The first byte sets the context (0 to 7 lines, bits 0-2), a header
-/// timestamp taken from the first 14 bytes of the ops (bit 3), an
+/// timestamp taken from the first 16 bytes of the ops (bit 3), an
 /// unterminated last line of B (bit 4), and corrupt mode (bit 5).
 ///
 /// Properties: the diff of a valid script, applied to A, gives B, with
@@ -128,7 +127,7 @@ pub fn check(data: &[u8]) {
     let [a, mut ops] = fields(rest);
     let mtime = if cfg & 8 != 0 {
         let t = timestamp(ops);
-        ops = ops.get(14..).unwrap_or_default();
+        ops = ops.get(16..).unwrap_or_default();
         t
     } else {
         None

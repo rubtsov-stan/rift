@@ -217,6 +217,27 @@ fn headers_carry_name_and_gnu_style_mtime() {
 }
 
 #[test]
+fn timestamps_at_the_ends_of_time_fall_back_to_utc() {
+    let text = |secs, utc_offset| {
+        let mut buf = Vec::new();
+        let ts = Timestamp {
+            secs,
+            nanos: 0,
+            utc_offset,
+        };
+        write_timestamp(&mut buf, ts).unwrap();
+        String::from_utf8(buf).unwrap()
+    };
+    // The local time does not fit in i64: the same instant in UTC.
+    assert_eq!(text(i64::MAX, 3600), text(i64::MAX, 0));
+    assert_eq!(text(i64::MIN, -3600), text(i64::MIN, 0));
+    assert!(text(i64::MAX, 3600).ends_with(" +0000"));
+    // Up to the edge, the zone is kept.
+    assert!(text(i64::MAX - 3600, 3600).ends_with(" +0100"));
+    assert!(text(i64::MIN + 3600, -3600).ends_with(" -0100"));
+}
+
+#[test]
 fn exit_codes_follow_diff() {
     assert_eq!(exit_code::<()>(&Ok(Verdict::Identical)), 0);
     assert_eq!(exit_code::<()>(&Ok(Verdict::Different)), 1);

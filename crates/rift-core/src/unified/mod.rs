@@ -406,9 +406,16 @@ fn write_label(out: &mut impl Write, prefix: &[u8], label: &Label<'_>) -> io::Re
     out.write_all(b"\n")
 }
 
-/// `YYYY-MM-DD HH:MM:SS.nnnnnnnnn +HHMM` in the timestamp's own offset.
-fn write_timestamp(out: &mut impl Write, ts: Timestamp) -> io::Result<()> {
-    let local = ts.secs + i64::from(ts.utc_offset);
+/// `YYYY-MM-DD HH:MM:SS.nnnnnnnnn +HHMM` in the timestamp's own offset,
+/// or in UTC when the local time would not fit in `i64`.
+fn write_timestamp(out: &mut impl Write, mut ts: Timestamp) -> io::Result<()> {
+    let local = ts
+        .secs
+        .checked_add(i64::from(ts.utc_offset))
+        .unwrap_or_else(|| {
+            ts.utc_offset = 0;
+            ts.secs
+        });
     let (y, m, d) = civil_from_days(local.div_euclid(86_400));
     let sod = local.rem_euclid(86_400);
     let (hh, mm, ss) = (sod / 3600, sod / 60 % 60, sod % 60);
