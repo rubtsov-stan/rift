@@ -247,8 +247,16 @@ fn a_single_1gib_line() {
     let report = fs::read_to_string(dir.path().join("stats")).unwrap();
     eprintln!("{report}");
     let peak = report.lines().find(|l| l.starts_with("peak heap")).unwrap();
-    let mib: f64 = peak.split(' ').nth(2).unwrap().parse().unwrap();
-    assert!(peak.contains("MiB") && mib <= 256.0, "{peak}");
+    let bytes: u64 = peak
+        .rsplit('(')
+        .next()
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(bytes <= 256 << 20, "{peak}");
     assert!(fs::metadata(&patch).unwrap().len() > 2 << 30);
     // GNU patch takes lines of any length; the system patch on macOS
     // may not, so only gpatch is asked when it is there.

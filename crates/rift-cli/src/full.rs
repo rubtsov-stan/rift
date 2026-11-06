@@ -12,10 +12,10 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::Context;
 use rift_core::diff::Diff;
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict};
-use rift_core::{Budget, Bytes, alloc};
+use rift_core::{Budget, Bytes};
 
 use crate::source::FileSource;
-use crate::summary::{human, print_moves};
+use crate::summary::{peak_heap, print_moves};
 
 /// The two inputs, opened.
 pub struct Files<'p> {
@@ -51,7 +51,7 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
     };
     let written = diff.write_unified(&opts, io::stdout().lock())?;
     if stats {
-        eprintln!("peak heap {} of {}", human(alloc::peak()), human(mem));
+        eprintln!("{}", peak_heap(mem));
         eprintln!("time {:.2} s", start.elapsed().as_secs_f64());
         eprintln!(
             "approx {} segments, {} lines in a and b",

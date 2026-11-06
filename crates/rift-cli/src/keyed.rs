@@ -5,10 +5,10 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use rift_core::keyed::{ChangeKind, KeySpec, KeyedChange, compare};
-use rift_core::{Budget, Bytes, LineNo, alloc};
+use rift_core::{Budget, Bytes, LineNo};
 
 use crate::source::FileSource;
-use crate::summary::human;
+use crate::summary::peak_heap;
 
 /// Compares `a` and `b` record by record, keyed by `spec`, under `mem`,
 /// and prints one line per changed key. Exit code 0 when no key changed,
@@ -35,7 +35,7 @@ pub fn run(
     out.flush()?;
     let report = result.map_err(|e| incomplete(e.into(), printed))?;
     if stats {
-        eprintln!("peak heap {} of {}", human(alloc::peak()), human(mem));
+        eprintln!("{}", peak_heap(mem));
         eprintln!("time {:.2} s", start.elapsed().as_secs_f64());
         eprintln!(
             "passes {}, records {} in a and {} in b",

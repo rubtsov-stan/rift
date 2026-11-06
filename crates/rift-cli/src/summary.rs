@@ -80,13 +80,25 @@ pub fn run<A: Source, B: Source>(a: &A, b: &B, mem: Bytes) -> anyhow::Result<Exi
         println!("  ... and {more} more");
     }
     print_moves(&mut io::stdout().lock(), &moves, off_chain.dropped())?;
-    println!("peak heap {} of {}", human(alloc::peak()), human(mem));
+    println!("{}", peak_heap(mem));
     println!("time {:.2} s", elapsed.as_secs_f64());
     Ok(if map.is_identical() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
     })
+}
+
+/// The peak heap line: rounded for people, then exact in bytes, so a
+/// check against `--mem` does not depend on rounding.
+pub fn peak_heap(mem: Bytes) -> String {
+    let peak = alloc::peak();
+    format!(
+        "peak heap {} of {} ({} bytes)",
+        human(peak),
+        human(mem),
+        peak.0
+    )
 }
 
 /// A byte count in the largest binary unit that keeps it at least 1.
