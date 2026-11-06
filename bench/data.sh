@@ -9,6 +9,7 @@
 #   DIR/real/pagila.sql             Pagila pg_dump (data + insert files)
 #   DIR/real/gh.ndjson              GH Archive 2024-01-15 hours 10 to 13
 #   DIR/real/tlc.csv                NYC TLC yellow 2015-01 (needs python3 + pyarrow)
+#   DIR/real/bgl.log                Loghub BGL, message part of each line (needs unzip)
 #   DIR/real/*.b.*                  each real file with 0.1% mutated lines
 set -eu
 
@@ -28,7 +29,7 @@ gen_pair() { # name size
   [ -f "$dir/$1/manifest.tsv" ] && return 0
   rm -rf "$dir/$1.part"
   "$gen" --seed 7 --size "$2" --profile sql --out "$dir/$1.part"
-  rm -rf "$dir/$1"
+  rm -rf "${dir:?}/$1"
   mv "$dir/$1.part" "$dir/$1"
 }
 gen_pair gen1g 1G
@@ -65,7 +66,26 @@ if [ ! -f tlc.csv ]; then
     echo "tlc.csv skipped: python3 with pyarrow is needed to convert the parquet file" >&2
   fi
 fi
-for f in pagila.sql gh.ndjson tlc.csv; do
+# Loghub BGL: Zenodo record 8196385, CC BY 4.0. Every full line
+# is different (microsecond timestamps), so only fields 7 on, from "RAS" to
+# the end of the message, are kept: 359k different lines out of 4.7M, 299 MiB.
+bgl_url='https://zenodo.org/records/8196385/files/BGL.zip?download=1'
+bgl_zip_sha256=d67fd82a711aea0157a9b83175892c6ee60e384a2ddf5bc51f39118453816da8
+bgl_sha256=a56a414f612d729db654ce36f7dfc1672fe1686a1727f5ccd9335f21bdfe0323
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+if [ ! -f bgl.log ]; then
+  if command -v unzip >/dev/null 2>&1; then
+    fetch "$bgl_url" bgl.zip
+    [ "$(sha256 bgl.zip)" = "$bgl_zip_sha256" ] || { echo "bgl.zip: sha256 mismatch" >&2; exit 1; }
+    unzip -p bgl.zip BGL.log | LC_ALL=C cut -d' ' -f7- > bgl.log.part
+    [ "$(sha256 bgl.log.part)" = "$bgl_sha256" ] || { echo "bgl.log: sha256 mismatch" >&2; exit 1; }
+    mv bgl.log.part bgl.log
+    rm bgl.zip
+  else
+    echo "bgl.log skipped: unzip is needed to unpack the Loghub archive" >&2
+  fi
+fi
+for f in pagila.sql gh.ndjson tlc.csv bgl.log; do
   [ -f "$f" ] || continue
   b="${f%.*}.b.${f##*.}"
   [ -f "$b" ] || { "$spike" mutate "$f" "$b.part" 1 0.001 && mv "$b.part" "$b"; }
