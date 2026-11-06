@@ -1,0 +1,10 @@
+.SH DESCRIPTION
+\fBrift\fR compares two text files of any size, from megabytes to
+hundreds of gigabytes, under a heap limit set with \fB\-\-mem\fR. It
+writes a unified diff that \fBpatch\fR(1) applies to \fIA\fR to get
+\fIB\fR. Its other modes print a summary, open a terminal view, or
+compare records by key.
+.PP
+Rift hashes every line once and cuts the pair into segments at lines that
+occur once in each file. Segments with identical bytes are equal. The
+others are refined on demand.

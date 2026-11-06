@@ -1,0 +1,21 @@
+[package]
+name = "xtask"
+description = "Developer tasks for the Rift workspace, not shipped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+rift-diff = { path = "../rift-cli" }
+clap.workspace = true
+clap_mangen.workspace = true
+anyhow.workspace = true
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true

@@ -1,0 +1,181 @@
+.SH MODES
+.TP
+\fBrift\fR [\fIoptions\fR] \fIA\fR \fIB\fR
+Writes a unified diff to standard output, as \fBdiff \-u\fR does.
+\fBpatch\fR(1) applied to \fIA\fR gives \fIB\fR.
+.TP
+\fB\-\-summary\fR
+Writes no diff. Prints the line and byte count of each file, the number
+of segments that are equal, differing or approximate, the first 10
+differing ranges (counted from 0, end excluded), the moved blocks, the
+peak heap and the time.
+.TP
+\fB\-i\fR, \fB\-\-interactive\fR, \fBrift tui\fR \fIA\fR \fIB\fR
+Opens a terminal view of the diff. The view is usable before the diff is
+complete. A hunk still being refined shows as one pending row and fills
+in by itself. The keys are:
+.RS
+.TP
+\fBn\fR, \fBp\fR
+Jump to the next and previous difference.
+.TP
+\fBspace\fR, \fBb\fR
+Page down and up.
+.TP
+\fBg\fR, \fB:\fR
+Go to a line of \fIA\fR.
+.TP
+\fBm\fR
+Jump from the first moved block on screen to its other end.
+.TP
+\fBq\fR
+Quit.
+.RE
+.IP
+\fBrift tui\fR is \fBrift \-i\fR. With fewer than two arguments after
+\fBtui\fR, it is a file name.
+.TP
+\fB\-\-key\fR \fISPEC\fR
+Compares records by key and ignores their order. Prints one line per
+key that differs, with tabs between the fields and line numbers counted
+from 1. \fB~\fR marks a key in both files with different records, \fB\-\fR a key only in
+\fIA\fR, \fB+\fR a key only in \fIB\fR. \fIA\fR and \fIB\fR are the line where the record starts,
+or \fB\-\fR when it is absent:
+.RS
+.nf
+~\fIKEY\fR	\fIA\fR	\fIB\fR
+\-\fIKEY\fR	\fIA\fR	\-
++\fIKEY\fR	\-	\fIB\fR
+.fi
+.RE
+.IP
+\fISPEC\fR is one of:
+.RS
+.TP
+\fBcsv:\fIN\fR
+CSV column \fIN\fR, from 1.
+.TP
+\fBcsv:\fINAME\fR
+CSV column with the header \fINAME\fR.
+.TP
+\fBjson:\fIPATH\fR
+Dotted field path in NDJSON records, such as \fBuser.id\fR.
+.TP
+\fBcopy:\fINAME\fR
+Column \fINAME\fR of the \fBCOPY\fR blocks of a \fBpg_dump\fR file.
+.RE
+.IP
+The key is printed as the file has it, quotes included. A tab, line
+break or backslash in a key prints as \fB\\t\fR, \fB\\n\fR or
+\fB\\\\\fR. A record counts as unchanged only after its bytes compare
+equal. A key that occurs twice in one file stops the run with exit status
+2. \fB\-\-key\fR cannot be combined with \fB\-\-summary\fR or
+\fB\-\-interactive\fR.
+.TP
+\fB\-\-stats\fR
+After a diff, prints to standard error the peak heap, the time, the
+number of approximate regions and the moved blocks. With \fB\-\-key\fR it
+prints the peak heap, the time, the number of passes over the files and
+the number of records in each file.
+.TP
+\fB\-\-mem\fR \fISIZE\fR
+Sets the heap limit. The default is 256M. A limit below about 12 MiB is
+refused with a budget error. In key mode a larger limit means fewer
+passes over the files.
+.SH EXIT STATUS
+Exit status follows \fBdiff\fR(1).
+.TP
+\fB0\fR
+The files are identical.
+.TP
+\fB1\fR
+The files differ.
+.TP
+\fB2\fR
+An error: an unreadable file, a budget too small, a duplicate key or an
+invalid option. The message goes to standard error.
+.SH MEMORY
+The heap stays at or under \fB\-\-mem\fR. Rift reserves each allocation
+on the data path from the budget before it makes it, and reads files with
+\fBpread\fR(2) into fixed buffers. It does not map files into memory. The
+test suite checks the peak with a counting allocator.
+.PP
+These are not guaranteed:
+.IP \(bu 2
+The resident set size. It also holds the binary, thread stacks and the
+page cache the kernel counts against the process.
+.IP \(bu 2
+A minimal diff. Like patience diff, the output can show a change as
+larger than the smallest possible one.
+.IP \(bu 2
+Detection of every moved block. Blocks are found from sampled lines, so
+some moves are missed.
+.SH APPROXIMATE REGIONS
+When a region is too large to refine within the budget, Rift replaces it
+whole: the output is still correct, but coarse. This happens in large
+regions with no line that is unique in both files, such as long runs of
+identical lines.
+.PP
+The unified diff marks such a hunk with the word \fBapprox\fR after the
+closing \fB@@\fR of its header, where \fBdiff \-p\fR prints a function
+name. \fBpatch\fR(1) ignores it. The terminal view draws the hunk in
+yellow with a \fB~\fR. \fB\-\-stats\fR counts the approximate segments
+and lines.
+.SH MOVED BLOCKS
+A block of at least 3 lines that appears in both files at different
+positions is reported as moved. The unified diff still shows it as a
+deletion and an insertion. \fB\-\-summary\fR and \fB\-\-stats\fR list the
+blocks, and the \fBm\fR key in the terminal view jumps to the other end
+of one. When the budget leaves no room for the search, the output says so.
+.SH EXAMPLES
+Write a patch and apply it:
+.PP
+.RS
+.nf
+rift a.sql b.sql > changes.patch
+patch a.sql changes.patch
+.fi
+.RE
+.PP
+Browse the differences:
+.PP
+.RS
+.nf
+rift \-i a.sql b.sql
+.fi
+.RE
+.PP
+Count the differences without writing a diff, with a 1 GiB heap limit:
+.PP
+.RS
+.nf
+rift \-\-summary \-\-mem 1G a.csv b.csv
+.fi
+.RE
+.PP
+Write a patch and report the peak heap and time on standard error:
+.PP
+.RS
+.nf
+rift \-\-stats a b > changes.patch
+.fi
+.RE
+.PP
+Compare two CSV files by the column \fBid\fR, whatever the row order:
+.PP
+.RS
+.nf
+rift \-\-key csv:id a.csv b.csv
+.fi
+.RE
+.PP
+Compare NDJSON by a nested field, and a \fBpg_dump\fR by a COPY column:
+.PP
+.RS
+.nf
+rift \-\-key json:user.id a.ndjson b.ndjson
+rift \-\-key copy:id a.sql b.sql
+.fi
+.RE
+.SH SEE ALSO
+\fBdiff\fR(1), \fBpatch\fR(1)
