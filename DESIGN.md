@@ -560,3 +560,23 @@ pair and targets the second pass over differing regions. It starts after
 shingle anchors, since both change the skeleton's comparison path.
 Homebrew returns to the release installers once the tap repository and
 its token exist.
+
+What the pass changed, measured on an Apple M1 with warm cache unless
+stated. The serial part of the skeleton shrank: the chain search reads
+its tails from a dense array and skips the search when a candidate
+extends the longest chain, the unique-line table is filled by every
+thread, each owning a range of its slots, and shingles find their gaps
+without copying or sorting the candidates. The scheduler wakes one
+worker per new job instead of every thread, and the unified writer
+reuses the bytes its last read left in the buffer and moves the visible
+window a quarter of its length at a time. Together, on the 1 GiB `sql`
+pair, `--summary` at `--mem 1G` went from 0.81 to 0.57 s and the full
+diff from 0.99 to 0.67 s at `--mem 1G` and from 0.58 to 0.45 s at the
+default 256 MiB (medians of 6); pagila takes 34.5 ms for `--summary` and 37.6 ms for
+the full diff, against 45.9 and 52.4 ms before (means of 50 runs). A
+larger budget still costs more than a smaller one, since it picks a
+lower stratum and every stage handles more samples, for a finer map.
+On the 10 GiB pair, which is larger than the page cache, both modes are
+bound by the disk: `--summary` takes 2.2 times `cat` and the full diff
+spends 93% of its samples in `pread`, mostly the reads of differing
+regions.
