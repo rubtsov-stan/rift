@@ -459,26 +459,51 @@ pair measured.
 
 `rift --key SPEC a b` compares records by key, in any row order, and
 prints the added, removed and changed keys with their line numbers. Each
-pass owns a range of key hashes and reads A and B side by side, at the
-same relative position, skipping records outside its range. A record
-waits in memory, bytes included, until its key turns up in the other
-file; the two records are then compared byte by byte and only the key
-hash stays, at 8 bytes, to catch a third occurrence. Files in roughly the
-same order keep few records waiting, so a pass holds about 8 bytes per
-key. The hash table comes from the skeleton half, the read buffers and
-the waiting records from the refine half. When either fills up, the pass
-drops the top of its range, sized from how far it has read, and goes on;
-the next pass starts where it stopped. Each pass rereads both files and
+pass owns a range of key hashes and reads A and B side by side, a window
+of each at the same relative position, skipping records outside its
+range. A record waits in memory, bytes included, until its key turns up
+in the other file; the two records are then compared byte by byte and
+only a 31-bit fingerprint of the key hash stays, in a 4-byte table slot,
+to catch a third occurrence. At 80% load that is 5 bytes per key, and
+files in roughly the same order keep few records waiting. The tables
+come from the skeleton half; the windows, their record lists and the
+waiting records from the refine half. Each pass rereads both files and
 writes nothing to disk.
 
+The work is spread over threads twice. Each window is cut into chunks
+at line breaks and every chunk is split into records on its own thread,
+assuming a record starts at its first byte and the parser is in the
+state the window started in. A chunk counts only if the one before it
+ended where it starts, in that state; a quoted line break at a cut, or
+a `COPY` header or terminator inside the window, makes the rest parse
+again from there. The pass's range is then split between shards, one
+per thread, by bits of the key hash the table does not use, and each
+shard takes its records with a table and waiting records of its own.
+Under 16 MiB of budget one thread does all of it. With more, the thread
+pool's own heap is reserved from the refine half, 16 KiB per thread.
+
+A fingerprint cannot tell which keys lie above a new top of the range,
+so when a shard's table or waiting records fill up the pass starts over
+on a narrower range: the tables fill as the files are read, so the new
+range is the share they should hold to the end; waiting records halve
+it at most, and cap how far the next passes widen it back. A pass that
+ends with its tables under 90% full widens the next one, at most
+twofold. On the 10 GiB `shuffled` CSV pair (seed 7, `--mem 256M`, Apple
+M1, files larger than the page cache) this takes 6 passes and about
+41 s, against 13 passes and 157 to 231 s before; each pass now runs at
+the speed of the disk, about 3.2 GB/s.
+
 A key found twice while its first record waits is a duplicate. A key
-whose hash matches a key already matched is only a suspect, since the
-matched key's bytes are gone; at the end of the pass, a read of both
-files counts the suspects exactly. The error lists the first few
-duplicates. Storing A's records whole, as a plain partition by key hash
-would, costs about 12 times more memory per record on `shuffled` CSV
-(138 bytes against 11 for an 81-byte row) and as many more passes. A record counts as unchanged only after its bytes
-compare equal. `shuffled` is the test bed: its manifest names every
+whose fingerprint matches a matched key is only a suspect, since the
+matched key's bytes are gone; the next pass, or one more read when
+there is none, counts the suspects in their file, so a duplicate can
+surface after the changes of its pass were printed. A pass that piles
+up too many suspects stops and counts them at once. The error lists the
+first few duplicates. Storing A's records whole, as a plain partition
+by key hash would, costs about 28 times more memory per record on
+`shuffled` CSV (138 bytes against 5 for an 81-byte row) and as many
+more passes. A record counts as unchanged only after its bytes compare
+equal. `shuffled` is the test bed: its manifest names every
 change, and a pair that is only reordered reports none.
 
 ### Moved blocks

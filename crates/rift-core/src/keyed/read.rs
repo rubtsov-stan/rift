@@ -1,24 +1,39 @@
-//! Records and their keys, read from a [`Source`] through one buffer.
+//! Records and their keys, read from a [`Source`] one window at a time and
+//! split into records on several threads.
 //!
 //! A record is one line, except in CSV, where a quoted field can hold line
 //! breaks. Its bytes leave out the line terminator (`\n` or `\r\n`), so a
 //! change of line ending alone is not a change of the record. Blank lines
 //! are not records, and in a `pg_dump` only the rows of `COPY` blocks that
 //! have the key column are.
+//!
+//! A window is cut into chunks at line breaks, and every chunk is parsed
+//! on its own thread as if a record started at its first byte, in the
+//! state the window started in. A chunk counts only when the one before
+//! it ended where it starts, in the state it assumed; otherwise the next
+//! round parses again from there. A quoted line break at a cut, or a
+//! `COPY` header or terminator, costs a round; plain rows never do.
 
 use std::io;
 use std::ops::Range;
+use std::sync::{Mutex, PoisonError};
 
 use memchr::{memchr, memchr2, memchr3};
+use rayon::prelude::*;
 use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
 use super::{CsvColumn, KeyError, KeySpec, Side};
-use crate::budget::{Budget, Half, Reservation};
+use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineNo};
 
-/// One record in the reader's buffer.
+/// Fewest bytes in a chunk; a smaller window is parsed by one thread.
+const MIN_CHUNK: usize = if cfg!(test) { 8 } else { 64 << 10 };
+/// Suspects one read counts at most.
+pub(crate) const SUSPECTS: usize = 64;
+
+/// One record in a reader's window.
 #[derive(Debug)]
 pub(crate) struct Record<'b> {
     /// The record without its line terminator.
@@ -79,27 +94,630 @@ fn id(i: usize) -> u32 {
     i as u32 + 1
 }
 
+/// A key seen again after its match: a duplicate, or another key whose
+/// hash shares the matched key's table slot fingerprint. A later read of
+/// its file counts it.
+#[derive(Debug)]
+pub(crate) struct Suspect {
+    pub side: Side,
+    pub table: u32,
+    pub hash: u64,
+    pub key: Vec<u8>,
+}
+
+/// Which records a read keeps, by key hash, and which suspects it counts.
+#[derive(Debug)]
+pub(crate) struct Filter<'p> {
+    lo: u64,
+    hi: u64,
+    suspects: &'p [Suspect],
+    /// One bit per suspect hash, to skip the list for almost every record.
+    mask: u64,
+}
+
+impl<'p> Filter<'p> {
+    /// Keeps hashes in `lo..hi` and counts the first [`SUSPECTS`] of
+    /// `suspects`.
+    pub(crate) fn new(lo: u64, hi: u64, suspects: &'p [Suspect]) -> Self {
+        let suspects = &suspects[..suspects.len().min(SUSPECTS)];
+        let mask = suspects.iter().fold(0, |m, s| m | bit(s.hash));
+        Self {
+            lo,
+            hi,
+            suspects,
+            mask,
+        }
+    }
+
+    fn count(&self, side: Side, table: u32, hash: u64, key: &[u8], seen: &mut [u32; SUSPECTS]) {
+        if self.mask & bit(hash) == 0 {
+            return;
+        }
+        for (s, n) in self.suspects.iter().zip(seen) {
+            if s.side == side && s.hash == hash && s.table == table && s.key == key {
+                *n = n.saturating_add(1);
+            }
+        }
+    }
+}
+
+fn bit(hash: u64) -> u64 {
+    1 << ((hash >> 1) & 63)
+}
+
+/// A record kept from a window, as offsets into it.
+#[derive(Debug, Clone, Copy)]
+struct Rec {
+    hash: u64,
+    off: u32,
+    len: u32,
+    key_off: u32,
+    key_len: u32,
+    /// Lines from the chunk's first.
+    line: u32,
+    table: u32,
+}
+
+const _: () = assert!(size_of::<Rec>() == 32);
+
 /// What the reader knows about the file's layout.
 #[derive(Debug)]
-enum Format {
-    /// CSV; `col` is `None` until the header names the column.
-    Csv {
-        col: Option<u32>,
-        name: Option<Box<str>>,
-    },
+enum Kind {
+    /// CSV, keyed by the column the header names, or by position.
+    Csv { name: Option<Box<str>> },
     /// NDJSON with a field path.
     Ndjson(Box<[Box<str>]>),
     /// `pg_dump` text, keyed by a `COPY` column.
-    Copy { name: Box<str>, block: Block },
+    Copy { name: Box<str> },
 }
 
 /// Where a `pg_dump` reader is.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Block {
     /// Outside any `COPY` block.
     Outside,
-    /// In a block; its rows are records when the block has the column.
+    /// In a block; its rows are records when the block has the column,
+    /// with that column, the table's id and its hash seed.
     Rows(Option<(u32, u32, u64)>),
+}
+
+/// The parser's state at a record boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct State {
+    /// The CSV key column, once known.
+    col: Option<u32>,
+    block: Block,
+}
+
+/// Why a chunk's parse ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// It reached the chunk's end.
+    Done,
+    /// A record runs past the bytes read so far.
+    Short,
+    /// Its list could not grow.
+    Full,
+    /// A record has no key, or a read failed.
+    Failed,
+}
+
+/// The error a chunk stopped on, with the line counted from its first.
+#[derive(Debug)]
+enum Fault {
+    NoKey(u64),
+    Other(Error),
+}
+
+/// One chunk of a window: where it starts and ends and the records it
+/// keeps.
+#[derive(Debug)]
+struct Chunk {
+    recs: Vec<Rec>,
+    /// Refine half: `recs`.
+    res: Reservation,
+    start: usize,
+    until: usize,
+    end: usize,
+    state0: State,
+    state1: State,
+    lines: u64,
+    /// File line of its first byte, once it counts.
+    line0: u64,
+    records: u64,
+    blocks: u64,
+    seen: [u32; SUSPECTS],
+    stop: Stop,
+    fault: Option<Fault>,
+}
+
+impl Chunk {
+    /// Splits `buf[self.start..]` into records up to `self.until`, keeping
+    /// those `filter` keeps. A record that starts before `until` is read
+    /// whole, past it if need be.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the window stays below 4 GiB, see Reader::refill"
+    )]
+    fn parse(&mut self, buf: &[u8], eof: bool, ctx: &Ctx<'_>) {
+        self.recs.clear();
+        (self.lines, self.records, self.blocks) = (0, 0, 0);
+        self.seen = [0; SUSPECTS];
+        self.fault = None;
+        self.stop = Stop::Done;
+        let mut state = self.state0;
+        let mut pos = self.start;
+        while pos < self.until {
+            if self.recs.len() == self.recs.capacity()
+                && !grow(&mut self.recs, &mut self.res, ctx.budget, 1)
+            {
+                self.stop = Stop::Full;
+                break;
+            }
+            let avail = &buf[pos..];
+            let split = match ctx.kind {
+                Kind::Csv { .. } => csv_record(avail, state.col.unwrap_or(u32::MAX), eof),
+                _ => line_record(avail, eof),
+            };
+            let Some(split) = split else {
+                self.stop = Stop::Short;
+                break;
+            };
+            let rec = &avail[..split.len];
+            let line = self.lines;
+            let found = if rec.is_empty() {
+                Ok(None)
+            } else {
+                ctx.key_of(&mut state, rec, split.key, &mut self.blocks)
+            };
+            let found = match found {
+                Ok(found) => found,
+                Err(fault) => {
+                    self.fault = Some(match fault {
+                        None => Fault::NoKey(line),
+                        Some(e) => Fault::Other(e),
+                    });
+                    self.stop = Stop::Failed;
+                    break;
+                }
+            };
+            let at = pos;
+            pos += split.next;
+            self.lines += split.lines;
+            let Some((key, table, seed)) = found else {
+                continue;
+            };
+            self.records += 1;
+            let hash = key_hash(&rec[key.clone()], seed);
+            let filter = ctx.filter;
+            filter.count(ctx.side, table, hash, &rec[key.clone()], &mut self.seen);
+            if hash >= filter.lo && hash < filter.hi {
+                self.recs.push(Rec {
+                    hash,
+                    off: at as u32,
+                    len: split.len as u32,
+                    key_off: key.start as u32,
+                    key_len: key.len() as u32,
+                    line: line as u32,
+                    table,
+                });
+            }
+        }
+        self.end = pos;
+        self.state1 = state;
+    }
+}
+
+/// A record's key, its table and the table's hash seed; `None` for a line
+/// that is not a record.
+type Found = Option<(Range<usize>, u32, u64)>;
+
+/// What every chunk of a window shares while it is parsed.
+struct Ctx<'c> {
+    kind: &'c Kind,
+    side: Side,
+    tables: &'c Mutex<Tables>,
+    filter: &'c Filter<'c>,
+    budget: &'c Budget,
+}
+
+impl Ctx<'_> {
+    /// The key, table and seed of a record, `None` for a line that is not
+    /// a record; `Err(None)` for a record without its key.
+    fn key_of(
+        &self,
+        state: &mut State,
+        rec: &[u8],
+        csv_key: Option<Range<usize>>,
+        blocks: &mut u64,
+    ) -> std::result::Result<Found, Option<Error>> {
+        match self.kind {
+            Kind::Csv { name } => {
+                if state.col.is_some() {
+                    return csv_key.map(|k| Some((k, 0, 0))).ok_or(None);
+                }
+                let name = name.as_deref().unwrap_or_default();
+                let found = (0..u32::MAX)
+                    .map_while(|i| csv_field(rec, i).map(|r| (i, r)))
+                    .find(|(_, r)| unquoted_eq(&rec[r.clone()], name.as_bytes()));
+                let Some((i, key)) = found else {
+                    return Err(Some(Error::Keyed(KeyError::NoColumn {
+                        side: self.side,
+                        name: name.into(),
+                    })));
+                };
+                state.col = Some(i);
+                Ok(Some((key, 0, 0)))
+            }
+            Kind::Ndjson(path) => json_key(rec, path).map(|k| Some((k, 0, 0))).ok_or(None),
+            Kind::Copy { name } => match state.block {
+                Block::Outside => {
+                    if let Some((table, cols)) = copy_header(rec) {
+                        state.block = Block::Rows(match copy_column(cols, name.as_bytes()) {
+                            Some(col) => {
+                                let (id, seed) = self
+                                    .tables
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .id(table)
+                                    .map_err(Some)?;
+                                *blocks += 1;
+                                Some((col, id, seed))
+                            }
+                            None => None,
+                        });
+                    }
+                    Ok(None)
+                }
+                Block::Rows(_) if rec == b"\\." => {
+                    state.block = Block::Outside;
+                    Ok(None)
+                }
+                Block::Rows(None) => Ok(None),
+                Block::Rows(Some((col, table, seed))) => tab_field(rec, col)
+                    .map(|k| Some((k, table, seed)))
+                    .ok_or(None),
+            },
+        }
+    }
+}
+
+/// Reads one file's records, front to back, any number of times.
+#[derive(Debug)]
+pub(crate) struct Reader<'s, S: ?Sized> {
+    src: &'s S,
+    side: Side,
+    kind: Kind,
+    /// At `buf[start]`.
+    state: State,
+    buf: Vec<u8>,
+    /// Refine half: the buffer and the chunk list.
+    res: Reservation,
+    budget: Budget,
+    start: usize,
+    end: usize,
+    /// File offset of `buf[end]`.
+    pos: u64,
+    /// Line of `buf[start]`.
+    line: u64,
+    eof: bool,
+    /// `COPY` blocks seen with the key column, and records, since the
+    /// last rewind.
+    blocks: u64,
+    records: u64,
+    chunks: Vec<Chunk>,
+    /// Chunks of the last round that count.
+    valid: usize,
+    seen: [u32; SUSPECTS],
+}
+
+impl<'s, S: Source + ?Sized> Reader<'s, S> {
+    /// A reader with a `buf`-byte window cut into at most `chunks`
+    /// chunks, from the refine half.
+    pub(crate) fn new(
+        src: &'s S,
+        side: Side,
+        spec: &KeySpec,
+        budget: &Budget,
+        buf: usize,
+        chunks: usize,
+    ) -> Result<Self> {
+        let chunks = chunks.max(1);
+        let res = budget.try_reserve(
+            Half::Refine,
+            Bytes((buf + chunks * size_of::<Chunk>()) as u64),
+        )?;
+        let (kind, col) = match spec {
+            KeySpec::Csv(CsvColumn::Index(i)) => (Kind::Csv { name: None }, Some(*i)),
+            KeySpec::Csv(CsvColumn::Header(name)) => (
+                Kind::Csv {
+                    name: Some(name.as_str().into()),
+                },
+                None,
+            ),
+            KeySpec::Ndjson(path) => (
+                Kind::Ndjson(path.iter().map(|s| s.as_str().into()).collect()),
+                None,
+            ),
+            KeySpec::Copy(name) => (
+                Kind::Copy {
+                    name: name.as_str().into(),
+                },
+                None,
+            ),
+        };
+        let state = State {
+            col,
+            block: Block::Outside,
+        };
+        let mut list = Vec::with_capacity(chunks);
+        for _ in 0..chunks {
+            list.push(Chunk {
+                recs: Vec::new(),
+                res: budget.try_reserve(Half::Refine, Bytes(0))?,
+                start: 0,
+                until: 0,
+                end: 0,
+                state0: state,
+                state1: state,
+                lines: 0,
+                line0: 0,
+                records: 0,
+                blocks: 0,
+                seen: [0; SUSPECTS],
+                stop: Stop::Done,
+                fault: None,
+            });
+        }
+        Ok(Self {
+            src,
+            side,
+            kind,
+            state,
+            buf: vec![0; buf],
+            res,
+            budget: budget.clone(),
+            start: 0,
+            end: 0,
+            pos: 0,
+            line: 0,
+            eof: false,
+            blocks: 0,
+            records: 0,
+            chunks: list,
+            valid: 0,
+            seen: [0; SUSPECTS],
+        })
+    }
+
+    /// Goes back to the start of the file. A CSV column found in the
+    /// header stays found.
+    pub(crate) fn rewind(&mut self) {
+        (self.start, self.end, self.pos, self.line) = (0, 0, 0, 0);
+        self.eof = false;
+        (self.blocks, self.records, self.valid) = (0, 0, 0);
+        self.seen = [0; SUSPECTS];
+        self.state.block = Block::Outside;
+    }
+
+    /// Lines in the file, extrapolated from the first window. Reads it, so
+    /// call before the first [`advance`](Self::advance).
+    pub(crate) fn estimate_lines(&mut self) -> Result<u64> {
+        self.refill()?;
+        let lines = memchr::memchr_iter(b'\n', &self.buf[..self.end]).count() as u64 + 1;
+        let read = (self.end as u64).max(1);
+        Ok(
+            u64::try_from(u128::from(self.src.len().0) * u128::from(lines) / u128::from(read))
+                .unwrap_or(u64::MAX)
+                .max(lines),
+        )
+    }
+
+    /// Frees the record lists, which keep their largest size otherwise;
+    /// for a pass that starts over on a narrower range.
+    pub(crate) fn shrink_lists(&mut self) {
+        for c in &mut self.chunks {
+            c.res
+                .shrink(Bytes((c.recs.capacity() * size_of::<Rec>()) as u64));
+            c.recs = Vec::new();
+        }
+    }
+
+    /// Bytes in the file.
+    pub(crate) fn len(&self) -> u64 {
+        self.src.len().0
+    }
+
+    /// Bytes of the file read and split into records so far.
+    pub(crate) fn consumed(&self) -> u64 {
+        self.pos - (self.end - self.start) as u64
+    }
+
+    /// `COPY` blocks with the key column since the last rewind.
+    pub(crate) fn blocks(&self) -> u64 {
+        self.blocks
+    }
+
+    /// Records since the last rewind.
+    pub(crate) fn records(&self) -> u64 {
+        self.records
+    }
+
+    /// How often each suspect of this file was seen since the last rewind.
+    pub(crate) fn seen(&self) -> &[u32; SUSPECTS] {
+        &self.seen
+    }
+
+    /// The records the last [`advance`](Self::advance) kept, in file
+    /// order.
+    pub(crate) fn kept(&self) -> impl Iterator<Item = Record<'_>> {
+        let buf = &self.buf;
+        self.chunks[..self.valid].iter().flat_map(move |c| {
+            c.recs.iter().map(move |r| {
+                let at = r.off as usize;
+                let bytes = &buf[at..at + r.len as usize];
+                Record {
+                    bytes,
+                    key: r.key_off as usize..(r.key_off + r.key_len) as usize,
+                    line: c.line0 + u64::from(r.line),
+                    table: r.table,
+                    hash: r.hash,
+                }
+            })
+        })
+    }
+
+    /// Reads and splits the next window, keeping the records `filter`
+    /// keeps; `false` at the end of the file.
+    ///
+    /// # Errors
+    ///
+    /// A record without the key, a CSV header without the named column, a
+    /// record that does not fit in the buffer, or a read error.
+    pub(crate) fn advance(&mut self, tables: &Mutex<Tables>, filter: &Filter<'_>) -> Result<bool> {
+        self.valid = 0;
+        if !self.eof {
+            self.refill()?;
+        }
+        if self.start == self.end && self.eof {
+            return Ok(false);
+        }
+        let (base, end) = (self.start, self.end);
+        let n = if matches!(self.kind, Kind::Csv { .. }) && self.state.col.is_none() {
+            1
+        } else {
+            ((end - base) / MIN_CHUNK).clamp(1, self.chunks.len())
+        };
+        let size = (end - base).div_ceil(n);
+        let mut k = 0;
+        let mut at = base;
+        while k < n && at < end {
+            let nominal = base + (k + 1) * size;
+            let next = if nominal >= end {
+                end
+            } else {
+                memchr(b'\n', &self.buf[nominal..end]).map_or(end, |i| nominal + i + 1)
+            };
+            let c = &mut self.chunks[k];
+            (c.start, c.until, c.state0) = (at, next, self.state);
+            at = next;
+            k += 1;
+        }
+        let ctx = Ctx {
+            kind: &self.kind,
+            side: self.side,
+            tables,
+            filter,
+            budget: &self.budget,
+        };
+        let (buf, eof) = (&self.buf[..end], self.eof);
+        if k == 1 {
+            self.chunks[0].parse(buf, eof, &ctx);
+        } else {
+            self.chunks[..k]
+                .par_iter_mut()
+                .for_each(|c| c.parse(buf, eof, &ctx));
+        }
+        for i in 0..k {
+            if i > 0 {
+                let (p, c) = (&self.chunks[i - 1], &self.chunks[i]);
+                if p.stop != Stop::Done || p.end != c.start || p.state1 != c.state0 {
+                    break;
+                }
+            }
+            let c = &mut self.chunks[i];
+            c.line0 = self.line;
+            if let Some(fault) = c.fault.take() {
+                return Err(match fault {
+                    Fault::NoKey(l) => Error::Keyed(KeyError::NoKey {
+                        side: self.side,
+                        line: LineNo(self.line + l),
+                    }),
+                    Fault::Other(e) => e,
+                });
+            }
+            self.line += c.lines;
+            self.records += c.records;
+            self.blocks += c.blocks;
+            for (s, n) in self.seen.iter_mut().zip(c.seen) {
+                *s = s.saturating_add(n);
+            }
+            self.start = c.end;
+            self.state = c.state1;
+            self.valid = i + 1;
+        }
+        if self.start == base && self.chunks[0].stop == Stop::Full {
+            return Err(Error::Budget(BudgetExceeded {
+                half: Half::Refine,
+                requested: Bytes(size_of::<Rec>() as u64),
+                available: self.budget.available(Half::Refine),
+            }));
+        }
+        Ok(true)
+    }
+
+    /// Moves the unread bytes to the front and reads until the buffer is
+    /// full, growing it when one record fills it. The buffer stays below
+    /// 4 GiB so a record's offsets fit `u32`.
+    fn refill(&mut self) -> Result<()> {
+        if self.start > 0 {
+            self.buf.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+        }
+        if self.end == self.buf.len() {
+            let more = self.buf.len();
+            if self.buf.len() + more > u32::MAX as usize
+                || self.res.grow(Bytes(more as u64)).is_err()
+                || self.buf.try_reserve_exact(more).is_err()
+            {
+                return Err(Error::LineTooLong {
+                    line: LineNo(self.line),
+                    cap: Bytes(self.buf.len() as u64),
+                });
+            }
+            self.buf.resize(self.buf.len() + more, 0);
+        }
+        while self.end < self.buf.len() {
+            match self
+                .src
+                .read_at(&mut self.buf[self.end..], ByteOffset(self.pos))
+            {
+                Ok(0) => {
+                    self.eof = true;
+                    break;
+                }
+                Ok(n) => {
+                    self.end += n;
+                    self.pos += n as u64;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Makes room for `need` more elements in `v`, paid from `res`: double
+/// the capacity when half of what the half has free allows, so the other
+/// lists keep room to grow, else exactly `need`.
+pub(crate) fn grow<T>(v: &mut Vec<T>, res: &mut Reservation, budget: &Budget, need: usize) -> bool {
+    if v.capacity() - v.len() >= need {
+        return true;
+    }
+    let size = size_of::<T>().max(1);
+    let free = usize::try_from(budget.available(Half::Refine).0).unwrap_or(usize::MAX) / size;
+    let missing = need - (v.capacity() - v.len());
+    let add = missing.max(v.capacity().max(64).min(free / 2));
+    if res.grow(Bytes((add * size) as u64)).is_err() {
+        return false;
+    }
+    if v.try_reserve_exact(v.capacity() + add - v.len()).is_err() {
+        res.shrink(Bytes((add * size) as u64));
+        return false;
+    }
+    true
 }
 
 /// A record split off the front of the buffer, as offsets into it.
@@ -113,237 +731,6 @@ struct Split {
     lines: u64,
     /// The key column, if the record has it (CSV only).
     key: Option<Range<usize>>,
-}
-
-/// Reads one file's records, front to back, any number of times.
-#[derive(Debug)]
-pub(crate) struct Reader<'s, S: ?Sized> {
-    src: &'s S,
-    side: Side,
-    format: Format,
-    buf: Vec<u8>,
-    /// Refine half: the buffer.
-    res: Reservation,
-    start: usize,
-    end: usize,
-    /// File offset of `buf[end]`.
-    pos: u64,
-    /// Line of `buf[start]`.
-    line: u64,
-    eof: bool,
-    /// `COPY` blocks seen with the key column.
-    blocks: u64,
-}
-
-impl<'s, S: Source + ?Sized> Reader<'s, S> {
-    /// A reader with a `buf`-byte buffer from the refine half.
-    pub(crate) fn new(
-        src: &'s S,
-        side: Side,
-        spec: &KeySpec,
-        budget: &Budget,
-        buf: usize,
-    ) -> Result<Self> {
-        let res = budget.try_reserve(Half::Refine, Bytes(buf as u64))?;
-        let format = match spec {
-            KeySpec::Csv(CsvColumn::Index(i)) => Format::Csv {
-                col: Some(*i),
-                name: None,
-            },
-            KeySpec::Csv(CsvColumn::Header(name)) => Format::Csv {
-                col: None,
-                name: Some(name.as_str().into()),
-            },
-            KeySpec::Ndjson(path) => {
-                Format::Ndjson(path.iter().map(|s| s.as_str().into()).collect())
-            }
-            KeySpec::Copy(name) => Format::Copy {
-                name: name.as_str().into(),
-                block: Block::Outside,
-            },
-        };
-        Ok(Self {
-            src,
-            side,
-            format,
-            buf: vec![0; buf],
-            res,
-            start: 0,
-            end: 0,
-            pos: 0,
-            line: 0,
-            eof: false,
-            blocks: 0,
-        })
-    }
-
-    /// Which file this is.
-    pub(crate) fn side(&self) -> Side {
-        self.side
-    }
-
-    /// Goes back to the start of the file.
-    pub(crate) fn rewind(&mut self) {
-        self.start = 0;
-        self.end = 0;
-        self.pos = 0;
-        self.line = 0;
-        self.eof = false;
-        self.blocks = 0;
-        if let Format::Copy { block, .. } = &mut self.format {
-            *block = Block::Outside;
-        }
-    }
-
-    /// Lines in the file, extrapolated from the first buffer. Reads it, so
-    /// call before the first [`next`](Self::next).
-    pub(crate) fn estimate_lines(&mut self) -> Result<u64> {
-        self.refill()?;
-        let lines = memchr::memchr_iter(b'\n', &self.buf[..self.end]).count() as u64 + 1;
-        let read = (self.end as u64).max(1);
-        Ok(
-            u64::try_from(u128::from(self.src.len().0) * u128::from(lines) / u128::from(read))
-                .unwrap_or(u64::MAX)
-                .max(lines),
-        )
-    }
-
-    /// Bytes of the file read and split into records so far.
-    pub(crate) fn consumed(&self) -> u64 {
-        self.pos - (self.end - self.start) as u64
-    }
-
-    /// `COPY` blocks with the key column since the last rewind.
-    pub(crate) fn blocks(&self) -> u64 {
-        self.blocks
-    }
-
-    /// The next record, or `None` at the end of the file.
-    ///
-    /// # Errors
-    ///
-    /// A record without the key, a CSV header without the named column, a
-    /// record that does not fit in the buffer, or a read error.
-    pub(crate) fn next(&mut self, tables: &mut Tables) -> Result<Option<Record<'_>>> {
-        let (at, len, key, line, table, seed) = loop {
-            if self.start == self.end && self.eof {
-                return Ok(None);
-            }
-            let avail = &self.buf[self.start..self.end];
-            let split = match &self.format {
-                Format::Csv { col, .. } => csv_record(avail, col.unwrap_or(u32::MAX), self.eof),
-                _ => line_record(avail, self.eof),
-            };
-            let Some(split) = split else {
-                self.refill()?;
-                continue;
-            };
-            let at = self.start;
-            let line = self.line;
-            self.start += split.next;
-            self.line += split.lines;
-            let rec = &self.buf[at..at + split.len];
-            if rec.is_empty() {
-                continue;
-            }
-            let no_key = || {
-                Error::Keyed(KeyError::NoKey {
-                    side: self.side,
-                    line: LineNo(line),
-                })
-            };
-            match &mut self.format {
-                Format::Csv { col: Some(_), .. } => {
-                    let key = split.key.ok_or_else(no_key)?;
-                    break (at, split.len, key, line, 0, 0);
-                }
-                Format::Csv { col, name } => {
-                    let name = name.as_deref().unwrap_or_default();
-                    let found = (0..u32::MAX)
-                        .map_while(|i| csv_field(rec, i).map(|r| (i, r)))
-                        .find(|(_, r)| unquoted_eq(&rec[r.clone()], name.as_bytes()));
-                    let Some((i, key)) = found else {
-                        return Err(Error::Keyed(KeyError::NoColumn {
-                            side: self.side,
-                            name: name.into(),
-                        }));
-                    };
-                    *col = Some(i);
-                    break (at, split.len, key, line, 0, 0);
-                }
-                Format::Ndjson(path) => {
-                    let key = json_key(rec, path).ok_or_else(no_key)?;
-                    break (at, split.len, key, line, 0, 0);
-                }
-                Format::Copy { name, block } => match *block {
-                    Block::Outside => {
-                        if let Some((table, cols)) = copy_header(rec) {
-                            let cols = copy_column(cols, name.as_bytes());
-                            *block = Block::Rows(match cols {
-                                Some(col) => {
-                                    let (id, seed) = tables.id(table)?;
-                                    self.blocks += 1;
-                                    Some((col, id, seed))
-                                }
-                                None => None,
-                            });
-                        }
-                    }
-                    Block::Rows(_) if rec == b"\\." => *block = Block::Outside,
-                    Block::Rows(None) => {}
-                    Block::Rows(Some((col, table, seed))) => {
-                        let key = tab_field(rec, col).ok_or_else(no_key)?;
-                        break (at, split.len, key, line, table, seed);
-                    }
-                },
-            }
-        };
-        let bytes = &self.buf[at..at + len];
-        Ok(Some(Record {
-            hash: key_hash(&bytes[key.clone()], seed),
-            bytes,
-            key,
-            line,
-            table,
-        }))
-    }
-
-    /// Moves the unread bytes to the front and reads more, growing the
-    /// buffer when one record fills it.
-    fn refill(&mut self) -> Result<()> {
-        if self.start > 0 {
-            self.buf.copy_within(self.start..self.end, 0);
-            self.end -= self.start;
-            self.start = 0;
-        }
-        if self.end == self.buf.len() {
-            let more = self.buf.len();
-            if self.res.grow(Bytes(more as u64)).is_err()
-                || self.buf.try_reserve_exact(more).is_err()
-            {
-                return Err(Error::LineTooLong {
-                    line: LineNo(self.line),
-                    cap: Bytes(self.buf.len() as u64),
-                });
-            }
-            self.buf.resize(self.buf.len() + more, 0);
-        }
-        loop {
-            match self
-                .src
-                .read_at(&mut self.buf[self.end..], ByteOffset(self.pos))
-            {
-                Ok(0) => self.eof = true,
-                Ok(n) => {
-                    self.end += n;
-                    self.pos += n as u64;
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e.into()),
-            }
-            return Ok(());
-        }
-    }
 }
 
 /// The line at the front of `buf`, or `None` if it may go on past it.
@@ -644,20 +1031,72 @@ mod tests {
 
     fn records(spec: &str, data: &[u8], buf: usize) -> Result<Vec<(u64, String, u32)>> {
         let budget = Budget::new(Bytes::mib(1));
-        let mut tables = Tables::new(&budget)?;
+        let tables = Mutex::new(Tables::new(&budget)?);
         let spec: KeySpec = spec.parse().unwrap();
-        let mut r = Reader::new(data, Side::A, &spec, &budget, buf)?;
         let mut out = Vec::new();
-        for _ in 0..2 {
-            out.clear();
-            r.rewind();
-            while let Some(rec) = r.next(&mut tables)? {
-                let key = String::from_utf8_lossy(&rec.bytes[rec.key.clone()]).into_owned();
-                out.push((rec.line, key, rec.table));
+        // One chunk, then many: the chunks must agree with one thread.
+        for chunks in [1, 4, 16] {
+            let mut r = Reader::new(data, Side::A, &spec, &budget, buf, chunks)?;
+            let filter = Filter::new(0, u64::MAX, &[]);
+            let mut runs = Vec::new();
+            for _ in 0..2 {
+                let mut got = Vec::new();
+                r.rewind();
+                while r.advance(&tables, &filter)? {
+                    for rec in r.kept() {
+                        let key = String::from_utf8_lossy(&rec.bytes[rec.key.clone()]).into_owned();
+                        got.push((rec.line, key, rec.table));
+                    }
+                }
+                assert_eq!(r.consumed(), data.len() as u64);
+                assert_eq!(r.records(), got.len() as u64);
+                runs.push(got);
             }
-            assert_eq!(r.consumed(), data.len() as u64);
+            assert_eq!(runs[0], runs[1]);
+            if chunks > 1 {
+                assert_eq!(runs[0], out, "{chunks} chunks");
+            }
+            out = runs.swap_remove(0);
         }
         Ok(out)
+    }
+
+    #[test]
+    fn chunks_that_guess_wrong_are_parsed_again() {
+        use std::fmt::Write;
+
+        // Quoted line breaks land on chunk cuts, and COPY headers and
+        // terminators change the state between chunks.
+        let mut csv = String::from("id,v\n");
+        for i in 0..300 {
+            if i % 7 == 0 {
+                write!(csv, "{i},\"a\nb\nc,\"\"q\"\"\n\"\n").unwrap();
+            } else {
+                writeln!(csv, "{i},x{i}").unwrap();
+            }
+        }
+        let got = records("csv:id", csv.as_bytes(), 1 << 10).unwrap();
+        assert_eq!(got.len(), 301);
+        assert!(
+            got.iter()
+                .skip(1)
+                .enumerate()
+                .all(|(i, r)| r.1 == i.to_string())
+        );
+        // Rows of a one-column table that read like COPY headers.
+        let mut dump = String::new();
+        for t in 0..20 {
+            writeln!(dump, "COPY t{t} (id) FROM stdin;").unwrap();
+            for i in 0..t * 3 {
+                writeln!(dump, "COPY x{i} (id) FROM stdin;").unwrap();
+            }
+            dump.push_str("\\.\nSELECT 1;\n");
+        }
+        let got = records("copy:id", dump.as_bytes(), 256).unwrap();
+        assert_eq!(got.len(), (0..20).map(|t| t * 3).sum::<usize>());
+        let mut tables: Vec<u32> = got.iter().map(|r| r.2).collect();
+        tables.dedup();
+        assert_eq!(tables.len(), 19, "{tables:?}");
     }
 
     #[test]

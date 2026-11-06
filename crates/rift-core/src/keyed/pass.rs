@@ -3,17 +3,29 @@
 //! A pass reads A and B side by side, at the same relative position, and
 //! keeps only the records whose key hash falls in its range. A record
 //! waits, with its bytes, until the same key turns up in the other file;
-//! then the two are compared byte by byte and only the key hash stays, to
-//! catch a third occurrence. Files in roughly the same order keep few
-//! records waiting, so a pass costs about 8 bytes per key of its range.
+//! then the two are compared byte by byte and only a 31-bit fingerprint
+//! of the key hash stays, to catch a third occurrence. Files in roughly
+//! the same order keep few records waiting, so a pass costs about 5 bytes
+//! per key of its range.
 //!
-//! When the table or the waiting records outgrow the budget, the pass
-//! gives up the top of its range and carries on: the records it drops come
-//! back in a later pass. Nothing is ever written to disk.
+//! The range is split between shards, one per thread, by bits of the key
+//! hash the table does not use; each shard owns a table, its waiting
+//! records and its duplicates, and they take the records of a window in
+//! parallel. When a shard's table or waiting records outgrow the budget,
+//! the pass starts over on a narrower range, sized from how far it had
+//! read: a fingerprint cannot say which keys lie above a new top, so the
+//! table cannot be thinned in place. Nothing is ever written to disk.
+//!
+//! A key whose fingerprint matches a matched key is a suspect: a
+//! duplicate, or another key. The next pass, or a last read when there is
+//! none, counts the suspects in their file.
 
 use std::io;
+use std::sync::Mutex;
 
-use super::read::{Reader, Record, Tables};
+use rayon::prelude::*;
+
+use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow};
 use super::{ChangeKind, KeyError, KeyedChange, Side};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
@@ -22,15 +34,21 @@ use crate::types::{Bytes, LineNo};
 
 /// One past the largest key hash.
 const END: u64 = 1 << 63;
-/// A table slot holding the index of a waiting record, not a key hash.
-const WAITING: u64 = 1 << 63;
-const EMPTY: u64 = 0;
+/// A table slot holding the index of a waiting record, not a fingerprint.
+const WAITING: u32 = 1 << 31;
+const EMPTY: u32 = 0;
 /// Duplicate keys listed in the error.
 const FEW: usize = 5;
-/// Possible duplicates collected before the pass stops to check them.
-const SUSPECTS: usize = 64;
-/// Read buffer per file, from the refine half.
-const BUF: u64 = 1 << 20;
+/// Read window per file, from the refine half.
+const WINDOW: u64 = 4 << 20;
+/// Refine-half bytes a shard should have to itself.
+const SHARD_BYTES: u64 = 1 << 20;
+/// Most shards and most chunks per window.
+const MAX_SHARDS: usize = 64;
+/// Refine-half bytes held for each thread of the pool.
+const POOL_PER_THREAD: u64 = 16 << 10;
+/// Fewest refine-half bytes for more than one thread.
+const PARALLEL_REFINE: u64 = 8 << 20;
 
 /// What the comparison cost.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -50,11 +68,13 @@ pub struct Report {
 ///
 /// Each pass prints its changes ordered by line (the line in A, or in B
 /// for an added record). Most inputs that fit the budget take one pass.
-/// The read buffers and the waiting records come from the refine half,
-/// the hash table from the skeleton half.
+/// The read windows and the waiting records come from the refine half,
+/// the hash tables from the skeleton half. A duplicate key can surface a
+/// pass after the changes of its pass were handed out.
 ///
-/// Time is O(passes × (|A| + |B|)); a pass holds about 8 bytes per key
-/// of its range plus the records still waiting for their match.
+/// Time is O(passes × (|A| + |B|)), spread over the rayon threads; a pass
+/// holds about 5 bytes per key of its range plus the records still
+/// waiting for their match.
 ///
 /// # Errors
 ///
@@ -72,142 +92,317 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    let buf = BUF.min(budget.available(Half::Refine).0 / 8).max(64);
-    let buf = usize::try_from(buf).unwrap_or(usize::MAX);
-    let mut ra = Reader::new(a, Side::A, spec, budget, buf)?;
-    let mut rb = Reader::new(b, Side::B, spec, budget, buf)?;
-    let mut tables = Tables::new(budget)?;
+    let (threads, _pool) = threads(budget)?;
+    let refine = budget.available(Half::Refine).0;
     let (len_a, len_b) = (a.len().0, b.len().0);
-    let mut pass = Pass::new(budget, ra.estimate_lines()? + rb.estimate_lines()?)?;
+    // Windows in proportion to the files keep both at the same relative
+    // position.
+    let window = (refine / 16).clamp(64, WINDOW);
+    let longest = len_a.max(len_b).max(1);
+    let win = |len: u64| {
+        let w = u128::from(window) * u128::from(len) / u128::from(longest);
+        usize::try_from(w).unwrap_or(usize::MAX).max(64)
+    };
+    // A chunk per thread once the budget is large enough to care.
+    let chunks = usize::try_from(refine / SHARD_BYTES)
+        .unwrap_or(usize::MAX)
+        .clamp(1, threads);
+    let mut ra = Reader::new(a, Side::A, spec, budget, win(len_a), chunks)?;
+    let mut rb = Reader::new(b, Side::B, spec, budget, win(len_b), chunks)?;
+    let tables = Mutex::new(Tables::new(budget)?);
+    let keys = ra.estimate_lines()? + rb.estimate_lines()?;
+    let (mut shards, _list) = Pass::shards(budget, keys, chunks)?;
+    let mut pending = Pending::new(budget)?;
     let mut report = Report::default();
     let (mut lo, mut width) = (0, END);
-    while lo < END {
-        pass.start(lo, lo.saturating_add(width).min(END));
-        ra.rewind();
-        rb.rewind();
-        let (mut done_a, mut done_b) = (false, false);
-        let first = report.passes == 0;
-        let stopped = loop {
-            let (ca, cb) = (ra.consumed(), rb.consumed());
-            let progress = if len_a + len_b == 0 {
-                1.0
-            } else {
-                #[allow(clippy::cast_precision_loss, reason = "an estimate")]
-                let p = (ca + cb) as f64 / (len_a + len_b) as f64;
-                p
-            };
-            let take_a = !done_a
-                && (done_b
-                    || u128::from(ca) * u128::from(len_b) <= u128::from(cb) * u128::from(len_a));
-            let flow = if take_a {
-                step(&mut ra, &mut tables, &mut pass, progress)?
-            } else if !done_b {
-                step(&mut rb, &mut tables, &mut pass, progress)?
-            } else {
-                break false;
-            };
-            match flow {
-                Flow::Next => {
-                    if first {
-                        if take_a {
-                            report.records_a += 1;
-                        } else {
-                            report.records_b += 1;
-                        }
+    // Below the narrowest range that ran out of waiting room.
+    let mut ceiling = END;
+    loop {
+        let hi = lo + width.min(END - lo);
+        let mut readers = (&mut ra, &mut rb, &tables);
+        match read_pass(&mut readers, &mut shards, lo, hi, &pending.list)? {
+            Outcome::Overflow(half, progress) => {
+                let w = hi - lo;
+                if w <= 1 {
+                    return Err(Error::Budget(BudgetExceeded {
+                        half,
+                        requested: Bytes(8),
+                        available: budget.available(half),
+                    }));
+                }
+                width = narrowed(half, w, progress, fill(&shards), &mut ceiling);
+                ra.shrink_lists();
+                rb.shrink_lists();
+            }
+            Outcome::Stop => {
+                let mut dups = collect_dups(&mut shards);
+                if dups.is_empty() {
+                    // Too many suspects: settle the first of them now.
+                    for s in &mut shards {
+                        pending.take_from(s)?;
+                    }
+                    let mut readers = (&mut ra, &mut rb, &tables);
+                    read_pass(&mut readers, &mut shards, END, END, &pending.list)?;
+                    dups = pending.duplicates(&ra, &rb);
+                }
+                return Err(if dups.is_empty() {
+                    KeyError::Collisions
+                } else {
+                    KeyError::Duplicate(dups)
+                }
+                .into());
+            }
+            Outcome::Done => {
+                let mut dups = pending.duplicates(&ra, &rb);
+                for d in collect_dups(&mut shards) {
+                    if dups.len() < FEW && !dups.contains(&d) {
+                        dups.push(d);
                     }
                 }
-                Flow::End if take_a => done_a = true,
-                Flow::End => done_b = true,
-                Flow::Stop => break true,
+                if !dups.is_empty() {
+                    return Err(KeyError::Duplicate(dups).into());
+                }
+                if lo == END {
+                    break;
+                }
+                if report.passes == 0 {
+                    (report.records_a, report.records_b) = (ra.records(), rb.records());
+                    if let super::KeySpec::Copy(name) = spec
+                        && ra.blocks() + rb.blocks() == 0
+                        && len_a + len_b > 0
+                    {
+                        return Err(KeyError::NoColumn {
+                            side: Side::A,
+                            name: name.clone(),
+                        }
+                        .into());
+                    }
+                }
+                report.changes += emit(&mut shards, &mut on_change)?;
+                report.passes += 1;
+                pending.clear();
+                for s in &mut shards {
+                    pending.take_from(s)?;
+                }
+                // A range cut short by waiting records may leave the
+                // tables half empty; widen the next pass toward 90%.
+                let grown = scale(hi - lo, (0.9 / fill(&shards).max(f64::EPSILON)).min(2.0));
+                width = width.max(grown.min(ceiling));
+                lo = hi;
+                if lo == END && pending.list.is_empty() {
+                    break;
+                }
             }
-        };
-        if !pass.suspects.is_empty() {
-            confirm(&mut ra, &mut rb, &mut tables, &mut pass)?;
         }
-        if !pass.dups.is_empty() {
-            return Err(KeyError::Duplicate(std::mem::take(&mut pass.dups)).into());
-        }
-        if stopped {
-            return Err(KeyError::Collisions.into());
-        }
-        if first
-            && let super::KeySpec::Copy(name) = spec
-            && ra.blocks() + rb.blocks() == 0
-            && len_a + len_b > 0
-        {
-            return Err(KeyError::NoColumn {
-                side: Side::A,
-                name: name.clone(),
-            }
-            .into());
-        }
-        report.changes += pass.emit(&mut on_change)?;
-        report.passes += 1;
-        width = pass.hi - lo;
-        lo = pass.hi;
     }
     Ok(report)
 }
 
-/// What the pass loop does after one read.
-enum Flow {
-    Next,
-    End,
+/// The range a pass that ran out of `half` at `progress` through the files
+/// starts over with, `w` wide with its fullest table at `fill`.
+///
+/// The tables fill as the files are read, so the new range keeps the
+/// share they should hold to the end, with a margin. Waiting records do
+/// not pile up the same way: they are the ones whose match is still
+/// ahead, so a full refine half halves the range, unless the tables ask
+/// for less, and caps how far later passes widen it.
+fn narrowed(half: Half, w: u64, progress: f64, fill: f64, ceiling: &mut u64) -> u64 {
+    let tables = 0.9 * progress / fill.max(f64::EPSILON);
+    let keep = match half {
+        Half::Skeleton => tables,
+        Half::Refine => {
+            *ceiling = (*ceiling).min(scale(w, 0.9));
+            tables.min(0.5)
+        }
+    };
+    scale(w, keep).clamp(1, w - 1)
+}
+
+/// The fullest shard table, as a share of its limit.
+fn fill(shards: &[Pass<'_>]) -> f64 {
+    #[allow(clippy::cast_precision_loss, reason = "a ratio")]
+    shards
+        .iter()
+        .map(|s| s.used as f64 / s.limit.max(1) as f64)
+        .fold(0.0, f64::max)
+}
+
+/// `w` times `factor`, saturating.
+fn scale(w: u64, factor: f64) -> u64 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "an estimate, clamped by the caller"
+    )]
+    let v = (w as f64 * factor) as u64;
+    v
+}
+
+/// Threads for the comparison, and the refine-half bytes held for the
+/// pool's own heap. Under a small budget one thread does it all, which
+/// also keeps the pool out of a budget that could not absorb it.
+fn threads(budget: &Budget) -> Result<(usize, Reservation)> {
+    if budget.available(Half::Refine).0 < PARALLEL_REFINE {
+        return Ok((1, budget.try_reserve(Half::Refine, Bytes(0))?));
+    }
+    let threads = rayon::current_num_threads().clamp(1, MAX_SHARDS);
+    // The pool's queues and thread records: about 8 KiB per thread on
+    // macOS, held twice over.
+    let pool = budget.try_reserve(Half::Refine, Bytes(POOL_PER_THREAD * threads as u64))?;
+    Ok((threads, pool))
+}
+
+/// How a read of both files ended.
+enum Outcome {
+    /// Both files were read to the end.
+    Done,
+    /// A shard ran out of the half named, this far through the files.
+    Overflow(Half, f64),
+    /// Enough duplicates, or too many suspects, to stop.
     Stop,
 }
 
-fn step<S: Source + ?Sized>(
-    reader: &mut Reader<'_, S>,
-    tables: &mut Tables,
-    pass: &mut Pass<'_>,
-    progress: f64,
-) -> Result<Flow> {
-    let side = reader.side();
-    match reader.next(tables)? {
-        None => Ok(Flow::End),
-        Some(rec) => pass.take(side, &rec, progress),
-    }
-}
+type Readers<'r, 's, A, B> = (
+    &'r mut Reader<'s, A>,
+    &'r mut Reader<'s, B>,
+    &'r Mutex<Tables>,
+);
 
-/// Reads both files again and keeps the suspects that occur twice in the
-/// file they came from.
-fn confirm<A, B>(
-    ra: &mut Reader<'_, A>,
-    rb: &mut Reader<'_, B>,
-    tables: &mut Tables,
-    pass: &mut Pass<'_>,
-) -> Result<()>
+/// Reads both files once, the shards taking the records in `lo..hi`, and
+/// counts `pending` on the way. An empty range only counts.
+fn read_pass<A, B>(
+    (ra, rb, tables): &mut Readers<'_, '_, A, B>,
+    shards: &mut [Pass<'_>],
+    lo: u64,
+    hi: u64,
+    pending: &[Suspect],
+) -> Result<Outcome>
 where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    fn count<S: Source + ?Sized>(
-        r: &mut Reader<'_, S>,
-        tables: &mut Tables,
-        suspects: &mut [Suspect],
-    ) -> Result<()> {
-        r.rewind();
-        let side = r.side();
-        while let Some(rec) = r.next(tables)? {
-            for s in suspects.iter_mut().filter(|s| s.side == side) {
-                if s.hash == rec.hash && s.table == rec.table && s.key == rec.bytes[rec.key.clone()]
-                {
-                    s.seen += 1;
+    for s in shards.iter_mut() {
+        s.start(lo, hi);
+    }
+    ra.rewind();
+    rb.rewind();
+    let filter = Filter::new(lo, hi, pending);
+    let total = ra.len() + rb.len();
+    let n = shards.len();
+    loop {
+        let (ga, gb) = if n == 1 {
+            (ra.advance(tables, &filter), rb.advance(tables, &filter))
+        } else {
+            rayon::join(
+                || ra.advance(tables, &filter),
+                || rb.advance(tables, &filter),
+            )
+        };
+        let (ga, gb) = (ga?, gb?);
+        if !ga && !gb {
+            return Ok(Outcome::Done);
+        }
+        if lo == hi {
+            continue;
+        }
+        let (ra, rb) = (&**ra, &**rb);
+        if n == 1 {
+            shards[0].round(0, 1, ra, rb);
+        } else {
+            shards
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(k, s)| s.round(k, n, ra, rb));
+        }
+        for s in shards.iter_mut() {
+            if let Some(e) = s.fault.take() {
+                return Err(e);
+            }
+        }
+        if let Some(half) = shards.iter().find_map(|s| s.overflow) {
+            #[allow(clippy::cast_precision_loss, reason = "an estimate")]
+            let progress = (ra.consumed() + rb.consumed()) as f64 / total.max(1) as f64;
+            return Ok(Outcome::Overflow(half, progress));
+        }
+        let dups: usize = shards.iter().map(|s| s.dups.len()).sum();
+        let suspects: usize = shards.iter().map(|s| s.suspects.len()).sum();
+        if dups >= FEW || suspects >= SUSPECTS {
+            return Ok(Outcome::Stop);
+        }
+    }
+}
+
+/// The waiting duplicates the shards found, the first few.
+fn collect_dups(shards: &mut [Pass<'_>]) -> Vec<Vec<u8>> {
+    let mut dups: Vec<Vec<u8>> = Vec::new();
+    for s in shards {
+        for d in s.dups.drain(..) {
+            if dups.len() < FEW && !dups.contains(&d) {
+                dups.push(d);
+            }
+        }
+    }
+    dups
+}
+
+/// The suspects of the last pass, counted by the next read.
+struct Pending {
+    list: Vec<Suspect>,
+    /// Refine half: the list and the keys.
+    res: Reservation,
+}
+
+impl Pending {
+    fn new(budget: &Budget) -> Result<Self> {
+        Ok(Self {
+            list: Vec::new(),
+            res: budget.try_reserve(Half::Refine, Bytes(0))?,
+        })
+    }
+
+    fn clear(&mut self) {
+        for s in self.list.drain(..) {
+            self.res.shrink(Bytes(s.key.len() as u64));
+        }
+    }
+
+    /// Moves a shard's suspects here, as many as are counted at once.
+    fn take_from(&mut self, shard: &mut Pass<'_>) -> Result<()> {
+        for s in shard.suspects.drain(..) {
+            let bytes = Bytes(s.key.len() as u64);
+            shard.res.shrink(bytes);
+            if self.list.len() < SUSPECTS {
+                let budget = shard.budget;
+                if !grow(&mut self.list, &mut self.res, budget, 1) {
+                    return Err(Error::Budget(BudgetExceeded {
+                        half: Half::Refine,
+                        requested: Bytes(size_of::<Suspect>() as u64),
+                        available: budget.available(Half::Refine),
+                    }));
                 }
+                self.res.grow(bytes)?;
+                self.list.push(s);
             }
         }
         Ok(())
     }
-    count(ra, tables, &mut pass.suspects)?;
-    count(rb, tables, &mut pass.suspects)?;
-    for s in std::mem::take(&mut pass.suspects) {
-        if s.seen > 1 && pass.dups.len() < FEW && !pass.dups.contains(&s.key) {
-            pass.dups.push(s.key);
-        } else {
-            pass.res.shrink(Bytes(s.key.len() as u64));
+
+    /// The suspects seen more than once in their file by the last read.
+    fn duplicates<A: Source + ?Sized, B: Source + ?Sized>(
+        &self,
+        ra: &Reader<'_, A>,
+        rb: &Reader<'_, B>,
+    ) -> Vec<Vec<u8>> {
+        let mut dups: Vec<Vec<u8>> = Vec::new();
+        for (i, s) in self.list.iter().enumerate() {
+            let seen = ra.seen()[i] + rb.seen()[i];
+            if seen > 1 && dups.len() < FEW && !dups.contains(&s.key) {
+                dups.push(s.key.clone());
+            }
         }
+        dups
     }
-    Ok(())
 }
 
 /// Whose record a waiting entry holds, or what became of it.
@@ -219,7 +414,7 @@ enum State {
     B,
     /// Matched with different bytes; only the key is kept.
     Changed,
-    /// Matched with equal bytes, or dropped with the top of the range.
+    /// Matched with equal bytes.
     Dead,
 }
 
@@ -229,10 +424,8 @@ struct Kept {
     hash: u64,
     line_a: u64,
     line_b: u64,
-    /// Offset of the bytes in the arena.
-    start: usize,
-    /// Table slot pointing here, while waiting.
-    slot: usize,
+    /// Offset of the bytes in the arena, which stays below 4 GiB.
+    start: u32,
     len: u32,
     key_off: u32,
     key_len: u32,
@@ -240,26 +433,21 @@ struct Kept {
     state: State,
 }
 
-/// A key seen again after its match: a duplicate, or another key with the
-/// same hash.
-#[derive(Debug)]
-struct Suspect {
-    side: Side,
-    table: u32,
-    hash: u64,
-    key: Vec<u8>,
-    seen: u32,
+const _: () = assert!(size_of::<Kept>() == 48);
+
+/// What a shard does after one record.
+enum Flow {
+    Next,
+    Overflow(Half),
 }
 
-/// State of one pass, reused by the next.
+/// One shard of a pass, reused by the next pass.
 #[derive(Debug)]
 struct Pass<'b> {
     budget: &'b Budget,
-    lo: u64,
-    hi: u64,
-    /// Open addressing, linear probing: `EMPTY`, a matched key's hash, or
-    /// `WAITING | index into kept`.
-    slots: Vec<u64>,
+    /// Open addressing, linear probing: `EMPTY`, a matched key's
+    /// fingerprint, or `WAITING | index into kept`.
+    slots: Vec<u32>,
     used: usize,
     limit: usize,
     /// Skeleton half: the slots.
@@ -275,24 +463,24 @@ struct Pass<'b> {
     /// Refine half: `kept`, the arena, the duplicates, the suspects and
     /// the key of `change`.
     res: Reservation,
+    overflow: Option<Half>,
+    fault: Option<Error>,
 }
 
 impl<'b> Pass<'b> {
-    /// A table for about `keys` keys, or as many as the skeleton half
-    /// holds. Too small an estimate costs passes, not correctness.
-    fn new(budget: &'b Budget, keys: u64) -> Result<Self> {
-        let fits = budget.available(Half::Skeleton).0 / 8;
-        let cap = fits.min(keys.saturating_mul(10) / 7 + 64);
-        let table = budget.try_reserve(Half::Skeleton, Bytes(cap * 8))?;
+    /// A table for about `keys` keys, or as many as `share` bytes of the
+    /// skeleton half hold. Too small an estimate costs passes, not
+    /// correctness.
+    fn new(budget: &'b Budget, keys: u64, share: u64) -> Result<Self> {
+        let cap = (share / 4).min(keys.saturating_mul(5) / 4 + 64);
+        let table = budget.try_reserve(Half::Skeleton, Bytes(cap * 4))?;
         let cap = usize::try_from(cap).unwrap_or(usize::MAX);
         Ok(Self {
             budget,
-            lo: 0,
-            hi: END,
             slots: vec![EMPTY; cap],
             used: 0,
-            // Linear probing slows down sharply above 70% load.
-            limit: cap / 10 * 7,
+            // Linear probing over fingerprints stays short up to 80% load.
+            limit: cap / 5 * 4,
             _table: table,
             kept: Vec::new(),
             arena: Vec::new(),
@@ -307,17 +495,70 @@ impl<'b> Pass<'b> {
                 b: None,
             },
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
+            overflow: None,
+            fault: None,
         })
     }
 
-    fn start(&mut self, lo: u64, hi: u64) {
-        (self.lo, self.hi) = (lo, hi);
+    /// `n` shards sharing the skeleton half for about `keys` keys, and
+    /// the refine-half bytes of their list.
+    fn shards(budget: &'b Budget, keys: u64, n: usize) -> Result<(Vec<Self>, Reservation)> {
+        let share = budget.available(Half::Skeleton).0 / n as u64;
+        let list = budget.try_reserve(Half::Refine, Bytes((n * size_of::<Self>()) as u64))?;
+        let mut shards = Vec::with_capacity(n);
+        for _ in 0..n {
+            shards.push(Self::new(budget, keys / n as u64 + 1, share)?);
+        }
+        Ok((shards, list))
+    }
+
+    fn start(&mut self, _lo: u64, _hi: u64) {
         self.slots.fill(EMPTY);
         self.used = 0;
         self.kept.clear();
         self.arena.clear();
         self.garbage = 0;
         self.dead = 0;
+        for d in self.dups.drain(..) {
+            self.res.shrink(Bytes(d.len() as u64));
+        }
+        for s in self.suspects.drain(..) {
+            self.res.shrink(Bytes(s.key.len() as u64));
+        }
+        self.overflow = None;
+        self.fault = None;
+    }
+
+    /// Takes this shard's records of the readers' last windows.
+    fn round<A, B>(&mut self, k: usize, n: usize, ra: &Reader<'_, A>, rb: &Reader<'_, B>)
+    where
+        A: Source + ?Sized,
+        B: Source + ?Sized,
+    {
+        let _ = self.feed(Side::A, k, n, ra.kept()) && self.feed(Side::B, k, n, rb.kept());
+    }
+
+    fn feed<'r>(
+        &mut self,
+        side: Side,
+        k: usize,
+        n: usize,
+        recs: impl Iterator<Item = Record<'r>>,
+    ) -> bool {
+        for rec in recs.filter(|r| shard(r.hash, n) == k) {
+            match self.take(side, &rec) {
+                Ok(Flow::Next) => {}
+                Ok(Flow::Overflow(half)) => {
+                    self.overflow = Some(half);
+                    return false;
+                }
+                Err(e) => {
+                    self.fault = Some(e);
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn home(&self, hash: u64) -> usize {
@@ -333,98 +574,91 @@ impl<'b> Pass<'b> {
         if i + 1 == self.slots.len() { 0 } else { i + 1 }
     }
 
-    fn hash_at(&self, v: u64) -> u64 {
-        if v & WAITING == 0 {
-            v
-        } else {
-            self.kept[index(v)].hash
-        }
+    fn key(&self, k: &Kept) -> &[u8] {
+        &self.arena[k.start as usize + k.key_off as usize..][..k.key_len as usize]
     }
 
-    fn key(&self, k: &Kept) -> &[u8] {
-        &self.arena[k.start + k.key_off as usize..][..k.key_len as usize]
+    /// The slot that points at waiting record `at`.
+    fn slot_of(&self, at: usize) -> usize {
+        let want = WAITING | slot_index(at);
+        let mut i = self.home(self.kept[at].hash);
+        while self.slots[i] != want {
+            i = self.next_slot(i);
+        }
+        i
     }
 
     /// Takes one record of `side`.
-    fn take(&mut self, side: Side, rec: &Record<'_>, progress: f64) -> Result<Flow> {
+    fn take(&mut self, side: Side, rec: &Record<'_>) -> Result<Flow> {
         let waiting = match side {
             Side::A => State::A,
             Side::B => State::B,
         };
         let key = &rec.bytes[rec.key.clone()];
+        let print = fingerprint(rec.hash);
+        let mut i = self.home(rec.hash);
+        let mut seen = false;
         loop {
-            if rec.hash < self.lo || rec.hash >= self.hi {
-                return Ok(Flow::Next);
+            let v = self.slots[i];
+            if v == EMPTY {
+                break;
             }
-            let mut i = self.home(rec.hash);
-            let mut seen = false;
-            loop {
-                let v = self.slots[i];
-                if v == EMPTY {
-                    break;
-                }
-                if v == rec.hash {
-                    seen = true;
-                } else if v & WAITING != 0 {
-                    let k = self.kept[index(v)];
-                    if k.hash == rec.hash && k.table == rec.table && self.key(&k) == key {
-                        if k.state == waiting {
-                            return Ok(self.duplicate(key));
-                        }
+            if v & WAITING == 0 {
+                seen |= v == print;
+            } else {
+                let k = self.kept[index(v)];
+                if k.hash == rec.hash && k.table == rec.table && self.key(&k) == key {
+                    if k.state == waiting {
+                        self.duplicate(key);
+                    } else {
                         self.matched(index(v), i, side, rec);
-                        return Ok(Flow::Next);
                     }
-                }
-                i = self.next_slot(i);
-            }
-            if !self.room(rec.bytes.len(), key.len(), seen) {
-                self.relieve(progress)?;
-                continue;
-            }
-            let (Ok(len), Ok(key_off), Ok(key_len)) = (
-                u32::try_from(rec.bytes.len()),
-                u32::try_from(rec.key.start),
-                u32::try_from(key.len()),
-            ) else {
-                return Err(Error::LineTooLong {
-                    line: LineNo(rec.line),
-                    cap: Bytes(u64::from(u32::MAX)),
-                });
-            };
-            let at = self.kept.len();
-            self.kept.push(Kept {
-                hash: rec.hash,
-                line_a: rec.line,
-                line_b: rec.line,
-                start: self.arena.len(),
-                slot: i,
-                len,
-                key_off,
-                key_len,
-                table: rec.table,
-                state: waiting,
-            });
-            self.arena.extend_from_slice(rec.bytes);
-            self.slots[i] = WAITING | at as u64;
-            self.used += 1;
-            if seen {
-                self.suspects.push(Suspect {
-                    side,
-                    table: rec.table,
-                    hash: rec.hash,
-                    key: key.to_vec(),
-                    seen: 0,
-                });
-                if self.suspects.len() == SUSPECTS {
-                    return Ok(Flow::Stop);
+                    return Ok(Flow::Next);
                 }
             }
-            return Ok(Flow::Next);
+            i = self.next_slot(i);
         }
+        if let Some(half) = self.room(rec.bytes.len(), key.len(), seen) {
+            return Ok(Flow::Overflow(half));
+        }
+        let (Ok(len), Ok(key_off), Ok(key_len)) = (
+            u32::try_from(rec.bytes.len()),
+            u32::try_from(rec.key.start),
+            u32::try_from(key.len()),
+        ) else {
+            return Err(Error::LineTooLong {
+                line: LineNo(rec.line),
+                cap: Bytes(u64::from(u32::MAX)),
+            });
+        };
+        let at = self.kept.len();
+        self.kept.push(Kept {
+            hash: rec.hash,
+            line_a: rec.line,
+            line_b: rec.line,
+            start: arena_offset(self.arena.len()),
+            len,
+            key_off,
+            key_len,
+            table: rec.table,
+            state: waiting,
+        });
+        self.arena.extend_from_slice(rec.bytes);
+        self.slots[i] = WAITING | slot_index(at);
+        self.used += 1;
+        if seen {
+            self.suspects.push(Suspect {
+                side,
+                table: rec.table,
+                hash: rec.hash,
+                key: key.to_vec(),
+            });
+        }
+        Ok(Flow::Next)
     }
 
     /// A key found waiting from the same file.
-    fn duplicate(&mut self, key: &[u8]) -> Flow {
+    fn duplicate(&mut self, key: &[u8]) {
         if self.dups.len() < FEW
             && !self.dups.iter().any(|d| d == key)
             && grow(&mut self.dups, &mut self.res, self.budget, 1)
@@ -432,17 +666,12 @@ impl<'b> Pass<'b> {
         {
             self.dups.push(key.to_vec());
         }
-        if self.dups.len() >= FEW {
-            Flow::Stop
-        } else {
-            Flow::Next
-        }
     }
 
     /// The other file's record for a waiting key: compare the bytes.
     fn matched(&mut self, at: usize, slot: usize, side: Side, rec: &Record<'_>) {
         let k = &mut self.kept[at];
-        let stored = &self.arena[k.start..][..k.len as usize];
+        let stored = &self.arena[k.start as usize..][..k.len as usize];
         if stored == rec.bytes {
             k.state = State::Dead;
             self.dead += 1;
@@ -455,113 +684,38 @@ impl<'b> Pass<'b> {
             }
             self.garbage += (k.len - k.key_len) as usize;
         }
-        self.slots[slot] = k.hash;
+        self.slots[slot] = fingerprint(k.hash);
     }
 
-    /// Whether one more record of `len` bytes fits, with room to hand its
-    /// `key` bytes out at the end of the pass and to keep them as a
-    /// suspect; grows the lists from the refine half if needed.
-    fn room(&mut self, len: usize, key: usize, suspect: bool) -> bool {
+    /// `None` when one more record of `len` bytes fits, with room to hand
+    /// its `key` bytes out at the end of the pass and to keep them as a
+    /// suspect, growing the lists from the refine half if needed; else
+    /// the half that is full.
+    fn room(&mut self, len: usize, key: usize, suspect: bool) -> Option<Half> {
         if self.used >= self.limit {
-            return false;
+            return Some(Half::Skeleton);
         }
         let full = self.kept.len() == self.kept.capacity()
             || self.arena.capacity() - self.arena.len() < len;
-        if full && self.mostly_dead() {
+        if full && self.partly_dead() {
             self.compact();
         }
-        grow(&mut self.kept, &mut self.res, self.budget, 1)
+        let fits = self.kept.len() < (WAITING - 1) as usize
+            && u32::try_from(self.arena.len() + len).is_ok()
+            && grow(&mut self.kept, &mut self.res, self.budget, 1)
             && grow(&mut self.arena, &mut self.res, self.budget, len)
             && grow(&mut self.change.key, &mut self.res, self.budget, key)
             && (!suspect
                 || (grow(&mut self.suspects, &mut self.res, self.budget, 1)
-                    && self.res.grow(Bytes(key as u64)).is_ok()))
+                    && self.res.grow(Bytes(key as u64)).is_ok()));
+        (!fits).then_some(Half::Refine)
     }
 
-    /// Whether at least half of the kept bytes or entries are dead.
-    fn mostly_dead(&self) -> bool {
-        (self.garbage > 0 && 2 * self.garbage >= self.arena.len())
-            || (self.dead > 0 && 2 * self.dead >= self.kept.len())
-    }
-
-    /// Frees room: compacts when at least half of the kept bytes or
-    /// entries are dead, otherwise gives up the top of the range.
-    fn relieve(&mut self, progress: f64) -> Result<()> {
-        let table_full = self.used >= self.limit;
-        if !table_full && self.mostly_dead() {
-            self.compact();
-            return Ok(());
-        }
-        let width = self.hi - self.lo;
-        if width <= 1 {
-            return Err(Error::Budget(BudgetExceeded {
-                half: if table_full {
-                    Half::Skeleton
-                } else {
-                    Half::Refine
-                },
-                requested: Bytes(8),
-                available: self.budget.available(if table_full {
-                    Half::Skeleton
-                } else {
-                    Half::Refine
-                }),
-            }));
-        }
-        // What was read so far filled the budget; keep the share of the
-        // range that should fit to the end of the files, with a margin.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            reason = "an estimate, clamped below"
-        )]
-        let keep = (width as f64 * progress * 0.9) as u64;
-        self.hi = self.lo + keep.clamp(1, width - 1);
-        self.evict();
-        self.compact();
-        Ok(())
-    }
-
-    /// Drops every key at or above `hi` and resettles the table.
-    fn evict(&mut self) {
-        for i in 0..self.slots.len() {
-            let v = self.slots[i];
-            if v == EMPTY || self.hash_at(v) < self.hi {
-                continue;
-            }
-            self.slots[i] = EMPTY;
-            self.used -= 1;
-            if v & WAITING != 0 {
-                self.kept[index(v)].state = State::Dead;
-            }
-        }
-        let hi = self.hi;
-        for k in self.kept.iter_mut().filter(|k| k.hash >= hi) {
-            k.state = State::Dead;
-        }
-        // Holes break probe chains. Reinsert every entry, walking from an
-        // empty slot so each chain is rebuilt in order.
-        let n = self.slots.len();
-        let Some(empty) = self.slots.iter().position(|&v| v == EMPTY) else {
-            return;
-        };
-        for step in 1..=n {
-            let i = (empty + step) % n;
-            let v = self.slots[i];
-            if v == EMPTY {
-                continue;
-            }
-            self.slots[i] = EMPTY;
-            let mut j = self.home(self.hash_at(v));
-            while self.slots[j] != EMPTY {
-                j = self.next_slot(j);
-            }
-            self.slots[j] = v;
-            if v & WAITING != 0 {
-                self.kept[index(v)].slot = j;
-            }
-        }
+    /// Whether a quarter of the kept bytes or entries are dead: the lists
+    /// are full, and compacting them is cheaper than growing them.
+    fn partly_dead(&self) -> bool {
+        (self.garbage > 0 && 4 * self.garbage >= self.arena.len())
+            || (self.dead > 0 && 4 * self.dead >= self.kept.len())
     }
 
     /// Moves live entries and their bytes down over the dead ones.
@@ -571,17 +725,19 @@ impl<'b> Pass<'b> {
             let mut k = self.kept[r];
             let (from, n) = match k.state {
                 State::Dead => continue,
-                State::A | State::B => (k.start, k.len as usize),
-                State::Changed => (k.start + k.key_off as usize, k.key_len as usize),
+                State::A | State::B => (k.start as usize, k.len as usize),
+                State::Changed => (k.start as usize + k.key_off as usize, k.key_len as usize),
             };
+            if k.state != State::Changed && r != w {
+                let slot = self.slot_of(r);
+                self.slots[slot] = WAITING | slot_index(w);
+            }
             self.arena.copy_within(from..from + n, aw);
-            k.start = aw;
+            k.start = arena_offset(aw);
             aw += n;
             if k.state == State::Changed {
                 k.key_off = 0;
                 k.len = k.key_len;
-            } else {
-                self.slots[k.slot] = WAITING | w as u64;
             }
             self.kept[w] = k;
             w += 1;
@@ -592,67 +748,103 @@ impl<'b> Pass<'b> {
         self.dead = 0;
     }
 
-    /// Hands the pass's changes to `on_change`, ordered by line.
-    fn emit(&mut self, on_change: &mut impl FnMut(&KeyedChange) -> io::Result<()>) -> Result<u64> {
-        self.kept.retain(|k| k.state != State::Dead);
-        self.kept.sort_unstable_by_key(|k| {
-            (
-                if k.state == State::B {
-                    k.line_b
-                } else {
-                    k.line_a
-                },
-                k.state,
-            )
-        });
-        for k in &self.kept {
-            let change = &mut self.change;
-            change.key.clear();
-            change.key.extend_from_slice(
-                &self.arena[k.start + k.key_off as usize..][..k.key_len as usize],
-            );
-            (change.kind, change.a, change.b) = match k.state {
-                State::A => (ChangeKind::Removed, Some(LineNo(k.line_a)), None),
-                State::B => (ChangeKind::Added, None, Some(LineNo(k.line_b))),
-                State::Changed => (
-                    ChangeKind::Changed,
-                    Some(LineNo(k.line_a)),
-                    Some(LineNo(k.line_b)),
-                ),
-                State::Dead => continue,
-            };
-            on_change(change)?;
-        }
-        Ok(self.kept.len() as u64)
+    /// Hands the change at `kept[i]` to `on_change`.
+    fn emit_one(
+        &mut self,
+        i: usize,
+        on_change: &mut impl FnMut(&KeyedChange) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let k = self.kept[i];
+        let change = &mut self.change;
+        change.key.clear();
+        change.key.extend_from_slice(
+            &self.arena[k.start as usize + k.key_off as usize..][..k.key_len as usize],
+        );
+        (change.kind, change.a, change.b) = match k.state {
+            State::A => (ChangeKind::Removed, Some(LineNo(k.line_a)), None),
+            State::B => (ChangeKind::Added, None, Some(LineNo(k.line_b))),
+            State::Changed | State::Dead => (
+                ChangeKind::Changed,
+                Some(LineNo(k.line_a)),
+                Some(LineNo(k.line_b)),
+            ),
+        };
+        on_change(change)
     }
+}
+
+/// Where a change sorts: by its line, in B for an added record.
+fn order(k: &Kept) -> (u64, State) {
+    (
+        if k.state == State::B {
+            k.line_b
+        } else {
+            k.line_a
+        },
+        k.state,
+    )
+}
+
+/// Hands the pass's changes to `on_change`, ordered by line across the
+/// shards.
+fn emit(
+    shards: &mut [Pass<'_>],
+    on_change: &mut impl FnMut(&KeyedChange) -> io::Result<()>,
+) -> Result<u64> {
+    for s in shards.iter_mut() {
+        s.kept.retain(|k| k.state != State::Dead);
+        s.kept.sort_unstable_by_key(order);
+    }
+    let mut at = [0usize; MAX_SHARDS];
+    let mut count = 0;
+    loop {
+        let next = shards
+            .iter()
+            .enumerate()
+            .filter(|(k, s)| at[*k] < s.kept.len())
+            .min_by_key(|(k, s)| order(&s.kept[at[*k]]))
+            .map(|(k, _)| k);
+        let Some(k) = next else {
+            return Ok(count);
+        };
+        shards[k].emit_one(at[k], on_change)?;
+        at[k] += 1;
+        count += 1;
+    }
+}
+
+/// The shard of `n` that owns a key hash, from bits the table's slot and
+/// fingerprint barely use.
+fn shard(hash: u64, n: usize) -> usize {
+    #[allow(clippy::cast_possible_truncation, reason = "below n")]
+    let s = ((((hash >> 33) & 0xFFFF) * n as u64) >> 16) as usize;
+    s
+}
+
+/// 31 bits of a key hash, never 0, so they fit a slot with its flag.
+#[allow(clippy::cast_possible_truncation, reason = "31 bits kept")]
+fn fingerprint(hash: u64) -> u32 {
+    ((hash >> 1) as u32 & !WAITING).max(1)
+}
+
+fn index(v: u32) -> usize {
+    (v & !WAITING) as usize
 }
 
 #[allow(
     clippy::cast_possible_truncation,
-    reason = "indices into kept fit usize"
+    reason = "room keeps kept below 2^31 entries"
 )]
-fn index(v: u64) -> usize {
-    (v & !WAITING) as usize
+fn slot_index(i: usize) -> u32 {
+    i as u32
 }
 
-/// Makes room for `need` more elements in `v`, paid from `res`: double
-/// the capacity when the half allows, else exactly `need`.
-fn grow<T>(v: &mut Vec<T>, res: &mut Reservation, budget: &Budget, need: usize) -> bool {
-    if v.capacity() - v.len() >= need {
-        return true;
-    }
-    let size = size_of::<T>().max(1);
-    let free = usize::try_from(budget.available(Half::Refine).0).unwrap_or(usize::MAX) / size;
-    let missing = need - (v.capacity() - v.len());
-    let add = missing.max(v.capacity().max(64).min(free));
-    if res.grow(Bytes((add * size) as u64)).is_err() {
-        return false;
-    }
-    if v.try_reserve_exact(v.capacity() + add - v.len()).is_err() {
-        res.shrink(Bytes((add * size) as u64));
-        return false;
-    }
-    true
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "room keeps the arena below 4 GiB"
+)]
+fn arena_offset(i: usize) -> u32 {
+    i as u32
 }
 
 #[cfg(test)]

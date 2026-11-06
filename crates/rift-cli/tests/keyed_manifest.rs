@@ -82,7 +82,7 @@ fn every_change_in_the_manifest_is_reported_and_nothing_else() {
         let want = expected(rows, &a, &b, &manifest);
         assert!(want.len() > 20, "{rows:?}: {} changes", want.len());
         assert!(manifest.iter().filter(|m| m.kind == Kind::Move).count() > 10);
-        for mem in [Bytes::mib(64), Bytes::mib(1), Bytes(256 << 10)] {
+        for mem in [Bytes::mib(64), Bytes::mib(1), Bytes(128 << 10)] {
             let (got, report) = run(rows, &a, &b, mem);
             assert_eq!(got, want, "{rows:?} under {mem} bytes");
             if mem < Bytes::mib(1) {

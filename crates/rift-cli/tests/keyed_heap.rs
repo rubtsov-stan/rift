@@ -33,7 +33,7 @@ fn key_mode_peaks_under_the_budget() {
         eprintln!("--mem {mem}: peak {peak}, {report:?}");
         assert!(changes > 100);
         assert!(peak <= mem.0, "peak {peak} over --mem {mem}");
-        if mem <= Bytes::mib(4) {
+        if mem <= Bytes::mib(1) {
             assert!(report.passes > 1, "{report:?}");
         }
     }
