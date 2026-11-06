@@ -50,11 +50,24 @@ and a shell installer:
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rubtsov-stan/rift/releases/latest/download/rift-diff-installer.sh | sh
 ```
 
+On Debian and Ubuntu, download the `.deb` for your architecture (`amd64` or
+`arm64`) from the release page and install it with apt, which also resolves
+its dependencies:
+
+```sh
+sudo apt install ./rift-diff_VERSION-1_amd64.deb
+```
+
+It installs `rift` and its man page. There is no apt repository.
+
 From source, with Rust 1.97 or later:
 
 ```sh
 cargo install --git https://github.com/rubtsov-stan/rift rift-diff
 ```
+
+Add `--no-default-features` to build without the terminal interface; `-i`
+and `rift tui` then exit with status 2.
 
 Each release archive carries a build provenance attestation. To check
 one you downloaded, with the [GitHub CLI](https://cli.github.com):
