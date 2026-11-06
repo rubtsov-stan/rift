@@ -112,12 +112,14 @@ fi
 niceio="nice -n 10"
 command -v ionice >/dev/null 2>&1 && niceio="$niceio ionice -c3"
 [ "$limiter" = none ] && diffok=0
+cmp=$((GIB / 4)) cmpcap=$((2 * GIB))
+if [ "$limiter" != none ] && fits "$cmp" "$cmpcap"; then cmpok=1; else cmpok=0; fi
 
 cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 have_taskset=0
 command -v taskset >/dev/null 2>&1 && have_taskset=1
 
-gib() { awk -v b="$1" 'BEGIN { printf "%.1f GiB", b / 1073741824 }'; }
+gib() { awk -v b="$1" 'BEGIN { if (b < 1073741824) printf "%d MiB", b / 1048576; else printf "%.1f GiB", b / 1073741824 }'; }
 
 plan() {
   echo "Plan"
@@ -135,6 +137,11 @@ plan() {
     echo "  diff, git diff    run on the $(gib "$GIB") pair, cap $(gib "$diffcap")"
   else
     echo "  diff, git diff    skipped: a $(gib "$diffcap") cap does not fit the 60% budget or no limiter"
+  fi
+  if [ "$cmpok" = 1 ]; then
+    echo "  comparison        rift, diff and git diff on a $(gib "$cmp") pair, cap $(gib "$cmpcap")"
+  else
+    echo "  comparison        skipped: a $(gib "$cmpcap") cap does not fit the 60% budget or no limiter"
   fi
   if [ "$have_taskset" = 1 ]; then
     echo "  thread scaling    taskset -c 0..k-1 for k = 1 2 4 and all $cpus CPUs"
@@ -330,20 +337,42 @@ gen_failed() { rc=$1; tail -n 20 "$2" >&2; die "rift-gen failed (exit $rc)"; }
 
 small=${sizes%% *}
 pair=$scratch/pair
+
+# gen_pair SIZE PROFILE: generate the pair into $pair.
+gen_pair() {
+  echo "Generating $2 $(gib "$1")" >&2
+  rm -rf "$pair"
+  glog=$raw/gen-$2-$1.log
+  # shellcheck disable=SC2086
+  if [ "$limiter" = systemd ]; then
+    # tmpfs pages count against the cgroup of the process that writes
+    # them, so the cap covers the pair rift-gen writes plus its own 1 GiB.
+    systemd-run --user --scope -q -p MemoryMax=$((2 * $1 + GIB)) -p MemorySwapMax=0 $niceio \
+      "$gen" --seed 7 --size "$1" --profile "$2" --change-ratio 0.001 --out "$pair" > "$glog" 2>&1 || gen_failed $? "$glog"
+  else
+    $niceio "$gen" --seed 7 --size "$1" --profile "$2" --change-ratio 0.001 --out "$pair" > "$glog" 2>&1 || gen_failed $? "$glog"
+  fi
+  cp "$pair/manifest.tsv" "$raw/manifest-$2-$1.tsv" 2>/dev/null || true
+}
+
+# A pair small enough for diff and git diff to fit their cap, so all three
+# tools get real times on the same data.
+if [ "$cmpok" = 1 ]; then
+  for prof in sql csv; do
+    gen_pair "$cmp" "$prof"
+    for r in 1 2 3; do
+      run_one compare "$prof" "$cmp" "rift --stats --mem 256M" all "$GIB" $r count "$rift" --stats --mem 256M "$pair/a" "$pair/b"
+      run_one compare "$prof" "$cmp" "diff a b" all "$cmpcap" $r count diff "$pair/a" "$pair/b"
+      run_one compare "$prof" "$cmp" "git diff --no-index a b" all "$cmpcap" $r count git diff --no-index "$pair/a" "$pair/b"
+    done
+    rm -rf "$pair"
+  done
+else
+  note "comparison on the $(gib "$cmp") pair not run: no limiter, or a $(gib "$cmpcap") cap does not fit within 60% of MemAvailable"
+fi
 for size in $sizes; do
   for prof in sql csv; do
-    echo "Generating $prof $(gib "$size")" >&2
-    rm -rf "$pair"
-    # shellcheck disable=SC2086
-    if [ "$limiter" = systemd ]; then
-      # tmpfs pages count against the cgroup of the process that writes
-      # them, so the cap covers the pair rift-gen writes plus its own 1 GiB.
-      systemd-run --user --scope -q -p MemoryMax=$((2 * size + GIB)) -p MemorySwapMax=0 $niceio \
-        "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || gen_failed $? "$raw/gen-$prof-$size.log"
-    else
-      $niceio "$gen" --seed 7 --size "$size" --profile "$prof" --change-ratio 0.001 --out "$pair" > "$raw/gen-$prof-$size.log" 2>&1 || gen_failed $? "$raw/gen-$prof-$size.log"
-    fi
-    cp "$pair/manifest.tsv" "$raw/manifest-$prof-$size.tsv" 2>/dev/null || true
+    gen_pair "$size" "$prof"
     core_runs generated "$prof" "$size" "$pair/a" "$pair/b"
 
     if [ "$size" = "$small" ]; then
@@ -432,7 +461,7 @@ END {
   awk -F'\t' '
   function h(b,   u, i) { if (b == "") return ""; split("B KiB MiB GiB TiB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } return sprintf(i == 1 ? "%d %s" : "%.1f %s", b, u[i]) }
   { printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
-      $1, $2, $3, h($4), $5, $6, $8, $9, $10, $11, h($12 * 1024), h($14), h($15), $13, $16 }' "$runs"
+      $1, $2, $3, h($4), $5, $6, $8, $9, $10, $11, h($12 == "" ? "" : $12 * 1024), h($14), h($15), $13, $16 }' "$runs"
 } > "$pkg/report.md"
 
 name=rift-bench-$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d)
