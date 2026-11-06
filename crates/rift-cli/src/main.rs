@@ -6,47 +6,18 @@ mod keyed;
 mod source;
 mod summary;
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
 use rift_core::alloc::CountingAlloc;
+use rift_diff::Args;
 
 use crate::source::FileSource;
 
 #[global_allocator]
 static ALLOC: CountingAlloc = CountingAlloc;
-
-/// Diff text files of any size under a hard memory limit.
-#[derive(Debug, Parser)]
-#[command(name = "rift", version)]
-struct Args {
-    /// First file.
-    a: PathBuf,
-    /// Second file.
-    b: PathBuf,
-    /// Print line counts, the segment map and resource use instead of a
-    /// diff.
-    #[arg(long)]
-    summary: bool,
-    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
-    #[arg(long, default_value = "256M", value_parser = rift_core::Bytes::parse_budget)]
-    mem: rift_core::Bytes,
-    /// Browse the diff in the terminal instead of printing it.
-    #[arg(short, long, conflicts_with = "summary")]
-    interactive: bool,
-    /// After a diff, print peak heap, time and approximate regions to
-    /// standard error.
-    #[arg(long)]
-    stats: bool,
-    /// Compare records by key instead of lines, regardless of row order:
-    /// csv:N (column, from 1), csv:NAME (header), json:PATH (dotted field)
-    /// or copy:NAME (COPY column of a Postgres dump).
-    #[arg(long, value_name = "SPEC", conflicts_with_all = ["summary", "interactive"])]
-    key: Option<rift_core::keyed::KeySpec>,
-}
 
 /// `rift tui A B` is `rift -i A B`. With fewer than two more arguments
 /// `tui` is a file name: `rift tui other` diffs a file called `tui`.
