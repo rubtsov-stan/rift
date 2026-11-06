@@ -127,7 +127,12 @@ struct Shared<J> {
     work_cap: Bytes,
     total: u64,
     state: Mutex<Queue>,
-    cv: Condvar,
+    /// Idle workers wait here. Any one of them can take any job, so a
+    /// change that makes work wakes one, and a worker that starts a job
+    /// while more is ready wakes the next.
+    work: Condvar,
+    /// Callers of `wait_hunk` wait here, woken by every finished job.
+    ready: Condvar,
 }
 
 #[derive(Debug)]
@@ -205,7 +210,8 @@ impl<J: Job> Scheduler<J> {
                 failures: Vec::new(),
                 stop: false,
             }),
-            cv: Condvar::new(),
+            work: Condvar::new(),
+            ready: Condvar::new(),
         });
         let workers = (0..threads.max(1))
             .map(|_| {
@@ -233,7 +239,7 @@ impl<J: Job> Scheduler<J> {
     /// which then have to be computed twice.
     pub fn set_background(&self, on: bool) {
         self.shared.lock().background = on;
-        self.shared.cv.notify_all();
+        self.shared.work.notify_one();
     }
 
     /// The hunk for `segment`, computing it first if needed. Blocks; for the
@@ -255,7 +261,7 @@ impl<J: Job> Scheduler<J> {
             if let Some(hunk) = self.shared.lookup(&mut q, segment)? {
                 return Ok(hunk);
             }
-            q = self.shared.wait(q);
+            q = wait(&self.shared.ready, q);
         }
     }
 }
@@ -269,7 +275,8 @@ impl<J: Job> Drop for Scheduler<J> {
                 r.cancel.set();
             }
         }
-        self.shared.cv.notify_all();
+        self.shared.work.notify_all();
+        self.shared.ready.notify_all();
         for w in self.workers.drain(..) {
             // A worker only dies with a panicking job; its state is already
             // out of the queue, nothing to recover here.
@@ -326,17 +333,13 @@ impl<J: Job> DiffView for Scheduler<J> {
                 }
             }
         }
-        self.shared.cv.notify_all();
+        self.shared.work.notify_one();
     }
 }
 
 impl<J: Job> Shared<J> {
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn wait<'a>(&'a self, q: MutexGuard<'a, Queue>) -> MutexGuard<'a, Queue> {
-        self.cv.wait(q).unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The one-edit script of an equal segment, built without a job.
@@ -364,7 +367,7 @@ impl<J: Job> Shared<J> {
         }
         let hunk = q.cache.get(segment);
         if hunk.is_none() && q.cache.state(segment) == State::Idle && q.wanted.insert(segment) {
-            self.cv.notify_all();
+            self.work.notify_one();
         }
         Ok(hunk)
     }
@@ -449,6 +452,10 @@ impl Queue {
     }
 }
 
+fn wait<'a>(cv: &Condvar, q: MutexGuard<'a, Queue>) -> MutexGuard<'a, Queue> {
+    cv.wait(q).unwrap_or_else(PoisonError::into_inner)
+}
+
 fn worker<J: Job>(shared: &Shared<J>) {
     let mut q = shared.lock();
     loop {
@@ -456,7 +463,7 @@ fn worker<J: Job>(shared: &Shared<J>) {
             return;
         }
         let Some((i, prefetch)) = q.pick() else {
-            q = shared.wait(q);
+            q = wait(&shared.work, q);
             continue;
         };
         let segment = &shared.segments[i];
@@ -472,10 +479,13 @@ fn worker<J: Job>(shared: &Shared<J>) {
                 !q.running.is_empty(),
                 "Refine half is used outside the scheduler"
             );
-            q = shared.wait(q);
+            q = wait(&shared.work, q);
             continue;
         };
         let cancel = q.start(i, prefetch);
+        if q.pick().is_some() {
+            shared.work.notify_one();
+        }
         drop(q);
 
         // A panicking job must not take the worker down with it and leave
@@ -503,7 +513,8 @@ fn worker<J: Job>(shared: &Shared<J>) {
             Ok(Err(e)) => q.fail(i, e.to_string()),
             Err(_) => q.fail(i, "the job panicked".into()),
         }
-        shared.cv.notify_all();
+        shared.ready.notify_all();
+        shared.work.notify_one();
     }
 }
 
