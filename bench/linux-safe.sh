@@ -119,6 +119,13 @@ cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 have_taskset=0
 command -v taskset >/dev/null 2>&1 && have_taskset=1
 
+# The run is labelled by CPU model and date, never by hostname, so the
+# archive and the report can be shared as they are.
+cpu_model=$(lscpu 2>/dev/null | awk -F': +' '$1 == "Model name" {print $2; exit}')
+label=linux-$(printf '%s' "${cpu_model:-unknown cpu}" | tr '[:upper:]' '[:lower:]' |
+  sed 's/([a-z]*)//g; s/ w\/ .*//; s/ with .*//; s/ @.*//; s/ cpu$//; s/ processor$//; s/[^a-z0-9][^a-z0-9]*/-/g; s/^-//' |
+  cut -c1-40 | sed 's/-$//')-$(date +%Y-%m-%d)
+
 gib() { awk -v b="$1" 'BEGIN { if (b < 1073741824) printf "%d MiB", b / 1048576; else printf "%.1f GiB", b / 1073741824 }'; }
 
 plan() {
@@ -149,7 +156,7 @@ plan() {
     echo "  thread scaling    skipped: taskset not found"
   fi
   [ -z "$ropair" ] || echo "  read-only pair    $ropair (only read)"
-  echo "  output            $outdir/rift-bench-$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d).tar.gz"
+  echo "  output            rift-bench-$label.tar.gz in the current directory"
 }
 
 plan
@@ -162,7 +169,7 @@ fi
 
 # ---- scratch directory and cleanup -----------------------------------------
 
-scratch=$base/rift-bench-${USER:-$(id -un)}-$$
+scratch=$base/rift-bench-$$
 cleanup() {
   case $scratch in
     */rift-bench-*) rm -rf "$scratch" ;;
@@ -210,9 +217,9 @@ rift=$scratch/bin/rift gen=$scratch/bin/rift-gen
 lscpu_get() { lscpu 2>/dev/null | awk -F': +' -v k="$1" '$1 == k {print $2; exit}'; }
 fact tool "bench/linux-safe.sh schema 1"
 fact note "Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
-fact host "$(hostname 2>/dev/null || echo unknown)"
+fact host "$label"
 fact date "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-fact cpu_model "$(lscpu_get 'Model name')"
+fact cpu_model "$cpu_model"
 fact cpu_threads "$cpus"
 fact cpu_cores_per_socket "$(lscpu_get 'Core(s) per socket')"
 fact cpu_sockets "$(lscpu_get 'Socket(s)')"
@@ -464,7 +471,7 @@ END {
       $1, $2, $3, h($4), $5, $6, $8, $9, $10, $11, h($12 == "" ? "" : $12 * 1024), h($14), h($15), $13, $16 }' "$runs"
 } > "$pkg/report.md"
 
-name=rift-bench-$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d)
+name=rift-bench-$label
 archive=$outdir/$name.tar.gz
 [ ! -e "$archive" ] || archive=$outdir/$name-$$.tar.gz
 tar -C "$pkg" -czf "$archive" report.md results.json raw

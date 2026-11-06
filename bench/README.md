@@ -12,13 +12,13 @@ bench/linux-safe.sh --yes         # no wait
 
 Options: `--ref REF` (tag, branch or commit; default `v0.1.0`), `--repo URL`, `--read-only-pair DIR`.
 
-The result is `rift-bench-<host>-<date>.tar.gz` in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 2) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
+The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 2) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
 Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to clone and fetch crates, GNU `time` at `/usr/bin/time`, `awk`, `tar`. `systemd-run --user`, `ionice`, `taskset`, `lscpu` and `systemd-detect-virt` are used when present. No Python.
 
 ### What it does to the machine
 
-- Writes one directory in tmpfs, `/dev/shm/rift-bench-$USER-$$` (or under `$XDG_RUNTIME_DIR`). It checks that the filesystem is tmpfs and has 3 GiB free, and refuses otherwise.
+- Writes one directory in tmpfs, `/dev/shm/rift-bench-<pid>` (or under `$XDG_RUNTIME_DIR`). It checks that the filesystem is tmpfs and has 3 GiB free, and refuses otherwise.
 - The clone, the build, `CARGO_HOME`, `CARGO_TARGET_DIR`, the generated files and all logs are in that directory. After the build the binaries are copied out and the target directory, crate cache and clone are deleted.
 - A trap on exit, error, Ctrl-C and termination removes the directory. A power loss does the same, since it is RAM.
 - The only disk write is the result archive. Outside that, `systemd-run` leaves a few lines in the journal, and cargo is pointed away from `~/.cargo`.
