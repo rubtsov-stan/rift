@@ -134,6 +134,31 @@ peaked at 83.5 MiB on the 1 GB pair and 94.1 MiB on the 10 GB pair.
 `git diff` has no 1 GB row because it treats files over 512 MiB as binary
 and prints no diff.
 
+Intel Core i5-10600 (6 cores, 12 threads), 16 GB RAM, Ubuntu 26.04.1,
+Linux 7.0, bare metal.
+
+`bench/linux-safe.sh` ran Rift v0.1.0, the version behind the macOS
+table, on generated SQL pairs with the same seed. The files were in
+tmpfs, so this run measures CPU and memory, not the disk. Each time is
+the median of three runs.
+
+| Pair | Tool | Time | Peak memory |
+|---|---|---|---|
+| 256 MiB | `rift` (full diff) | 0.28 s | 112.8 MiB |
+| 256 MiB | GNU `diff` | 1.62 s | 776.3 MiB |
+| 256 MiB | `git diff` | 2.57 s | 1.0 GiB |
+| 1 GiB | `rift --summary` | 0.51 s | 113.0 MiB |
+| 1 GiB | `rift` (full diff) | 0.69 s | 113.0 MiB |
+| 1 GiB | GNU `diff` | killed at 3 GiB | |
+| 2 GiB | `rift --summary` | 0.86 s | 113.0 MiB |
+| 2 GiB | `rift` (full diff) | 1.20 s | 113.4 MiB |
+
+The script capped `diff` at 3 GiB on the 1 GiB pair. The cap killed the
+first run, and the script skipped the other two. At `--mem 256M`, Rift's heap
+peaked between 83.2 and 83.6 MiB. The full report, CSV pairs and thread
+scaling included, is in
+[bench/results/linux-intel-core-i5-10600-2026-11-06](bench/results/linux-intel-core-i5-10600-2026-11-06/report.md).
+
 `bench/run.sh` prints the full results with the commands and seeds, and
 `bench/data.sh` regenerates the data.
 
