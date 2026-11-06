@@ -32,3 +32,17 @@ rift-gen = { path = "../rift-gen" }
 
 [lints]
 workspace = true
+
+[package.metadata.deb]
+name = "rift-diff"
+section = "utils"
+priority = "optional"
+extended-description = """\
+Rift compares text files of tens to hundreds of gigabytes under a hard \
+heap limit and prints a unified diff."""
+assets = [
+    ["target/release/rift", "usr/bin/", "755"],
+    ["../../man/rift.1", "usr/share/man/man1/", "644"],
+    ["../../LICENSE-MIT", "usr/share/doc/rift-diff/", "644"],
+    ["../../LICENSE-APACHE", "usr/share/doc/rift-diff/", "644"],
+]
