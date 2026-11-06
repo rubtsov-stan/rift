@@ -170,7 +170,11 @@ fn exit_codes_follow_diff() {
 
     let out = rift(&["--mem", "64K"], &differ.a, &differ.b);
     assert_eq!(out.status.code(), Some(2), "--mem is honoured by the diff");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("budget exceeded"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with("rift: skeleton budget exceeded"),
+        "{stderr}"
+    );
 }
 
 #[test]

@@ -18,9 +18,18 @@ pub enum Half {
     Refine,
 }
 
+impl std::fmt::Display for Half {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Skeleton => "skeleton",
+            Self::Refine => "refine",
+        })
+    }
+}
+
 /// A reservation did not fit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("{half:?} budget exceeded: requested {requested} bytes, {available} available")]
+#[error("{half} budget exceeded: requested {requested} bytes, {available} available")]
 pub struct BudgetExceeded {
     /// The half that was asked.
     pub half: Half,
