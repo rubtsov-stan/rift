@@ -36,7 +36,7 @@ Browse the diff in the terminal instead of printing it
 Skip the search for moved blocks. The diff is the same
 .TP
 \fB\-\-stats\fR
-After a diff, print peak heap, time and approximate regions to standard error
+After a diff, print peak heap, time and approximate regions to standard error. With \-\-summary it adds nothing: the summary already prints them
 .TP
 \fB\-\-key\fR \fI<SPEC>\fR
 Compare records by key instead of lines, regardless of row order: csv:N (column, from 1), csv:NAME (header), json:PATH (dotted field) or copy:NAME (COPY column of a Postgres dump)
@@ -132,7 +132,8 @@ with \fB\-\-summary\fR or \fB\-\-interactive\fR.
 After a diff, prints to standard error the peak heap, the time, the
 number of approximate regions and the moved blocks. With \fB\-\-key\fR it
 prints the peak heap, the time, the number of passes over the files and
-the number of records in each file.
+the number of records in each file. With \fB\-\-summary\fR it adds
+nothing, since the summary already prints the peak heap and the time.
 .TP
 \fB\-\-no\-moves\fR
 Skips the search for moved blocks. The unified diff is byte for byte the
