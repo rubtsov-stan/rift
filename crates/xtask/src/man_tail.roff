@@ -69,8 +69,10 @@ The key is printed as the file has it, quotes included. A tab, line
 break or backslash in a key prints as \fB\\t\fR, \fB\\n\fR or
 \fB\\\\\fR. A record counts as unchanged only after its bytes compare
 equal. A key that occurs twice in one file stops the run with exit status
-2. \fB\-\-key\fR cannot be combined with \fB\-\-summary\fR or
-\fB\-\-interactive\fR.
+2, possibly after changes were printed. The message on standard error
+then says the output is incomplete and must be discarded, so check the
+exit status before you use the output. \fB\-\-key\fR cannot be combined
+with \fB\-\-summary\fR or \fB\-\-interactive\fR.
 .TP
 \fB\-\-stats\fR
 After a diff, prints to standard error the peak heap, the time, the
@@ -98,8 +100,9 @@ The files are identical.
 The files differ.
 .TP
 \fB2\fR
-An error: an unreadable file, a budget too small, a duplicate key or an
-invalid option. The message goes to standard error.
+An error: an unreadable file, a budget too small, a duplicate key, an
+invalid option or \fB\-i\fR in a build without the terminal view.
+The message goes to standard error.
 .SH MEMORY
 The heap stays at or under \fB\-\-mem\fR. Rift reserves each allocation
 on the data path from the budget before it makes it, and reads files with
