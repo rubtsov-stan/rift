@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Shingle anchors: where a region has no line that is unique in both
+  files, Rift now anchors on short runs of lines, so fewer regions come
+  out as approximate replacements.
+- `--key SPEC` compares records by key and ignores row order. `SPEC` is
+  `csv:N`, `csv:NAME`, `json:PATH` or `copy:NAME` (the COPY blocks of a
+  `pg_dump` file). It prints added, removed and changed keys with their
+  line numbers, compares record bytes before it calls a record unchanged,
+  and stops with exit status 2 on a duplicate key. A larger `--mem` means
+  fewer passes over the files.
+- Moved blocks: `--summary` and `--stats` list blocks of at least three
+  lines that appear in both files at different places, and the terminal
+  view marks both ends of a block and jumps from one end to the other with
+  `m`. The unified diff does not change. Detection starts from sampled
+  lines and does not find every block.
+- `--no-moves` skips the search for moved blocks. The unified diff is the
+  same; `--summary`, `--stats` and the terminal view say that detection
+  was off. It cannot be combined with `--key`.
+- `rift-mcp`, an MCP server that lets a client explore the diff of two
+  large files with `summary`, `hunks_at` and `next_difference`. It is
+  released as its own archives for the four targets and with its own shell
+  installer.
+- The terminal interface is an optional `tui` feature, on by default. In a
+  build without it, `-i` and `rift tui` exit with status 2.
+- `.deb` packages for x86_64 and aarch64 Linux, attached to each release.
+- A man page, `man/rift.1`, generated from the command-line definition
+  with `cargo xtask man` and included in the `rift` release archives and
+  the `.deb` packages.
+- `bench/linux-safe.sh` runs the benchmark on a Linux host from RAM only,
+  with memory caps, so it leaves the host and its disks alone.
+- Fuzz targets for the line scanner, the key parsers, the pipeline, the
+  unified writer, the terminal sanitizer and the MCP tools, with
+  `fuzz/run-linux.sh` to run them on a Linux host.
+- Release archives carry a build provenance attestation that
+  `gh attestation verify` checks.
+- CI runs `rift-core` tests under Miri, `cargo-deny` and `cargo-audit`,
+  CodeQL and an OpenSSF Scorecard check. Dependabot watches cargo and
+  GitHub Actions, and third-party actions are pinned by commit.
+
+### Changed
+
+- `--stats` and `--summary` print the peak heap as
+  `peak heap X of Y (N bytes)`: the rounded figure for reading and the
+  exact byte count for checking against `--mem`.
+- In key mode, an error after some changes were printed now says on
+  standard error that the output above is incomplete and must be
+  discarded. Check the exit status before using key output.
+- Budget errors start in lowercase (`skeleton budget exceeded`), and an
+  I/O error shows its text once instead of twice.
+- Faster scanning, anchor selection, chain search, scheduling, unified
+  output and key mode on large files, with the same output. DESIGN.md
+  lists what changed and how it was measured.
+
+### Fixed
+
+- Header timestamps at the ends of the time range no longer overflow.
+
 ## [0.1.0] - 2026-11-05
 
 First release.
