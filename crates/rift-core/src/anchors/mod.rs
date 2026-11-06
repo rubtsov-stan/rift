@@ -700,7 +700,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn shingles_fill_long_gaps_and_never_cost_a_failure() {
         // Unique lines, a short gap, more unique lines, then a long tail
         // where every value occurs twice but every window once.
@@ -716,7 +715,10 @@ mod tests {
         let unique: Vec<Pair> = (0..10).chain(14..24).map(pair).collect();
         let full: Vec<Pair> = (0..10).chain(14..62).map(pair).collect();
         let mut sizes = Vec::new();
-        for bytes in (0..8192).step_by(8) {
+        // Miri: every 128th budget (64 of 1024); the table sizes sit well
+        // inside that step, so both outcomes still appear.
+        let step = if cfg!(miri) { 128 } else { 8 };
+        for bytes in (0..8192).step_by(step) {
             let budget = Budget::new(Bytes(bytes));
             let Ok(lines) = UniqueLines.select(&s, &s, &budget) else {
                 continue;
