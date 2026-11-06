@@ -71,3 +71,16 @@ Every block below has a `// SAFETY:` comment, and the workspace lint
 | same file, `hints::sequential` (macOS) | `libc::fcntl(F_RDAHEAD)` | The descriptor is open and owned by `file` for the duration of the call; `F_RDAHEAD` takes an integer flag and touches no memory. |
 | `crates/rift-cli/src/full.rs`, `clock::utc_offset` | `mem::zeroed` and `libc::localtime_r` | `tm` is plain data for which all-zero bytes are valid, and `localtime_r` writes only into the struct we pass, reading `t`. |
 | `crates/rift-tui/tests/common/counting.rs`, `unsafe impl GlobalAlloc for Counting` (test code) | Counting allocator for heap tests | Every call is forwarded unchanged to `System`, which upholds the `GlobalAlloc` contract; the counters have no effect on the memory handed out. Its `alloc`, `dealloc` and `realloc` blocks each carry a one-line comment saying the pointer and layout come from `System` or from the caller. |
+
+## Workflow permissions
+
+Every workflow sets `permissions: contents: read` at the top. Jobs that need
+more ask for it themselves: `security-events: write` in Scorecard and CodeQL,
+`checks: write` in the advisory audit.
+
+The exception is `release.yml`, which `dist` generates. It sets
+`contents: write` at the top, because the host and announce jobs create the
+GitHub Release, and dist 0.34 has no setting for the top-level block (its
+`github-custom-job-permissions` only covers custom jobs). The file is not
+edited by hand, so the next `dist generate` keeps it as is. The workflow runs
+only on version tags.
