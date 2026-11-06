@@ -79,6 +79,9 @@ pub struct App<'a> {
     pub(crate) reported: Option<Range<LineNo>>,
     pub(crate) drawn_progress: Option<Progress>,
     pub(crate) pending_shown: bool,
+    /// The first moved row of the last frame: the block and whether the row
+    /// is its inserted side.
+    pub(crate) moved_shown: Option<(usize, bool)>,
     pub(crate) scratch: Scratch,
 }
 
@@ -105,6 +108,7 @@ impl<'a> App<'a> {
             reported: None,
             drawn_progress: None,
             pending_shown: false,
+            moved_shown: None,
             scratch: Scratch::default(),
         }
     }
@@ -152,7 +156,7 @@ impl<'a> App<'a> {
         let page = u64::from(self.rows.max(2) - 1);
         if matches!(
             key.code,
-            KeyCode::Char('n' | 'p' | 'N' | ' ' | 'b') | KeyCode::PageDown | KeyCode::PageUp
+            KeyCode::Char('n' | 'p' | 'N' | ' ' | 'b' | 'm') | KeyCode::PageDown | KeyCode::PageUp
         ) {
             self.anchor = None;
         }
@@ -169,6 +173,7 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Char('g' | ':') => self.mode = Mode::Goto(None),
+            KeyCode::Char('m') => self.other_end(),
             _ => {}
         }
         Action::Continue
@@ -280,22 +285,47 @@ impl<'a> App<'a> {
 
     /// Jumps to 1-based A line `line`, clamped to the file.
     fn goto_line(&mut self, line: u64) {
+        let want = line
+            .saturating_sub(1)
+            .min(self.view.len_a().saturating_sub(1));
+        self.jump(Anchor::A(want));
+    }
+
+    /// Jumps from the first moved row on screen to the other end of its
+    /// block.
+    fn other_end(&mut self) {
+        let Some((k, inserted)) = self.moved_shown else {
+            self.message = "no moved block on screen";
+            return;
+        };
+        let m = &self.view.moved_blocks()[k];
+        self.jump(if inserted {
+            Anchor::A(m.a.start.0)
+        } else {
+            Anchor::B(m.b.start.0)
+        });
+    }
+
+    /// Puts 0-based line `to` of A, or of B, at the top.
+    fn jump(&mut self, to: Anchor) {
         let segs = self.view.segments();
         if segs.is_empty() {
             return;
         }
-        let want = line
-            .saturating_sub(1)
-            .min(self.view.len_a().saturating_sub(1));
+        let (want, side): (u64, fn(&rift_core::Segment) -> &Range<LineNo>) = match to {
+            Anchor::A(l) => (l, |s| &s.a),
+            Anchor::B(l) => (l, |s| &s.b),
+            Anchor::Last => return,
+        };
         let seg = segs
-            .partition_point(|s| s.a.end.0 <= want)
+            .partition_point(|s| side(s).end.0 <= want)
             .min(segs.len() - 1);
         let s = &segs[seg];
         let off = if s.status == SegmentStatus::Equal {
-            want.saturating_sub(s.a.start.0)
+            want.saturating_sub(side(s).start.0)
         } else {
             // Resolved by the next frame, now or once the hunk is ready.
-            self.anchor = Some(Anchor::A(want));
+            self.anchor = Some(to);
             0
         };
         self.pos = Pos { seg, off };

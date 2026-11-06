@@ -7,6 +7,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use rift_core::moves::MovedBlock;
 use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Progress, Segment, SegmentStatus};
 
 use crate::app::{App, Mode, Pos, Scratch, anchor_at, row_of, rows_in};
@@ -49,6 +50,8 @@ struct Info {
     /// Last row drawn.
     last: Pos,
     pending: bool,
+    /// The first moved row: its block and whether it is the inserted side.
+    moved: Option<(usize, bool)>,
 }
 
 /// `len` consecutive rows of one kind; `a` and `b` are the first line
@@ -63,6 +66,7 @@ struct Run {
 
 struct Painter<'s> {
     files: [&'s dyn LineAccess; 2],
+    moved: &'s [MovedBlock],
     scratch: &'s mut Scratch,
     /// Digits of the widest line number.
     digits: usize,
@@ -86,6 +90,24 @@ impl Painter<'_> {
         self.show(at.saturating_sub(1)..at.max(1));
     }
 
+    /// The moved block holding a deleted line `a`, or an inserted line `b`.
+    fn moved_at(&self, kind: Kind, line: u64) -> Option<usize> {
+        let line = LineNo(line);
+        match kind {
+            Kind::Equal => None,
+            Kind::Delete => {
+                let k = self.moved.partition_point(|m| m.a.end <= line);
+                self.moved
+                    .get(k)
+                    .is_some_and(|m| m.a.contains(&line))
+                    .then_some(k)
+            }
+            // Linear in the blocks per inserted row, since they are
+            // ordered by A; index them by B if a diff has very many.
+            Kind::Insert => self.moved.iter().position(|m| m.b.contains(&line)),
+        }
+    }
+
     /// Draws as much of `run` as fits and returns the rows drawn.
     fn run(&mut self, buf: &mut Buffer, run: &Run) -> u64 {
         let n = run.len.min(u64::from(self.end - self.row));
@@ -103,13 +125,29 @@ impl Painter<'_> {
             (Kind::Delete, false) => ('-', Some(Color::Red)),
             (Kind::Insert, false) => ('+', Some(Color::Green)),
         };
-        let style = color.map_or_else(Style::default, |c| Style::default().fg(c));
         let digits = self.digits;
         let room = usize::from(self.width).saturating_sub(digits * 2 + 7);
         for i in 0..n {
+            let moved = self.moved_at(run.kind, first + i);
+            if let Some(k) = moved
+                && self.info.moved.is_none()
+            {
+                self.info.moved = Some((k, run.kind == Kind::Insert));
+            }
+            let color = if moved.is_some() {
+                Some(Color::Magenta)
+            } else {
+                color
+            };
+            let style = color.map_or_else(Style::default, |c| Style::default().fg(c));
+            let flag = match (run.approx, moved) {
+                (true, _) => '~',
+                (false, Some(_)) => 'm',
+                (false, None) => ' ',
+            };
             let pre = &mut self.scratch.prefix;
             pre.clear();
-            let _ = write!(pre, "{}{mark} ", if run.approx { '~' } else { ' ' });
+            let _ = write!(pre, "{flag}{mark} ");
             if run.kind == Kind::Insert {
                 let _ = write!(pre, "{:digits$}", "");
             } else {
@@ -338,6 +376,7 @@ impl App<'_> {
         );
         self.drawn_progress = Some(progress);
         self.pending_shown = info.pending;
+        self.moved_shown = info.moved;
         let vis = LineNo(info.vis.start)..LineNo(info.vis.end);
         if self.reported.as_ref() != Some(&vis) {
             self.view.set_visible(vis.clone());
@@ -360,6 +399,7 @@ impl App<'_> {
                 vis: 0..0,
                 last: self.pos,
                 pending: false,
+                moved: None,
             };
         }
         // The first segment's hunk is fetched here and reused by the loop.
@@ -383,6 +423,7 @@ impl App<'_> {
         self.scratch.cache.begin();
         let mut painter = Painter {
             files: [self.a, self.b],
+            moved: view.moved_blocks(),
             scratch: &mut self.scratch,
             digits: (len_a.max(len_b).max(1).ilog10() + 1) as usize,
             x: area.x,
@@ -396,6 +437,7 @@ impl App<'_> {
                 }, // empty until a row reports
                 last: self.pos,
                 pending: false,
+                moved: None,
             },
         };
         let mut skip = self.pos.off;
@@ -500,6 +542,10 @@ impl App<'_> {
             );
             if self.diff_total == 0 {
                 sc.status.push_str("  files are identical");
+            }
+            let moved = self.view.moved_blocks().len();
+            if moved > 0 {
+                let _ = write!(sc.status, "  moved {moved}");
             }
             if !self.message.is_empty() {
                 let _ = write!(sc.status, "  {}", self.message);

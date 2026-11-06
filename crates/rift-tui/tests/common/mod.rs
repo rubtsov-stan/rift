@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use rift_core::moves::MovedBlock;
 use rift_core::{DiffView, Edit, Hunk, HunkState, LineNo, Progress, Segment, SegmentStatus};
 
 #[derive(Clone, Copy)]
@@ -33,6 +34,8 @@ pub struct MockView {
     pub visible: Mutex<Vec<Range<LineNo>>>,
     /// Segments passed to `hunk`, recorded once `log_hunk_calls` is called.
     calls: Mutex<Option<Vec<usize>>>,
+    /// What `moved_blocks` returns; none unless a test sets it.
+    pub moved: Vec<MovedBlock>,
 }
 
 pub struct Mock {
@@ -144,6 +147,7 @@ impl Mock {
             total,
             visible: Mutex::new(Vec::with_capacity(1 << 16)),
             calls: Mutex::new(None),
+            moved: Vec::new(),
         };
         Self { view, a, b }
     }
@@ -224,5 +228,8 @@ impl DiffView for MockView {
     }
     fn set_visible(&self, range: Range<LineNo>) {
         self.visible.lock().unwrap().push(range);
+    }
+    fn moved_blocks(&self) -> &[MovedBlock] {
+        &self.moved
     }
 }
