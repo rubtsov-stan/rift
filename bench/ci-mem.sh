@@ -1,13 +1,14 @@
 #!/bin/sh
-# CI memory gate: generates a pair, runs `rift --summary --mem MEM` and the
-# full diff `rift --stats --mem MEM`, and fails when the counting
-# allocator's peak heap of either exceeds MEM.
+# CI memory gate: generates a pair, runs `rift --summary --mem MEM`, the
+# full diff `rift --stats --mem MEM` and, on a shuffled CSV pair, key mode
+# `rift --stats --key csv:1 --mem MEM`, and fails when the counting
+# allocator's peak heap of any of them exceeds MEM.
 #
 #   bench/ci-mem.sh [SIZE] [MEM]     defaults 1G and 256M
 #
-# rift prints the peak with one decimal in the unit that fits: on stdout
-# for --summary, on stderr for --stats, so the diff on stdout stays a
-# patch. At 256M that unit is MiB, so the comparison is exact to 0.05 MiB.
+# rift ends its "peak heap" line with the exact count, "(N bytes)": on
+# stdout for --summary, on stderr for --stats, so a diff on stdout stays a
+# patch. The check compares those bytes with MEM, with no rounding.
 set -eu
 
 size=${1:-1G} mem=${2:-256M}
@@ -32,10 +33,7 @@ check() {
   else
     rss=$(awk -F': ' '/Maximum resident/ {print $2 * 1024}' "$work/err")
   fi
-  peak=$(awk '/^peak heap/ {
-    m = 1; if ($4 == "KiB") m = 1024; else if ($4 == "MiB") m = 1048576
-    else if ($4 == "GiB") m = 1073741824; else if ($4 == "TiB") m = 1099511627776
-    printf "%.0f", $3 * m }' "$2")
+  peak=$(sed -n 's/^peak heap .*(\([0-9][0-9]*\) bytes)$/\1/p' "$2")
   [ -n "$peak" ] || { echo "$1: no 'peak heap' line in rift output" >&2; exit 1; }
   echo "$1: peak heap $peak bytes, limit $limit bytes, peak RSS $rss bytes"
   if [ "$peak" -gt "$limit" ]; then
@@ -58,3 +56,13 @@ rc=0
 grep -v '^ ' "$work/err" | grep -E '^(peak heap|time|approx)' || true
 echo "diff: $(wc -c < "$work/diff" | tr -d ' ') bytes"
 check diff "$work/err"
+
+# Key mode on a shuffled pair of the same size; its changes go nowhere.
+rm -rf "$work/pair" "$work/diff"
+"$root/target/release/rift-gen" --seed 7 --size "$size" --profile shuffled --rows csv --out "$work/keyed"
+rc=0
+/usr/bin/time $tf "$root/target/release/rift" --stats --key csv:1 --mem "$mem" \
+  "$work/keyed/a" "$work/keyed/b" > /dev/null 2> "$work/err" || rc=$?
+[ "$rc" -le 1 ] || { cat "$work/err" >&2; echo "rift --key failed with exit $rc" >&2; exit 1; }
+grep -E '^(peak heap|time|passes)' "$work/err" || true
+check key "$work/err"
