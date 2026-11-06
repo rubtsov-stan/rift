@@ -5,12 +5,21 @@ use std::io;
 use crate::budget::BudgetExceeded;
 use crate::types::{Bytes, LineNo};
 
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
 /// Everything that can go wrong inside the core.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The source failed to read.
+    ///
+    /// Not a `#[from]` field: that would make the I/O error the source as
+    /// well, and a chain printer such as `anyhow`'s would show its text twice.
     #[error("read failed: {0}")]
-    Io(#[from] io::Error),
+    Io(io::Error),
     /// A reservation did not fit its half of the budget.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),

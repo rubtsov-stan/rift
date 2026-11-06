@@ -168,6 +168,12 @@ fn exit_codes_follow_diff() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("missing"));
 
+    let dir = differ.a.parent().unwrap();
+    let out = rift(&[], dir, &differ.b);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.matches("Is a directory").count(), 1, "{stderr}");
+
     let out = rift(&["--mem", "64K"], &differ.a, &differ.b);
     assert_eq!(out.status.code(), Some(2), "--mem is honoured by the diff");
     let stderr = String::from_utf8_lossy(&out.stderr);
