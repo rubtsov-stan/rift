@@ -115,7 +115,9 @@ lines and line endings play no part in the comparison.
 
 Rift compares a record's bytes before it calls the record unchanged. A
 key that occurs twice in one file stops the run with exit code 2 and
-lists the first few. Exit codes otherwise follow `diff`.
+lists the first few. Exit codes otherwise follow `diff`. A run can stop
+after it has printed some changes, and then the output is incomplete, so
+a script should check the exit code before it uses the output.
 
 Key mode writes no temporary files. When the keys do not fit `--mem`,
 Rift splits them by hash and reads both files once per part, so a

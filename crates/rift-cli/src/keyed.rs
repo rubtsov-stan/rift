@@ -27,8 +27,13 @@ pub fn run(
 ) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
     let mut out = BufWriter::new(io::stdout().lock());
-    let report = compare(a, b, spec, &Budget::new(mem), |c| write_change(&mut out, c))?;
+    let mut printed = 0u64;
+    let result = compare(a, b, spec, &Budget::new(mem), |c| {
+        printed += 1;
+        write_change(&mut out, c)
+    });
     out.flush()?;
+    let report = result.map_err(|e| incomplete(e.into(), printed))?;
     if stats {
         eprintln!("peak heap {} of {}", human(alloc::peak()), human(mem));
         eprintln!("time {:.2} s", start.elapsed().as_secs_f64());
@@ -42,6 +47,16 @@ pub fn run(
     } else {
         ExitCode::from(1)
     })
+}
+
+/// A pass prints its changes before a later pass can find a duplicate key,
+/// so an error after the first printed line leaves partial output.
+fn incomplete(err: anyhow::Error, printed: u64) -> anyhow::Error {
+    if printed == 0 {
+        err
+    } else {
+        err.context("the changes printed above are incomplete and must be discarded")
+    }
 }
 
 /// `~KEY<tab>A<tab>B`, `-KEY<tab>A<tab>-` or `+KEY<tab>-<tab>B`, lines
@@ -75,6 +90,16 @@ fn write_change(out: &mut impl Write, c: &KeyedChange) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_after_printed_changes_says_to_discard_them() {
+        let err = || anyhow::anyhow!("duplicate keys: 7");
+        assert_eq!(format!("{:#}", incomplete(err(), 0)), "duplicate keys: 7");
+        assert_eq!(
+            format!("{:#}", incomplete(err(), 3)),
+            "the changes printed above are incomplete and must be discarded: duplicate keys: 7"
+        );
+    }
 
     fn change(key: &[u8], kind: ChangeKind, a: Option<u64>, b: Option<u64>) -> KeyedChange {
         KeyedChange {
