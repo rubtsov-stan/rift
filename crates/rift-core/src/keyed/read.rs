@@ -799,6 +799,14 @@ fn csv_record(buf: &[u8], col: u32, eof: bool) -> Option<Split> {
             if !eof {
                 return None;
             }
+            // A quote left open runs to the end of the file, but the
+            // file's last line break still ends the record, as it does
+            // outside quotes: otherwise a change of the final line ending
+            // alone would change the record.
+            if quoted && buf.ends_with(b"\n") {
+                lines -= 1;
+                break buf.len() - 1;
+            }
             break buf.len();
         };
         i = j + 1;
@@ -1010,6 +1018,18 @@ mod tests {
         assert_eq!((last.len, last.next, last.key), (3, 3, Some(2..3)));
         let empty = csv_record(b"\n", 0, false).unwrap();
         assert_eq!((empty.len, empty.next), (0, 1));
+    }
+
+    #[test]
+    fn open_quote_at_eof_leaves_out_the_last_terminator() {
+        for (buf, len) in [
+            (&b"2,\"a\nb\n"[..], 6),
+            (b"2,\"a\nb\r\n", 6),
+            (b"2,\"a\nb", 6),
+        ] {
+            let s = csv_record(buf, 0, true).unwrap();
+            assert_eq!((s.len, s.next, s.lines), (len, buf.len(), 2), "{buf:?}");
+        }
     }
 
     #[test]
