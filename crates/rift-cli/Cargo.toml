@@ -13,10 +13,15 @@ authors.workspace = true
 name = "rift"
 path = "src/main.rs"
 
+[features]
+default = ["tui"]
+# The terminal interface (`-i`, `rift tui`). Without it those exit 2.
+tui = ["dep:rift-tui", "dep:ratatui"]
+
 [dependencies]
 rift-core = { path = "../rift-core", features = ["counting-alloc"] }
-rift-tui = { path = "../rift-tui" }
-ratatui.workspace = true
+rift-tui = { path = "../rift-tui", optional = true }
+ratatui = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 libc.workspace = true

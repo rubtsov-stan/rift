@@ -69,7 +69,14 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
     })
 }
 
+/// Without the `tui` feature there is no terminal interface to open.
+#[cfg(not(feature = "tui"))]
+pub fn interactive(_: &Files<'_>, _: Bytes) -> anyhow::Result<ExitCode> {
+    anyhow::bail!("built without TUI support")
+}
+
 /// Opens the terminal interface on the diff. Exit code as for the diff.
+#[cfg(feature = "tui")]
 pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
     let diff = build(files, mem)?;
     let identical = rift_core::DiffView::segments(&diff)
