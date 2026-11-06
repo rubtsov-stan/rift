@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml"><img src="https://github.com/rubtsov-stan/rift/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/rubtsov-stan/rift/releases/latest"><img src="https://img.shields.io/github/v/release/rubtsov-stan/rift" alt="Release"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/rubtsov-stan/rift"><img src="https://api.scorecard.dev/projects/github.com/rubtsov-stan/rift/badge" alt="OpenSSF Scorecard"></a>
 </p>
 
 <p align="center">
