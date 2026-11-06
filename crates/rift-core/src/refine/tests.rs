@@ -223,14 +223,15 @@ fn runs_use_absolute_line_numbers() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "too slow under Miri")]
 fn verification_spans_several_read_blocks() {
     // 3 000 lines, 40 edits, colliding hashes: pairs cross the
-    // VERIFY_LINES boundary and flips happen in every block.
+    // VERIFY_LINES boundary and flips happen in every block. Miri: 300
+    // lines (about five blocks of 64) and 12 edits.
+    let (lines, edits) = if cfg!(miri) { (300, 12) } else { (3_000, 40) };
     let mut rng = Rng(9);
-    let a: Vec<u8> = (0..3_000).map(|_| rng.below(200) as u8).collect();
+    let a: Vec<u8> = (0..lines).map(|_| rng.below(200) as u8).collect();
     let mut b = a.clone();
-    for _ in 0..40 {
+    for _ in 0..edits {
         let i = rng.below(b.len());
         match rng.below(3) {
             0 => b.insert(i, rng.below(200) as u8),
@@ -536,13 +537,17 @@ fn dp_threshold() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore = "too slow under Miri")]
 fn lines_longer_than_the_reader_are_compared_in_pieces() {
-    use crate::index::IndexedLines;
+    use crate::index::{Checkpoint, IndexedLines, LineIndex};
     use crate::scan::{ScanConfig, scan};
+    use crate::types::ByteOffset;
 
+    // Miri: 70 000-byte lines, just over one 64 KiB piece, and an index
+    // built by hand, because scan starts rayon's pool and that is covered
+    // under Tree Borrows only. Native: 200 000 bytes through the scanner.
+    let long_len = if cfg!(miri) { 70_000 } else { 200_000 };
     let long = |tail: u8| {
-        let mut l = vec![b'x'; 200_000];
+        let mut l = vec![b'x'; long_len];
         l.push(tail);
         l.push(b'\n');
         l
@@ -551,13 +556,30 @@ fn lines_longer_than_the_reader_are_compared_in_pieces() {
     let a = build(&[b"a\n", &long(b'1'), b"b\n", &long(b'2'), b"z\n"]);
     let b = build(&[b"a\n", &long(b'1'), b"c\n", &long(b'3'), b"z\n"]);
     let budget = Budget::new(Bytes::mib(64));
-    let reader = |data: &[u8]| {
-        let cfg = ScanConfig::for_pair(Bytes(data.len() as u64), Bytes(0), &budget).0;
-        scan(data, &budget, &cfg).unwrap()
+    let index = |data: &[u8]| {
+        if cfg!(miri) {
+            let mut offset = 0;
+            let checkpoints = lines(data)
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let at = Checkpoint {
+                        line: LineNo(i as u64),
+                        offset: ByteOffset(offset),
+                    };
+                    offset += l.len() as u64;
+                    at
+                })
+                .collect();
+            LineIndex::new(checkpoints, lines(data).len() as u64, 1)
+        } else {
+            let cfg = ScanConfig::for_pair(Bytes(data.len() as u64), Bytes(0), &budget).0;
+            scan(data, &budget, &cfg).unwrap().index().clone()
+        }
     };
-    let (sa, sb) = (reader(&a), reader(&b));
-    let la = IndexedLines::new(&a[..], sa.index(), &budget, Half::Refine, Bytes(4096)).unwrap();
-    let lb = IndexedLines::new(&b[..], sb.index(), &budget, Half::Refine, Bytes(4096)).unwrap();
+    let (ia, ib) = (index(&a), index(&b));
+    let la = IndexedLines::new(&a[..], &ia, &budget, Half::Refine, Bytes(4096)).unwrap();
+    let lb = IndexedLines::new(&b[..], &ib, &budget, Half::Refine, Bytes(4096)).unwrap();
     let seg = Segment {
         a: LineNo(0)..LineNo(5),
         b: LineNo(0)..LineNo(5),
