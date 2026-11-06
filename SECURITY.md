@@ -47,9 +47,15 @@ under two aliasing models:
 Not run under Miri: the unit tests of `diff`, which do not finish within
 the CI time limit; those of `sched`, whose worker threads and timeouts do
 not fit Miri's speed; the integration tests other than `alloc_small`; and
-unit tests marked `#[cfg_attr(miri, ignore)]` as too slow. Property tests
-run 8 cases each under Miri. The FFI modules in `rift-cli` are not
-covered.
+the `refine` property tests that run 10 000 cases, the unit tests of
+`unified` that run the system `diff` and `patch`, and a few others marked
+`#[cfg_attr(miri, ignore)]`. Tests that are too slow at full size use
+smaller inputs under Miri instead (`cfg!(miri)` in the test): fewer rows,
+shorter lines, fewer budgets and piece sizes. Property tests run 8 cases
+each under Miri. The FFI modules in `rift-cli` are not covered.
+
+The Miri jobs run nightly, on demand and on pull requests that touch
+`crates/rift-core`, not on every push.
 
 Every block below has a `// SAFETY:` comment, and the workspace lint
 `clippy::undocumented_unsafe_blocks` is set to `deny`.
