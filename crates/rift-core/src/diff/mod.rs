@@ -14,10 +14,11 @@
 //! built. Refine half, in this order: the front end's share (two line
 //! readers, the line buffer and the 1 MiB output buffer of the unified
 //! writer), then each worker's two line readers and four line buffers,
-//! then the scheduler, which takes what is left for its row table, its
-//! hunk cache and the jobs' working sets. Line buffers are bounded because
-//! a reader returns a line whole only when it fits its buffer; longer lines
-//! travel in pieces of 64 KiB.
+//! then the moved blocks and, while they are found, two comparison
+//! buffers (see [`Moves`]), then the scheduler, which takes what is left
+//! for its row table, its hunk cache and the jobs' working sets. Line
+//! buffers are bounded because a reader returns a line whole only when it
+//! fits its buffer; longer lines travel in pieces of 64 KiB.
 
 mod resample;
 #[cfg(test)]
@@ -35,6 +36,7 @@ use crate::edit::{Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::index::{IndexedLines, LineIndex};
 use crate::lines::{LineAccess, LineBuf};
+use crate::moves::{MovedBlock, Moves};
 use crate::refine::{Refiner, VERIFY_LINES, work_estimate};
 use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler};
 use crate::script::{LINES_PER_READ, PIECE, for_each_piece};
@@ -94,6 +96,8 @@ pub struct Diff<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized +
     anchors: usize,
     /// In the skeleton half, with its own reservation.
     off_chain: OffChain,
+    /// In the refine half, taken before the scheduler takes the rest.
+    moves: Moves,
     _map: [Reservation; 3],
     _front: Reservation,
 }
@@ -174,6 +178,21 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        // Readers of their own with small buffers keep the comparison
+        // buffers small; all of it is released once the blocks are found.
+        let moves = {
+            let (ix_a, ix_b) = (&*index_a, &*index_b);
+            let ma = IndexedLines::new(&*a, ix_a, budget, Half::Refine, WORKER_SCRATCH)?;
+            let mb = IndexedLines::new(&*b, ix_b, budget, Half::Refine, WORKER_SCRATCH)?;
+            Moves::find(
+                off_chain.pairs(),
+                &segments,
+                &ma,
+                &mb,
+                WORKER_SCRATCH,
+                budget,
+            )?
+        };
         let lines_a = IndexedLines::new(a, index_a, budget, Half::Refine, FRONT_SCRATCH)?;
         let lines_b = IndexedLines::new(b, index_b, budget, Half::Refine, FRONT_SCRATCH)?;
         let job = RefineJob {
@@ -191,6 +210,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             level,
             anchors,
             off_chain,
+            moves,
             _map: [held_a, held_b, held_map],
             _front: front,
         })
@@ -224,6 +244,12 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     #[must_use]
     pub fn off_chain(&self) -> &OffChain {
         &self.off_chain
+    }
+
+    /// Moved blocks, or the note that the budget did not allow looking.
+    #[must_use]
+    pub fn moves(&self) -> &Moves {
+        &self.moves
     }
 
     /// Refinement workers.
@@ -313,6 +339,10 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
 
     fn set_visible(&self, range: Range<LineNo>) {
         self.sched.set_visible(range);
+    }
+
+    fn moved_blocks(&self) -> &[MovedBlock] {
+        self.moves.blocks()
     }
 }
 
