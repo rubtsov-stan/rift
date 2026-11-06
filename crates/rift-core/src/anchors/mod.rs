@@ -448,7 +448,9 @@ fn unique_hashes<I: Iterator<Item = (usize, u64)> + Clone + Sync>(
 
 /// Fewest samples on the smaller side for the table to be filled by
 /// several threads; below it a thread fills it faster than they start.
-const PARALLEL_SAMPLES: usize = 1 << 16;
+// Miri runs the parallel path on a small table; the threshold only
+// decides when splitting pays off, not what the result is.
+const PARALLEL_SAMPLES: usize = if cfg!(miri) { 1 << 10 } else { 1 << 16 };
 /// Most ranges the table is cut into.
 const MAX_PARTS: usize = 64;
 
@@ -651,8 +653,15 @@ mod tests {
         // crowded into the first hundredth of the slots, which overfills
         // the first of eight ranges and sends the table to one thread.
         let spread = |x: u64| x.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        let uniform: Vec<u64> = (0..200_000).map(|_| spread(rnd() % 150_000)).collect();
-        let crowded: Vec<u64> = (0..120_000u64)
+        // Miri: 2 000 and 2 000 hashes (the smaller side, 1 500, is above
+        // Miri's PARALLEL_SAMPLES of 1 024); native: 200 000 and 120 000.
+        let (n_uniform, distinct, n_crowded) = if cfg!(miri) {
+            (2_000, 1_500, 2_000u64)
+        } else {
+            (200_000, 150_000, 120_000u64)
+        };
+        let uniform: Vec<u64> = (0..n_uniform).map(|_| spread(rnd() % distinct)).collect();
+        let crowded: Vec<u64> = (0..n_crowded)
             .map(|i| if i % 4 == 0 { i << 40 } else { spread(i) })
             .collect();
         let pool = rayon::ThreadPoolBuilder::new()
