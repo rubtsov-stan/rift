@@ -34,11 +34,13 @@ denies it except in the two FFI modules below. `rift-core` has one
 under two aliasing models:
 
 - Stacked Borrows, Miri's default: the unit tests of every module except
-  `scan`, `skeleton`, `diff`, `moves` and `sched`, plus `tests/alloc_small.rs`,
+  `scan`, `skeleton`, `diff`, `moves`, `keyed` and `sched`, and except the
+  anchors test that splits the table across threads, plus `tests/alloc_small.rs`,
   which installs the counting allocator and exercises its `unsafe`
   forwarding on a few KiB.
-- Tree Borrows: the unit tests of `scan`, `skeleton` and `moves`. They
-  start rayon's thread pool, and rayon's `crossbeam-epoch` 0.9.21 trips a
+- Tree Borrows: the unit tests of `scan`, `skeleton`, `moves` and `keyed`,
+  and the anchors test `many_samples_split_the_table_with_the_same_result`.
+  They start rayon's thread pool, and rayon's `crossbeam-epoch` 0.9.21 trips a
   report inside its own code under Stacked Borrows only. Leak checks are
   off for these, because rayon's pool outlives the test process.
 
