@@ -24,6 +24,7 @@
 set -eu
 
 GIB=1073741824
+schema=2
 repo=https://github.com/rubtsov-stan/rift ref=v0.1.0 yes=0 dry=0 ropair=
 testing=${RIFT_BENCH_TESTING:-0}
 meminfo=${RIFT_BENCH_MEMINFO:-/proc/meminfo}
@@ -215,7 +216,7 @@ rift=$scratch/bin/rift gen=$scratch/bin/rift-gen
 # ---- host facts ------------------------------------------------------------
 
 lscpu_get() { lscpu 2>/dev/null | awk -F': +' -v k="$1" '$1 == k {print $2; exit}'; }
-fact tool "bench/linux-safe.sh schema 1"
+fact tool "bench/linux-safe.sh schema $schema"
 fact note "Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
 fact host "$label"
 fact date "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -250,7 +251,7 @@ heap_bytes() {
 }
 
 # run_one GROUP PROFILE SIZE TOOL THREADS CAP REP MODE CMD...
-# MODE: null (stdout discarded), count (stdout counted by wc -c), file
+# MODE: count (stdout counted by wc -c), file
 # (stdout kept, for rift --summary). time -v writes to its own file, so the
 # command's stderr stays clean for rift's --stats line.
 # scope_result UNIT: systemd's Result for the scope (success, oom-kill,
@@ -297,7 +298,6 @@ run_one() {
   # $lim is a word list on purpose.
   # shellcheck disable=SC2086
   case $mode in
-    null) $lim "$timebin" -v -o "$b.time" "$@" > /dev/null 2> "$b.err" || true ;;
     file) $lim "$timebin" -v -o "$b.time" "$@" > "$b.out" 2> "$b.err" || true ;;
     count) $lim "$timebin" -v -o "$b.time" "$@" 2> "$b.err" | wc -c | tr -d ' ' > "$b.bytes" || true ;;
   esac
@@ -326,7 +326,9 @@ run_one() {
 core_runs() {
   g=$1 p=$2 s=$3 a=$4 bb=$5
   for r in 1 2 3; do
-    run_one "$g" "$p" "$s" "cat a b" all "$GIB" $r null cat "$a" "$bb"
+    # Into a pipe, not /dev/null: cat can hand a file to /dev/null without
+    # copying it, which made the baseline read 2 GiB in 0.05 s.
+    run_one "$g" "$p" "$s" "cat a b | wc -c" all "$GIB" $r count cat "$a" "$bb"
   done
   for r in 1 2 3; do
     run_one "$g" "$p" "$s" "rift --summary --mem 256M" all "$GIB" $r file "$rift" --summary --mem 256M "$a" "$bb"
@@ -421,7 +423,7 @@ fact load_after "$(loadavg)"
 
 pkg=$scratch/pkg
 # Input lines are tagged F (fact), N (note) or R (run) so one awk can read all three.
-{ awk '{print "F\t" $0}' "$facts"; awk '{print "N\t" $0}' "$notes"; awk '{print "R\t" $0}' "$runs"; } | awk -F'\t' '
+{ awk '{print "F\t" $0}' "$facts"; awk '{print "N\t" $0}' "$notes"; awk '{print "R\t" $0}' "$runs"; } | awk -F'\t' -v schema="$schema" '
 function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/[\001-\037]/, " ", s); return s }
 function num(x) { return x == "" ? "null" : x }
 $1 == "F" { f[++nf] = $2; v[nf] = $3; next }
@@ -431,7 +433,7 @@ $1 == "N" { nt[++nn] = $2; next }
     $2, $3, $4, num($5), esc($6), $7, num($8), num($9), num($10), num($11), num($12), num($13), num($14), num($15), num($16), $17, ($17 == "oom-kill" ? "true" : "false"), esc($18))
 }
 END {
-  print "{\n  \"schema_version\": 2,\n  \"host\": {"
+  print "{\n  \"schema_version\": " schema ",\n  \"host\": {"
   for (i = 1; i <= nf; i++) printf "    \"%s\": \"%s\"%s\n", f[i], esc(v[i]), (i < nf ? "," : "")
   print "  },\n  \"notes\": ["
   for (i = 1; i <= nn; i++) printf "    \"%s\"%s\n", esc(nt[i]), (i < nn ? "," : "")
