@@ -55,6 +55,13 @@ From source, with Rust 1.97 or later:
 cargo install --git https://github.com/rubtsov-stan/rift rift-diff
 ```
 
+Each release archive carries a build provenance attestation. To check
+one you downloaded, with the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify rift-diff-x86_64-unknown-linux-gnu.tar.xz --repo rubtsov-stan/rift
+```
+
 The binary is called `rift`.
 
 ## Usage
