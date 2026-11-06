@@ -433,10 +433,26 @@ hashing the bytes again. Shingles are sampled by the strata rule, and one
 that occurs once in each file becomes a candidate pointing at its first
 line. They come from a second `CandidateSource` and are paid from the
 skeleton half; when they do not fit, the skeleton falls back to unique
-lines alone and does not fail. Measurements on `nokey` and the real data
-sets choose `w`, and whether shingles run everywhere or only in gaps that
-unique lines leave too long. A shingle anchor still counts only after its
-lines compare equal byte by byte.
+lines alone and does not fail. A shingle anchor is confirmed like any
+other, by comparing its first line byte by byte; the rest of its window
+lies in the gaps after it, which are compared or refined.
+
+A window is `w = 3` consecutive samples, not lines, so it needs nothing
+the scan does not already keep. Its hash also covers the line count and
+byte length between its samples, which gives a window enough entropy at a
+high stratum, where few distinct rows are sampled. On a 1 GiB `nokey` CSV
+pair at stratum 6, windows of 2, 3, 4, 6, 8 and 16 samples gave 90k, 254k,
+215k, 156k, 114k and 34k anchors: longer windows break on more edits, and
+16 left an `Approx` region. Shingles run only in gaps of at least 32
+samples between unique-line candidates. Such gaps hold none of the samples
+of tlc and gh, 0.08% of pagila, 0.34% of the 1 GiB `sql` pair, and all of
+them on `nokey`. Run everywhere, shingles made pagila, tlc and the `sql`
+pair 19 to 33% slower and found no extra anchor there. With the gap rule
+those pairs stay within run-to-run noise of main, and on `nokey` the share
+of lines in `Approx` regions drops from 100% to 0 on the 64 MiB CSV, SQL
+and NDJSON pairs and the 1 GiB CSV pair, which takes 3.6 s instead of
+12.9 s (medians of 5, machine under load). Peak heap is unchanged on every
+pair measured.
 
 ### Key mode
 
