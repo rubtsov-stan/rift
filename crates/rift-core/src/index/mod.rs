@@ -576,9 +576,25 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn line_prefix_matches_memory_for_every_cap_and_scratch() {
-        let long = vec![b'x'; 5000];
+        // Miri: 60-byte long lines, intervals 1, 3, 100, scratch 1 to 200 and
+        // caps around 60; native: 5000 bytes and the full lists below.
+        let (len, intervals, scratches, caps): (usize, &[u64], &[u64], &[u64]) = if cfg!(miri) {
+            (
+                60,
+                &[1, 3, 100],
+                &[1, 3, 16, 64, 200],
+                &[0, 1, 2, 7, 59, 61, 1 << 20],
+            )
+        } else {
+            (
+                5000,
+                &[1, 2, 3, 100],
+                &[1, 3, 64, 4096, 20_000],
+                &[0, 1, 2, 7, 4999, 5001, 1 << 20],
+            )
+        };
+        let long = vec![b'x'; len];
         let mut data = b"a\n\nbc\r\n".to_vec();
         data.extend_from_slice(&long);
         data.extend_from_slice(b"\nshort\n");
@@ -586,13 +602,13 @@ mod tests {
         data.extend_from_slice(b"tail");
         let mem = MemLines::new(&data);
         let budget = Budget::new(Bytes::mib(1));
-        for interval in [1, 2, 3, 100] {
+        for &interval in intervals {
             let index = index_of(&data, interval);
-            for scratch in [1u64, 3, 64, 4096, 20_000] {
+            for &scratch in scratches {
                 let access =
                     IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch))
                         .unwrap();
-                for max in [0u64, 1, 2, 7, 4999, 5001, 1 << 20] {
+                for &max in caps {
                     for i in 0..mem.line_count() {
                         let (mut got, mut want) = (LineBuf::new(), LineBuf::new());
                         let len = access
@@ -622,17 +638,22 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn line_prefix_holds_only_max_bytes_of_a_line_larger_than_the_budget() {
-        // A 4 MiB line under a 64 KiB budget: read_lines cannot return it,
-        // the prefix read can.
-        let mut data = vec![b'y'; 4 << 20];
+        // A line larger than the budget: read_lines cannot return it, the
+        // prefix read can. Native: 4 MiB line, 128 KiB budget, 16 KiB
+        // scratch. Miri: 16 KiB line, 8 KiB budget, 1 KiB scratch.
+        let (line, budget, scratch) = if cfg!(miri) {
+            (16 << 10, 8 << 10, 1 << 10)
+        } else {
+            (4 << 20, 128 << 10, 16 << 10)
+        };
+        let mut data = vec![b'y'; line];
         data.push(b'\n');
         data.extend_from_slice(b"next\n");
         let index = index_of(&data, 1);
-        let budget = Budget::new(Bytes(128 << 10));
+        let budget = Budget::new(Bytes(budget));
         let access =
-            IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(16 << 10)).unwrap();
+            IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch)).unwrap();
         let mut buf = LineBuf::new();
         assert!(matches!(
             access.read_lines(LineNo(0)..LineNo(1), &mut buf),
@@ -641,7 +662,7 @@ mod tests {
         let len = access
             .read_line_prefix(LineNo(0), Bytes(200), &mut buf)
             .unwrap();
-        assert_eq!(len, Bytes((4 << 20) + 1));
+        assert_eq!(len, Bytes(line as u64 + 1));
         assert_eq!(buf.line(0), &data[..200]);
         assert_eq!(
             access
@@ -653,21 +674,28 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn line_parts_match_memory_for_every_piece_size_and_scratch() {
+        // Miri: 40 and 11 byte long lines, scratch 1, 3, 16, 4096 and pieces
+        // of 1, 2, 7, 20 bytes; native: 300 and 77 bytes, scratch up to 4096
+        // and pieces up to 100.
+        let (xs, ys, scratches, pieces): (usize, usize, &[u64], &[u64]) = if cfg!(miri) {
+            (40, 11, &[1, 3, 16, 4096], &[1, 2, 7, 20, 1 << 20])
+        } else {
+            (300, 77, &[1, 3, 64, 4096], &[1, 2, 7, 100, 1 << 20])
+        };
         let mut data = b"a\n\nbc\r\n".to_vec();
-        data.extend_from_slice(&[b'x'; 300]);
+        data.extend_from_slice(&vec![b'x'; xs]);
         data.extend_from_slice(b"\nshort\n");
-        data.extend_from_slice(&[b'y'; 77]);
+        data.extend_from_slice(&vec![b'y'; ys]);
         let mem = MemLines::new(&data);
         let budget = Budget::new(Bytes::mib(1));
         for interval in [1, 2, 100] {
             let index = index_of(&data, interval);
-            for scratch in [1u64, 3, 64, 4096] {
+            for &scratch in scratches {
                 let access =
                     IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch))
                         .unwrap();
-                for max in [1u64, 2, 7, 100, 1 << 20] {
+                for &max in pieces {
                     for i in 0..mem.line_count() {
                         let mut got = Vec::new();
                         let mut buf = LineBuf::new();
