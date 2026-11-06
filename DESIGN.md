@@ -457,15 +457,28 @@ pair measured.
 ### Key mode
 
 `rift --key SPEC a b` compares records by key, in any row order, and
-prints the added, removed and changed keys with their line numbers. The
-plan is to partition by key hash: pass `k` reads both files and keeps only
-the records whose key hash falls in partition `k`, and the file sizes and
-the budget set the partition count so that one partition fits. Each pass
-rereads both files and writes nothing to disk. A key found twice in one
-file is an error that lists the first few. A record counts as unchanged
-only after its bytes compare equal. `shuffled` is the test bed: its
-manifest names every change, and a pair that is only reordered reports
-none.
+prints the added, removed and changed keys with their line numbers. Each
+pass owns a range of key hashes and reads A and B side by side, at the
+same relative position, skipping records outside its range. A record
+waits in memory, bytes included, until its key turns up in the other
+file; the two records are then compared byte by byte and only the key
+hash stays, at 8 bytes, to catch a third occurrence. Files in roughly the
+same order keep few records waiting, so a pass holds about 8 bytes per
+key. The hash table comes from the skeleton half, the read buffers and
+the waiting records from the refine half. When either fills up, the pass
+drops the top of its range, sized from how far it has read, and goes on;
+the next pass starts where it stopped. Each pass rereads both files and
+writes nothing to disk.
+
+A key found twice while its first record waits is a duplicate. A key
+whose hash matches a key already matched is only a suspect, since the
+matched key's bytes are gone; at the end of the pass, a read of both
+files counts the suspects exactly. The error lists the first few
+duplicates. Storing A's records whole, as a plain partition by key hash
+would, costs about 12 times more memory per record on `shuffled` CSV
+(138 bytes against 11 for an 81-byte row) and as many more passes. A record counts as unchanged only after its bytes
+compare equal. `shuffled` is the test bed: its manifest names every
+change, and a pair that is only reordered reports none.
 
 ### Moved blocks
 

@@ -79,6 +79,42 @@ the first file, and `q` quits. A hunk Rift is still refining shows as a
 pending row and fills in by itself. Approximate hunks are yellow and
 marked with `~`.
 
+## Key mode
+
+```sh
+rift --key csv:id a.csv b.csv           # CSV column by header name
+rift --key csv:1 a.csv b.csv            # CSV column by position, from 1
+rift --key json:user.id a.ndjson b.ndjson
+rift --key copy:id a.sql b.sql          # a column of the pg_dump COPY blocks
+```
+
+With `--key`, Rift matches records by key and ignores row order. It
+prints one line per key that differs, with tabs between the fields and
+line numbers counted from 1:
+
+```
+~17	42	40      changed: line 42 in a, line 40 in b
+-18	43	-       removed: only in a
++90	-	88      added: only in b
+```
+
+The key appears as the file has it, quotes included. A tab, line break
+or backslash in a key prints as `\t`, `\n` or `\\`. In CSV, a record can
+span lines inside quotes, and the header row counts as a record keyed by
+its own cell. In a `pg_dump`, only the rows of `COPY` blocks that have the
+column count, and the same key in two tables names two records. Blank
+lines and line endings play no part in the comparison.
+
+Rift compares a record's bytes before it calls the record unchanged. A
+key that occurs twice in one file stops the run with exit code 2 and
+lists the first few. Exit codes otherwise follow `diff`.
+
+Key mode writes no temporary files. When the keys do not fit `--mem`,
+Rift splits them by hash and reads both files once per part, so a
+smaller budget means more passes over the files. Each pass prints its
+changes sorted by line. A 1 GiB CSV pair takes two passes at the default
+256 MiB; `--stats` reports the count.
+
 ## What is guaranteed
 
 - The output is a correct edit script: applied to the first file it
