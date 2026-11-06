@@ -1,11 +1,12 @@
 //! `--key`: records compared by a key column, independent of row order.
 
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use rift_core::keyed::{ChangeKind, KeySpec, KeyedChange, compare};
-use rift_core::{Budget, Bytes, LineNo};
+use rift_core::keyed::{ChangeKind, KeyError, KeySpec, KeyedChange, Side, compare};
+use rift_core::{Budget, Bytes, Error, LineNo};
 
 use crate::source::FileSource;
 use crate::summary::peak_heap;
@@ -21,6 +22,7 @@ use crate::summary::peak_heap;
 pub fn run(
     a: &FileSource,
     b: &FileSource,
+    paths: [&Path; 2],
     spec: &KeySpec,
     mem: Bytes,
     stats: bool,
@@ -33,7 +35,7 @@ pub fn run(
         write_change(&mut out, c)
     });
     out.flush()?;
-    let report = result.map_err(|e| incomplete(e.into(), printed))?;
+    let report = result.map_err(|e| incomplete(with_path(e, paths), printed))?;
     if stats {
         eprintln!("{}", peak_heap(mem));
         eprintln!("time {:.2} s", start.elapsed().as_secs_f64());
@@ -47,6 +49,24 @@ pub fn run(
     } else {
         ExitCode::from(1)
     })
+}
+
+/// Names the file as well as the side when an error points into one:
+/// rift-core knows only which side it read.
+fn with_path(err: Error, [a, b]: [&Path; 2]) -> anyhow::Error {
+    let path = |side| match side {
+        Side::A => a.display(),
+        Side::B => b.display(),
+    };
+    match err {
+        Error::Keyed(KeyError::NoColumn { side, name }) => {
+            anyhow::anyhow!("{side} ({}) has no column {name:?}", path(side))
+        }
+        Error::Keyed(KeyError::NoKey { side, line }) => {
+            anyhow::anyhow!("line {} of {side} ({}) has no key", line.0 + 1, path(side))
+        }
+        e => e.into(),
+    }
 }
 
 /// A pass prints its changes before a later pass can find a duplicate key,

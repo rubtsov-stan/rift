@@ -77,11 +77,29 @@ fn duplicate_keys_exit_two() {
 
 #[test]
 fn a_missing_column_exits_two() {
-    let out = rift(&["--key", "csv:name"]);
+    let dir = tempfile::tempdir().unwrap();
+    let (pa, pb) = (dir.path().join("old.csv"), dir.path().join("new.csv"));
+    std::fs::write(&pa, b"id,v\n1,x\n").unwrap();
+    std::fs::write(&pb, b"id,v\n1,y\n").unwrap();
+    let out = rift_paths(&pa, &pb, &["--key", "csv:name"]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         String::from_utf8(out.stderr).unwrap(),
-        "rift: a has no column \"name\"\n"
+        format!("rift: a ({}) has no column \"name\"\n", pa.display())
+    );
+}
+
+#[test]
+fn a_record_without_a_key_names_its_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (pa, pb) = (dir.path().join("old.json"), dir.path().join("new.json"));
+    std::fs::write(&pa, b"{\"id\":1}\n").unwrap();
+    std::fs::write(&pb, b"{\"id\":1}\n{\"v\":2}\n").unwrap();
+    let out = rift_paths(&pa, &pb, &["--key", "json:id"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        format!("rift: line 2 of b ({}) has no key\n", pb.display())
     );
 }
 

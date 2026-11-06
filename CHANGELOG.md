@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In key mode, an error after some changes were printed now says on
   standard error that the output above is incomplete and must be
   discarded. Check the exit status before using key output.
+- Key-mode errors about a missing column or key name the file as well
+  as the side: `a (data/a.csv) has no column "zz"`.
 - Budget errors start in lowercase (`skeleton budget exceeded`), and an
   I/O error shows its text once instead of twice.
 - Faster scanning, anchor selection, chain search, scheduling, unified
