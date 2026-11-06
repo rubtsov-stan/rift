@@ -32,7 +32,7 @@ Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to c
 
 Seed 7, profiles `sql` and `csv`, changes at 0.1% (`rift-gen --change-ratio 0.001`, also the default). For each profile and size, three repetitions of `cat a b`, `rift --summary --mem 256M` and `rift --stats --mem 256M` (the diff goes through `wc -c`), and one run each of `rift --stats` at `--mem 64M` and `--mem 1G`. On the 1 GiB pair also `diff` and `git diff --no-index` (three repetitions) and thread scaling: `rift --summary` on 1, 2, 4 and all CPUs.
 
-Per run: wall, user and sys time, max RSS, exit code, rift's peak heap, output bytes, and systemd's result for the run's scope: `oom-kill` when the cap killed it. Each scope gets its own unit name, and the result is read with `systemctl --user show`, which needs no root. Without systemd the result is `n/a`. Exit code 1 from `rift`, `diff` and `git diff` means the files differ.
+Per run: wall, user and sys time, max RSS, exit code, rift's peak heap, output bytes, and systemd's result for the run's scope: `oom-kill` when the cap killed it. Each scope gets its own unit name, and the result is read with `systemctl --user show`, which needs no root. Without systemd the result is `n/a`. Once the cap kills a command on a pair, its remaining repetitions are not run and are recorded as `skipped`. Exit code 1 from `rift`, `diff` and `git diff` means the files differ.
 
 Thread count is set with `taskset -c 0-<k-1>`, not `RAYON_NUM_THREADS`: rift sizes its threads from `std::thread::available_parallelism()`, which follows the CPU affinity mask. If your CPU 0 is not in the allowed set, `taskset` fails and the scaling rows show it.
 

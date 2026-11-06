@@ -170,8 +170,8 @@ trap 'exit 143' TERM
 
 raw=$scratch/pkg/raw
 mkdir -p "$raw" "$scratch/bin"
-runs=$scratch/runs.tsv notes=$scratch/notes.txt facts=$scratch/facts.tsv
-: > "$runs"; : > "$notes"; : > "$facts"
+runs=$scratch/runs.tsv notes=$scratch/notes.txt facts=$scratch/facts.tsv killed=$scratch/killed.txt
+: > "$runs"; : > "$notes"; : > "$facts"; : > "$killed"
 
 fact() { printf '%s\t%s\n' "$1" "$2" >> "$facts"; }
 note() { echo "$*" >> "$notes"; echo "note: $*" >&2; }
@@ -262,6 +262,15 @@ run_one() {
   n=$((n + 1))
   id=$(printf '%03d' "$n")
   b=$raw/$id
+  # Once the cap kills a command on a pair, its later repetitions would only
+  # be killed again: record them as skipped instead.
+  key="$grp|$prof|$sz|$tool|$thr"
+  if grep -qxF "$key" "$killed"; then
+    echo "[$id] $grp $prof $(gib "$sz") $tool threads=$thr rep=$rep: skipped, killed by its cap before" >&2
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\tskipped\t%s\n' \
+      "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$*" >> "$runs"
+    return
+  fi
   echo "[$id] $grp $prof $(gib "$sz") $tool threads=$thr rep=$rep" >&2
   unit=
   case $limiter in
@@ -284,6 +293,7 @@ run_one() {
   sys=$(awk -F': ' '/System time/ {print $2}' "$b.time" 2>/dev/null || true)
   rss=$(awk -F': ' '/Maximum resident/ {print $2}' "$b.time" 2>/dev/null || true)
   result=$(scope_result "$unit")
+  [ "$result" != oom-kill ] || echo "$key" >> "$killed"
   heap=
   case $tool in
     *--summary*) heap=$(heap_bytes "$b.out") ;;
@@ -415,7 +425,7 @@ END {
   echo
   echo "## Runs"
   echo
-  echo "wall, user and sys in seconds; peak heap is rift's own count; result is systemd's verdict on the run's scope (oom-kill means the cap killed it; n/a without systemd)."
+  echo "wall, user and sys in seconds; peak heap is rift's own count; result is systemd's verdict on the run's scope (oom-kill means the cap killed it; skipped means an earlier repetition was killed, so this one was not run; n/a without systemd)."
   echo
   echo "| id | group | profile | size | tool | threads | rep | wall | user | sys | max RSS | peak heap | output | exit | result |"
   echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
