@@ -1,0 +1,83 @@
+[package]
+name = "rift-fuzz"
+description = "cargo-fuzz targets for Rift"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: the main one never builds or lints this crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+rift-core = { path = "../crates/rift-core", features = ["counting-alloc"] }
+rift-tui = { path = "../crates/rift-tui" }
+rift-mcp = { path = "../crates/rift-mcp" }
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "client", "transport-io"] }
+tokio = { version = "1.54.1", features = ["rt", "io-util"] }
+serde_json = "1.0.154"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "scan"
+path = "fuzz_targets/scan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyed_csv"
+path = "fuzz_targets/keyed_csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyed_ndjson"
+path = "fuzz_targets/keyed_ndjson.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyed_copy"
+path = "fuzz_targets/keyed_copy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pipeline"
+path = "fuzz_targets/pipeline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unified"
+path = "fuzz_targets/unified.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tui_render"
+path = "fuzz_targets/tui_render.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_request"
+path = "fuzz_targets/mcp_request.rs"
+test = false
+doc = false
+bench = false
