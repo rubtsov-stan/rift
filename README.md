@@ -121,17 +121,17 @@ Apple M1, 16 GB RAM, internal SSD, macOS, warm page cache.
 
 | Pair | Tool | Time | Peak memory |
 |---|---|---|---|
-| 1 GB | `rift --summary` | 1.26 s | 127.7 MiB |
-| 1 GB | `rift` (full diff) | 0.93 s | 130.8 MiB |
-| 1 GB | system `diff` | 17.55 s | 3.2 GiB |
-| 10 GB | `rift --summary` | 13.37 s | 136.5 MiB |
-| 10 GB | `rift` (full diff) | 26.16 s | 136.5 MiB |
-| 10 GB | `diff` | did not run: needs more than 16 GB of RAM | |
-| 10 GB | `git diff` | did not run: needs more than 16 GB of RAM | |
+| 1 GiB | `rift --summary` | 1.26 s | 127.7 MiB |
+| 1 GiB | `rift` (full diff) | 0.93 s | 130.8 MiB |
+| 1 GiB | system `diff` | 17.55 s | 3.2 GiB |
+| 10 GiB | `rift --summary` | 13.37 s | 136.5 MiB |
+| 10 GiB | `rift` (full diff) | 26.16 s | 136.5 MiB |
+| 10 GiB | `diff` | did not run: needs more than 16 GB of RAM | |
+| 10 GiB | `git diff` | did not run: needs more than 16 GB of RAM | |
 
 Peak memory is the resident set; Rift's heap, the part `--mem` limits,
-peaked at 83.5 MiB on the 1 GB pair and 94.1 MiB on the 10 GB pair.
-`git diff` has no 1 GB row because it treats files over 512 MiB as binary
+peaked at 83.5 MiB on the 1 GiB pair and 94.1 MiB on the 10 GiB pair.
+`git diff` has no 1 GiB row because it treats files over 512 MiB as binary
 and prints no diff.
 
 Intel Core i5-10600 (6 cores, 12 threads), 16 GB RAM, Ubuntu 26.04.1,
