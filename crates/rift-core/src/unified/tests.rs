@@ -109,6 +109,7 @@ fn system_diff(a: &[u8], b: &[u8], ctx: u64) -> Vec<u8> {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "runs the system diff")]
 fn matches_system_diff_on_corpus() {
     const A14: &[u8] = b"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n";
     let corpus: [(&[u8], &[u8], u64); 18] = [
@@ -248,6 +249,7 @@ fn patchers() -> &'static [&'static str] {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
     #[test]
+    #[cfg_attr(miri, ignore = "runs patch and writes files")]
     fn patch_applies_our_diff_to_a_and_gets_b(case in cases(24, true)) {
         let opts = Options { context: 3, old: label("a.txt"), new: label("a.txt") };
         let (diff, _) = render(&case.a, &case.b, &case.hunks, &opts);

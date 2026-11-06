@@ -764,6 +764,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn small_budgets_take_more_passes_with_the_same_result() {
         let (a, b) = pair(3000, 7);
         let want = expected(&a, &b);
@@ -841,6 +842,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore = "too slow under Miri")]
         fn any_budget_finds_the_hash_map_answer(n in 1u32..1500, seed in any::<u64>(), mem in 16u64..256) {
             let (a, b) = pair(n, seed);
             let (got, _) = run(&csv(&a), &csv(&b), "csv:1", mem << 10).unwrap();

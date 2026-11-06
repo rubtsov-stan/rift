@@ -25,3 +25,41 @@ Include:
 
 This is a one-person project. I read every report and reply when I can,
 without a fixed timeline.
+
+## Unsafe code
+
+`rift-gen`, `rift-mcp` and `rift-tui` forbid `unsafe_code`. `rift-cli`
+denies it except in the two FFI modules below. `rift-core` has one
+`unsafe` item, the counting allocator. CI runs Miri on `rift-core`
+under two aliasing models:
+
+- Stacked Borrows, Miri's default: the unit tests of every module except
+  `scan`, `skeleton`, `diff`, `moves` and `sched`, plus `tests/alloc_small.rs`,
+  which installs the counting allocator and exercises its `unsafe`
+  forwarding on a few KiB.
+- Tree Borrows: the unit tests of `scan`, `skeleton` and `moves`. They
+  start rayon's thread pool, and rayon's `crossbeam-epoch` 0.9.21 trips a
+  report inside its own code under Stacked Borrows only. Leak checks are
+  off for these, because rayon's pool outlives the test process.
+
+Not run under Miri: the unit tests of `diff`, which do not finish within
+the CI time limit; those of `sched`, whose worker threads and timeouts do
+not fit Miri's speed; the integration tests other than `alloc_small`; and
+unit tests marked `#[cfg_attr(miri, ignore)]` as too slow. Property tests
+run 8 cases each under Miri. The FFI modules in `rift-cli` are not
+covered.
+
+Every block below has a `// SAFETY:` comment, and the workspace lint
+`clippy::undocumented_unsafe_blocks` is set to `deny`.
+
+| Location | What | SAFETY comment |
+|----------|------|----------------|
+| `crates/rift-core/src/alloc.rs`, `unsafe impl GlobalAlloc for CountingAlloc` | Counting global allocator | Every method forwards to `System` unchanged and only adjusts counters, so the allocator contract is inherited from `System`. |
+| same file, `alloc` | `System.alloc` | Same layout the caller guaranteed to be non-zero-sized. |
+| same file, `alloc_zeroed` | `System.alloc_zeroed` | As for `alloc`. |
+| same file, `dealloc` | `System.dealloc` | `ptr` came from this allocator with this layout, by contract. |
+| same file, `realloc` | `System.realloc` | `ptr` and `layout` match a live allocation, by contract. |
+| `crates/rift-cli/src/source.rs`, `hints::sequential` (Linux) | `libc::posix_fadvise` | The descriptor is open and owned by `file` for the duration of the call; fadvise reads no memory and only updates kernel state. |
+| same file, `hints::sequential` (macOS) | `libc::fcntl(F_RDAHEAD)` | The descriptor is open and owned by `file` for the duration of the call; `F_RDAHEAD` takes an integer flag and touches no memory. |
+| `crates/rift-cli/src/full.rs`, `clock::utc_offset` | `mem::zeroed` and `libc::localtime_r` | `tm` is plain data for which all-zero bytes are valid, and `localtime_r` writes only into the struct we pass, reading `t`. |
+| `crates/rift-tui/tests/common/counting.rs`, `unsafe impl GlobalAlloc for Counting` (test code) | Counting allocator for heap tests | Every call is forwarded unchanged to `System`, which upholds the `GlobalAlloc` contract; the counters have no effect on the memory handed out. Its `alloc`, `dealloc` and `realloc` blocks each carry a one-line comment saying the pointer and layout come from `System` or from the caller. |

@@ -454,6 +454,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore = "too slow under Miri")]
         fn random_scripts_validate_and_apply_to_b(case in cases(24, true)) {
             let (a, b) = (MemLines::new(&case.a), MemLines::new(&case.b));
             validate(&case.hunks, a.line_count(), b.line_count()).unwrap();

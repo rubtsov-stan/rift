@@ -502,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn line_prefix_matches_memory_for_every_cap_and_scratch() {
         let long = vec![b'x'; 5000];
         let mut data = b"a\n\nbc\r\n".to_vec();
@@ -547,6 +548,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn line_prefix_holds_only_max_bytes_of_a_line_larger_than_the_budget() {
         // A 4 MiB line under a 64 KiB budget: read_lines cannot return it,
         // the prefix read can.
@@ -577,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn line_parts_match_memory_for_every_piece_size_and_scratch() {
         let mut data = b"a\n\nbc\r\n".to_vec();
         data.extend_from_slice(&[b'x'; 300]);

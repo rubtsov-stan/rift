@@ -426,6 +426,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn shingles_fill_long_gaps_and_never_cost_a_failure() {
         // Unique lines, a short gap, more unique lines, then a long tail
         // where every value occurs twice but every window once.

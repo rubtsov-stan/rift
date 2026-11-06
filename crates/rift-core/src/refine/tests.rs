@@ -223,6 +223,7 @@ fn runs_use_absolute_line_numbers() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "too slow under Miri")]
 fn verification_spans_several_read_blocks() {
     // 3 000 lines, 40 edits, colliding hashes: pairs cross the
     // VERIFY_LINES boundary and flips happen in every block.
@@ -321,17 +322,20 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(10_000))]
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn script_applied_to_a_yields_b(a in values(), b in values()) {
         check(&mut exact(), &text(&a), &text(&b), 0, xxh3_64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "10 000 cases, too slow under Miri")]
     fn script_for_mutated_input_yields_b((a, b) in mutated(), cutoff in 0u64..4) {
         let hunk = check(&mut Refiner::new(cutoff), &text(&a), &text(&b), 0, xxh3_64);
         prop_assert!(edit_count(&hunk) <= (a.len() + b.len()) as u64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "10 000 cases, too slow under Miri")]
     fn myers_and_dp_match_imara_minimal(a in values(), b in values(), dp in 0usize..=DP_MAX) {
         let mut r = exact();
         r.patience = false;
@@ -344,6 +348,7 @@ proptest! {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "10 000 cases, too slow under Miri")]
     fn colliding_hashes_on_random_input((a, b) in mutated()) {
         check(&mut exact(), &text(&a), &text(&b), 0, |l| u64::from(l[0] % 3));
     }
@@ -371,6 +376,7 @@ impl Rng {
 /// short script at most the factor listed per cutoff. Measured on seed 42:
 /// exact 1.07, cutoff 1 (most searches cut) 2.9, cutoff 2 1.23, cutoff 4 1.08.
 #[test]
+#[cfg_attr(miri, ignore = "too slow under Miri")]
 fn pipeline_edit_counts_stay_near_imara() {
     const CUTOFFS: [(u64, u64); 3] = [(1, 35), (2, 15), (4, 12)];
     let mut rng = Rng(42);
@@ -530,6 +536,7 @@ fn dp_threshold() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "too slow under Miri")]
 fn lines_longer_than_the_reader_are_compared_in_pieces() {
     use crate::index::IndexedLines;
     use crate::scan::{ScanConfig, scan};
