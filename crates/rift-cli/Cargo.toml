@@ -46,3 +46,7 @@ assets = [
     ["../../LICENSE-MIT", "usr/share/doc/rift-diff/", "644"],
     ["../../LICENSE-APACHE", "usr/share/doc/rift-diff/", "644"],
 ]
+
+[package.metadata.dist]
+# The man page ships in the rift archives only.
+include = ["../../man/rift.1"]

@@ -176,8 +176,14 @@ changes sorted by line. A 1 GiB CSV pair takes two passes at the default
 
 `rift-mcp` serves a diff to an MCP client over standard input and output,
 so the client reads a few kilobytes about two huge files instead of the
-files. It is not part of the `rift` binary yet; build it from the
-repository:
+files. It is a separate program, released next to `rift`. Install it with
+its own shell installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rubtsov-stan/rift/releases/latest/download/rift-mcp-installer.sh | sh
+```
+
+Or build it from the repository:
 
 ```sh
 cargo build --release -p rift-mcp    # target/release/rift-mcp
