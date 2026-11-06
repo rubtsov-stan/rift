@@ -15,7 +15,7 @@ use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict};
 use rift_core::{Budget, Bytes, alloc};
 
 use crate::source::FileSource;
-use crate::summary::human;
+use crate::summary::{human, print_moves};
 
 /// The two inputs, opened.
 pub struct Files<'p> {
@@ -57,6 +57,11 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
             "approx {} segments, {} lines in a and b",
             written.approx_segments, written.approx_lines
         );
+        print_moves(
+            &mut io::stderr().lock(),
+            diff.moves(),
+            diff.off_chain().dropped(),
+        )?;
     }
     Ok(match written.verdict {
         Verdict::Identical => ExitCode::SUCCESS,
