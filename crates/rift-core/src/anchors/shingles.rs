@@ -35,20 +35,23 @@ impl CandidateSource for Shingles {
         samples_b: &[Sample],
         budget: &Budget,
     ) -> Result<Anchors> {
-        self.in_gaps((samples_a, &[]), (samples_b, &[]), 0, budget)
+        let (whole_a, whole_b) = (0..samples_a.len(), 0..samples_b.len());
+        self.in_gaps(
+            (samples_a, std::slice::from_ref(&whole_a)),
+            (samples_b, std::slice::from_ref(&whole_b)),
+            budget,
+        )
     }
 }
 
 impl Shingles {
-    /// Candidates among the windows that lie inside a gap: a run of at
-    /// least `min_gap` samples between two of the sorted sample indices in
-    /// `cuts`, or before the first or after the last. A window counts as
-    /// unique if no other window of the gaps has its hash.
+    /// Candidates among the windows that lie inside the given ranges of
+    /// sample indices, the gaps. A window counts as unique if no other
+    /// window of the gaps has its hash.
     pub(super) fn in_gaps(
         self,
-        (samples_a, cuts_a): (&[Sample], &[u32]),
-        (samples_b, cuts_b): (&[Sample], &[u32]),
-        min_gap: usize,
+        (samples_a, gaps_a): (&[Sample], &[Range<usize>]),
+        (samples_b, gaps_b): (&[Sample], &[Range<usize>]),
         budget: &Budget,
     ) -> Result<Anchors> {
         assert!(self.w >= 2, "a shingle spans at least two samples");
@@ -61,38 +64,25 @@ impl Shingles {
             }
             .into());
         }
-        let min_gap = min_gap.max(self.w);
         unique_hashes(
-            gap_windows(samples_a, cuts_a, min_gap, self.w),
-            gap_windows(samples_b, cuts_b, min_gap, self.w),
+            gap_windows(samples_a, gaps_a, self.w),
+            gap_windows(samples_b, gaps_b, self.w),
             budget,
         )
     }
 }
 
-/// The runs of at least `min` samples that `cuts` leaves.
-fn gaps(cuts: &[u32], n: usize, min: usize) -> impl Iterator<Item = Range<usize>> + '_ {
-    let starts = std::iter::once(0).chain(cuts.iter().map(|&c| c as usize + 1));
-    let ends = cuts.iter().map(|&c| c as usize).chain(std::iter::once(n));
-    starts
-        .zip(ends)
-        .map(|(s, e)| s..e)
-        .filter(move |r| r.len() >= min)
-}
-
-/// The window count and `(first sample, hash)` of each window inside a gap.
+/// The window count and `(first sample, hash)` of each window of `w`
+/// samples inside `gaps`, which hold at least `w` samples each.
 fn gap_windows<'a>(
     samples: &'a [Sample],
-    cuts: &'a [u32],
-    min: usize,
+    gaps: &'a [Range<usize>],
     w: usize,
 ) -> (usize, impl Iterator<Item = (usize, u64)> + 'a) {
-    let count = gaps(cuts, samples.len(), min)
-        .map(|r| r.len() + 1 - w)
-        .sum();
-    let windows = gaps(cuts, samples.len(), min).flat_map(move |r| {
+    let count = gaps.iter().map(|r| (r.len() + 1).saturating_sub(w)).sum();
+    let windows = gaps.iter().flat_map(move |r| {
         let start = r.start;
-        windows(&samples[r], w)
+        windows(&samples[r.clone()], w)
             .enumerate()
             .map(move |(k, hash)| (start + k, hash))
     });

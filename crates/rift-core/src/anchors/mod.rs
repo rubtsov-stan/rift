@@ -31,6 +31,8 @@
 //! after the other, so only one table lives at a time, and holds the
 //! candidates of both plus their merge while it merges them.
 
+use std::ops::Range;
+
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::Result;
 use crate::sample::Sample;
@@ -139,68 +141,163 @@ pub const SHINGLE_MIN_GAP: usize = 32;
 
 /// Merges into `lines` the shingles of the gaps it leaves.
 ///
-/// Memory, from the skeleton half: 8 bytes per candidate in `lines` for
-/// the gap bounds, then as for [`Shingles`] and [`merge`].
+/// A's gaps come from the candidates in their order, B's from a bitmap of
+/// the B samples they use, so neither side is copied or sorted, and when
+/// no gap on either side is long enough the shingles cost one walk over
+/// the candidates.
+///
+/// Memory, from the skeleton half: one bit per sample of B, 16 bytes per
+/// gap long enough, then as for [`Shingles`] and [`merge`].
 fn add_shingles(lines: &mut Anchors, a: &[Sample], b: &[Sample], budget: &Budget) -> Result<()> {
-    let windows = {
-        let _cuts = budget.try_reserve(Half::Skeleton, Bytes(lines.pairs.len() as u64 * 8))?;
-        let cuts_a: Vec<u32> = lines.pairs.iter().map(|p| p.a).collect();
-        let mut cuts_b: Vec<u32> = lines.pairs.iter().map(|p| p.b).collect();
-        cuts_b.sort_unstable();
-        Shingles { w: SHINGLE_W }.in_gaps((a, &cuts_a), (b, &cuts_b), SHINGLE_MIN_GAP, budget)?
+    let min = SHINGLE_MIN_GAP.max(SHINGLE_W);
+    let gaps_a = |f: &mut dyn FnMut(Range<usize>)| {
+        long_gaps(lines.pairs.iter().map(|p| p.a as usize), a.len(), min, f);
     };
-    merge(lines, &windows, b.len(), budget)
+    let mut count_a = 0;
+    gaps_a(&mut |_| count_a += 1);
+    if count_a == 0 {
+        return Ok(());
+    }
+    let words = b.len().div_ceil(64);
+    let _bits = budget.try_reserve(Half::Skeleton, Bytes(words as u64 * 8))?;
+    let mut taken = vec![0u64; words];
+    // Candidates in A order are mostly in B order too; gathering a word's
+    // bits in a register spares a load and a store per candidate.
+    let (mut word, mut bits) = (0, 0u64);
+    for p in &lines.pairs {
+        let w = p.b as usize / 64;
+        if w != word {
+            taken[word] |= bits;
+            (word, bits) = (w, 0);
+        }
+        bits |= 1 << (p.b % 64);
+    }
+    if let Some(last) = taken.get_mut(word) {
+        *last |= bits;
+    }
+    let mut count_b = 0;
+    zero_runs(&taken, b.len(), min, &mut |_| count_b += 1);
+    if count_b == 0 {
+        return Ok(());
+    }
+    let windows = {
+        let _gaps = budget.try_reserve(
+            Half::Skeleton,
+            Bytes((count_a + count_b) as u64 * size_of::<Range<usize>>() as u64),
+        )?;
+        let (mut ga, mut gb) = (Vec::with_capacity(count_a), Vec::with_capacity(count_b));
+        gaps_a(&mut |r| ga.push(r));
+        zero_runs(&taken, b.len(), min, &mut |r| gb.push(r));
+        Shingles { w: SHINGLE_W }.in_gaps((a, &ga), (b, &gb), budget)?
+    };
+    merge(lines, windows, &mut taken, budget)
 }
 
-/// Merges `extra` into `into` by A. Every pair of `into` stays; a pair of
-/// `extra` is dropped when its A or B sample is already used, which for
+/// Hands `f` each run of at least `min` indices below `n` that the
+/// increasing indices in `cuts` leave between them, before the first or
+/// after the last.
+fn long_gaps(
+    cuts: impl Iterator<Item = usize>,
+    n: usize,
+    min: usize,
+    f: &mut dyn FnMut(Range<usize>),
+) {
+    let mut start = 0;
+    for cut in cuts {
+        if cut - start >= min {
+            f(start..cut);
+        }
+        start = cut + 1;
+    }
+    if n.saturating_sub(start) >= min {
+        f(start..n);
+    }
+}
+
+/// [`long_gaps`] with the cuts as the set bits of `bits`. A word with
+/// every bit set, as almost all are on data with an id column, costs one
+/// comparison.
+fn zero_runs(bits: &[u64], n: usize, min: usize, f: &mut dyn FnMut(Range<usize>)) {
+    let mut start = 0;
+    for (w, &word) in bits.iter().enumerate() {
+        if word == 0 {
+            continue;
+        }
+        let base = w * 64;
+        let first = base + word.trailing_zeros() as usize;
+        if first - start >= min {
+            f(start..first);
+        }
+        if word == u64::MAX {
+            start = base + 64;
+            continue;
+        }
+        start = first + 1;
+        let mut rest = word & (word - 1);
+        while rest != 0 {
+            let cut = base + rest.trailing_zeros() as usize;
+            if cut - start >= min {
+                f(start..cut);
+            }
+            start = cut + 1;
+            rest &= rest - 1;
+        }
+    }
+    if n.saturating_sub(start) >= min {
+        f(start..n);
+    }
+}
+
+/// Merges `extra` into `into` by A, in place. Every pair of `into` stays;
+/// a pair of `extra` is dropped when its A sample is used by `into` or
+/// its B sample is set in `taken`, the B samples `into` uses, which for
 /// two sources over the same samples takes a 64-bit hash collision. On a
 /// budget error `into` is left as it was.
 ///
-/// Memory, from the skeleton half: the merged list and one bit per sample
-/// of B while it is built.
-fn merge(into: &mut Anchors, extra: &Anchors, n_b: usize, budget: &Budget) -> Result<()> {
-    if extra.pairs.is_empty() {
+/// Memory, from the skeleton half: `into` grows by the pairs kept.
+fn merge(into: &mut Anchors, mut extra: Anchors, taken: &mut [u64], budget: &Budget) -> Result<()> {
+    let mut next = into.pairs.iter().map(|p| p.a).peekable();
+    extra.pairs.retain(|q| {
+        while next.next_if(|&a| a < q.a).is_some() {}
+        let (word, bit) = (q.b as usize / 64, 1u64 << (q.b % 64));
+        let keep = next.peek() != Some(&q.a) && taken[word] & bit == 0;
+        if keep {
+            taken[word] |= bit;
+        }
+        keep
+    });
+    let k = extra.pairs.len();
+    if k == 0 {
         return Ok(());
     }
-    let len = into.pairs.len() + extra.pairs.len();
-    let words = n_b.div_ceil(64);
-    let mut reservation = budget.try_reserve(
-        Half::Skeleton,
-        Bytes(len as u64 * PAIR_BYTES + words as u64 * 8),
-    )?;
-    // `into`'s pairs already use distinct B samples; an extra pair is kept
-    // only if its B sample is free.
-    let mut taken = vec![0u64; words];
-    let bit = |b: u32| (b as usize / 64, 1u64 << (b % 64));
-    for p in &into.pairs {
-        let (word, bit) = bit(p.b);
-        taken[word] |= bit;
-    }
-    let mut merged = Vec::with_capacity(len);
-    let mut extra = extra.pairs.iter().peekable();
-    for &p in &into.pairs {
-        while let Some(&&q) = extra.peek().filter(|q| q.a <= p.a) {
-            extra.next();
-            let (word, bit) = bit(q.b);
-            if q.a < p.a && taken[word] & bit == 0 {
-                taken[word] |= bit;
-                merged.push(q);
-            }
+    let bytes = Bytes(k as u64 * PAIR_BYTES);
+    into.reservation.grow(bytes)?;
+    if into.pairs.try_reserve_exact(k).is_err() {
+        into.reservation.shrink(bytes);
+        return Err(BudgetExceeded {
+            half: Half::Skeleton,
+            requested: Bytes(k as u64 * PAIR_BYTES),
+            available: budget.available(Half::Skeleton),
         }
-        merged.push(p);
+        .into());
     }
-    for &q in extra {
-        let (word, bit) = bit(q.b);
-        if taken[word] & bit == 0 {
-            taken[word] |= bit;
-            merged.push(q);
+    let n = into.pairs.len();
+    into.pairs.resize(n + k, Pair { a: 0, b: 0 });
+    // From the back, so every pair moves once and nothing is overwritten
+    // before it is read.
+    let (mut i, mut j) = (n, k);
+    for w in (0..n + k).rev() {
+        if j == 0 {
+            break;
+        }
+        if i > 0 && into.pairs[i - 1].a > extra.pairs[j - 1].a {
+            into.pairs[w] = into.pairs[i - 1];
+            i -= 1;
+        } else {
+            into.pairs[w] = extra.pairs[j - 1];
+            j -= 1;
         }
     }
-    drop(taken);
-    reservation.shrink(Bytes(words as u64 * 8));
-    into.pairs = merged;
-    into.reservation = reservation;
     release_slack(&mut into.pairs, &mut into.reservation);
     Ok(())
 }
@@ -465,7 +562,8 @@ mod tests {
         };
         let mut into = anchors(&[(1, 1), (3, 3)]);
         let extra = anchors(&(4..12).map(|i| (i, i)).collect::<Vec<_>>());
-        assert!(merge(&mut into, &extra, 12, &budget).is_err());
+        let mut taken = taken(&into, 12);
+        assert!(merge(&mut into, extra, &mut taken, &budget).is_err());
         assert_eq!(into.pairs(), [Pair { a: 1, b: 1 }, Pair { a: 3, b: 3 }]);
     }
 
@@ -476,10 +574,40 @@ mod tests {
             pairs: pairs.iter().map(|&(a, b)| Pair { a, b }).collect(),
             reservation: budget.try_reserve(Half::Skeleton, Bytes(0)).unwrap(),
         };
-        let mut into = anchors(&[(1, 1), (3, 3)]);
-        let extra = anchors(&[(0, 0), (1, 1), (2, 3), (3, 5), (4, 4), (5, 1)]);
-        merge(&mut into, &extra, 6, &budget).unwrap();
+        let mut into = anchors(&[(1, 1), (3, 3), (6, 6)]);
+        let extra = anchors(&[(0, 0), (1, 1), (2, 3), (3, 5), (4, 4), (5, 1), (7, 2)]);
+        let mut taken = taken(&into, 8);
+        merge(&mut into, extra, &mut taken, &budget).unwrap();
         let got: Vec<(u32, u32)> = into.pairs().iter().map(|p| (p.a, p.b)).collect();
-        assert_eq!(got, [(0, 0), (1, 1), (3, 3), (4, 4)]);
+        assert_eq!(got, [(0, 0), (1, 1), (3, 3), (4, 4), (6, 6), (7, 2)]);
+    }
+
+    fn taken(anchors: &Anchors, n_b: usize) -> Vec<u64> {
+        let mut bits = vec![0; n_b.div_ceil(64)];
+        for p in anchors.pairs() {
+            bits[p.b as usize / 64] |= 1 << (p.b % 64);
+        }
+        bits
+    }
+
+    #[test]
+    fn gaps_are_the_long_runs_between_cuts() {
+        let gaps = |cuts: &[usize], n: usize, min: usize| {
+            let mut out = Vec::new();
+            long_gaps(cuts.iter().copied(), n, min, &mut |r| out.push(r));
+            let mut bits = vec![0u64; n.div_ceil(64)];
+            for &c in cuts {
+                bits[c / 64] |= 1 << (c % 64);
+            }
+            let mut runs = Vec::new();
+            zero_runs(&bits, n, min, &mut |r| runs.push(r));
+            assert_eq!(out, runs, "{cuts:?}");
+            out
+        };
+        assert_eq!(gaps(&[2, 3, 9], 14, 3), [4..9, 10..14]);
+        assert_eq!(gaps(&[], 2, 3), []);
+        assert_eq!(gaps(&[], 5, 3), vec![Range { start: 0, end: 5 }]);
+        let full: Vec<usize> = (0..64).chain([100, 140]).chain(150..200).collect();
+        assert_eq!(gaps(&full, 260, 30), [64..100, 101..140, 200..260]);
     }
 }
