@@ -471,13 +471,31 @@ none.
 
 A block that moved shows up as a deletion and an insertion. Its lines
 still match between the files, and the chain search leaves those matches
-out because they cross the chain: they are the `OffChain` pairs. Detection
-groups consecutive pairs into runs, extends each run line by line in both
-directions with a byte comparison, and keeps runs of at least a few lines.
-Its memory comes from the refine half; when the budget is too small, it
-skips moves and the summary says so. `--summary` and `--stats` list moved
-blocks, and the terminal view marks both ends of each and jumps between
-them. The unified diff stays byte-identical.
+out because they cross the chain: they are the `OffChain` pairs.
+`moves::Moves::find` takes each pair as a seed and compares its two lines
+byte by byte, since a pair is only a hash match. It then extends the run
+in both directions, 16 lines per side and read, while the lines are equal
+and neither lies in an `Equal` segment. Runs of at least 3 lines are kept.
+A seed inside a block already found adds nothing, so consecutive pairs
+form one run, and a seed costs two reads. On the generated profiles, with
+and without moves, and on the real data sets, no block came out false at
+any length, so the minimum of 3 only drops moves of one or two lines,
+which read well as a plain deletion and insertion. Seeds are the
+skeleton's samples, so at stratum `L` a block of `n` lines has no seed,
+and goes unreported, with chance about `(1 - 2^-L)^n`. On `gen1g`
+(stratum 4) that leaves 424 of the 1 062 moves of 3 lines or more found.
+
+Memory comes from the refine half and is taken before the scheduler
+takes what is left: 32 bytes per block for the life of the diff, capped
+at 1/8 of what the half has free, and while the search runs two readers
+with 4 KiB buffers and two comparison buffers of 128 KiB. When either does
+not fit, the search keeps nothing and the summary says moves were not
+searched. `--summary` and `--stats` print the block count, the first ten
+blocks as `a` and `b` ranges, and how many candidates the skeleton
+dropped, when it dropped any. The terminal view marks both sides of a
+moved block with `m` and a colour of their own, and `m` jumps from the
+first moved row on screen to the other end of its block. The unified diff
+stays byte-identical.
 
 ### MCP server
 
