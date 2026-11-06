@@ -33,6 +33,8 @@
 
 use std::ops::Range;
 
+use rayon::prelude::*;
+
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::Result;
 use crate::sample::Sample;
@@ -329,15 +331,25 @@ fn unique_lines(samples_a: &[Sample], samples_b: &[Sample], budget: &Budget) -> 
     unique_hashes(line_hashes(samples_a), line_hashes(samples_b), budget)
 }
 
-fn line_hashes(samples: &[Sample]) -> (usize, impl Iterator<Item = (usize, u64)> + '_) {
+fn line_hashes(
+    samples: &[Sample],
+) -> (
+    usize,
+    impl Iterator<Item = (usize, u64)> + Clone + Sync + '_,
+) {
     (samples.len(), samples.iter().map(|s| s.hash).enumerate())
 }
 
 /// Pairs of sample indices whose hash occurs exactly once on each side, as
 /// [`UniqueLines`] does for line hashes. Each side is a count and an
-/// iterator that yields that many `(sample index, hash)` items, walked
-/// once; the caller keeps the indices below `MANY`.
-fn unique_hashes<I: Iterator<Item = (usize, u64)>>(
+/// iterator that yields that many `(sample index, hash)` items; the caller
+/// keeps the indices below `MANY`.
+///
+/// With many samples the table is cut into one range of slots per thread,
+/// each filled by its own thread from the items whose hash lands there,
+/// so every thread walks both iterators. A range that fills up, which
+/// only skewed hashes can do, sends the whole table back to one thread.
+fn unique_hashes<I: Iterator<Item = (usize, u64)> + Clone + Sync>(
     side_a: (usize, I),
     side_b: (usize, I),
     budget: &Budget,
@@ -363,30 +375,135 @@ fn unique_hashes<I: Iterator<Item = (usize, u64)>>(
     let table_bytes = slots * ENTRY_BYTES;
     let reservation = budget.try_reserve(Half::Skeleton, Bytes(table_bytes + n * PAIR_BYTES))?;
 
-    let mut pairs = Vec::with_capacity(small.0);
-    {
-        let mut table = Table::new(slots);
-        for (i, hash) in small.1 {
-            table.count_small(hash, index(i));
-        }
-        for (i, hash) in big.1 {
-            table.count_big(hash, index(i));
-        }
-        pairs.extend(table.unique().map(|(small, big)| {
-            if swapped {
-                Pair { a: big, b: small }
-            } else {
-                Pair { a: small, b: big }
-            }
-        }));
+    let total = usize::try_from(slots).expect("slot count fits usize");
+    let mut table = vec![VACANT_ENTRY; total];
+    // Ranges at the full slot count's load, half full, have room to spare
+    // for the noise in how many hashes land in each.
+    let parts = if small.0 >= PARALLEL_SAMPLES && 2 * slots > 3 * n {
+        rayon::current_num_threads().clamp(1, MAX_PARTS)
+    } else {
+        1
+    };
+    if !fill(&mut table, parts, &small.1, &big.1) {
+        table.fill(VACANT_ENTRY);
+        fill(&mut table, 1, &small.1, &big.1);
     }
-    pairs.sort_unstable_by_key(|p| p.a);
+    let len = total.div_ceil(parts);
+    let mut counts = [0usize; MAX_PARTS];
+    let unique = |e: &Entry| e.small < MANY && e.big < MANY;
+    if parts == 1 {
+        counts[0] = table.iter().filter(|e| unique(e)).count();
+    } else {
+        table
+            .par_chunks(len)
+            .zip(&mut counts[..parts])
+            .for_each(|(range, count)| *count = range.iter().filter(|e| unique(e)).count());
+    }
+    let mut pairs = Vec::with_capacity(small.0);
+    pairs.resize(counts.iter().sum(), Pair { a: 0, b: 0 });
+    let pair = |e: &Entry| {
+        if swapped {
+            Pair {
+                a: e.big,
+                b: e.small,
+            }
+        } else {
+            Pair {
+                a: e.small,
+                b: e.big,
+            }
+        }
+    };
+    let mut rest = &mut pairs[..];
+    let mut ranges: [(&[Entry], &mut [Pair]); MAX_PARTS] =
+        std::array::from_fn(|_| (&[][..], Default::default()));
+    for (k, range) in table.chunks(len).enumerate() {
+        let (out, tail) = rest.split_at_mut(counts[k]);
+        ranges[k] = (range, out);
+        rest = tail;
+    }
+    let gather = |(range, out): &mut (&[Entry], &mut [Pair])| {
+        for (slot, e) in out.iter_mut().zip(range.iter().filter(|e| unique(e))) {
+            *slot = pair(e);
+        }
+    };
+    if parts == 1 {
+        gather(&mut ranges[0]);
+    } else {
+        ranges[..parts].par_iter_mut().for_each(gather);
+    }
+    drop(table);
+    if parts == 1 {
+        pairs.sort_unstable_by_key(|p| p.a);
+    } else {
+        pairs.par_sort_unstable_by_key(|p| p.a);
+    }
     let mut anchors = Anchors { pairs, reservation };
     // The table's bytes stay reserved until the trim, which briefly holds
     // the old and the new block.
     release_slack(&mut anchors.pairs, &mut anchors.reservation);
     anchors.reservation.shrink(Bytes(table_bytes));
     Ok(anchors)
+}
+
+/// Fewest samples on the smaller side for the table to be filled by
+/// several threads; below it a thread fills it faster than they start.
+const PARALLEL_SAMPLES: usize = 1 << 16;
+/// Most ranges the table is cut into.
+const MAX_PARTS: usize = 64;
+
+const VACANT_ENTRY: Entry = Entry {
+    hash: 0,
+    small: VACANT,
+    big: VACANT,
+};
+
+/// Counts the hashes of `small`, then of `big`, into `table` cut into
+/// `parts` ranges of slots. `false` when a range filled up.
+fn fill<I: Iterator<Item = (usize, u64)> + Clone + Sync>(
+    table: &mut [Entry],
+    parts: usize,
+    small: &I,
+    big: &I,
+) -> bool {
+    let total = table.len();
+    let len = total.div_ceil(parts);
+    let run = |(k, range): (usize, &mut [Entry])| {
+        let mut t = Table {
+            slots: range,
+            start: k * len,
+            total,
+            used: 0,
+        };
+        let mine = |h: u64| parts == 1 || home(h, total) / len == k;
+        for (i, hash) in small.clone() {
+            if mine(hash) && !t.count_small(hash, index(i)) {
+                return false;
+            }
+        }
+        for (i, hash) in big.clone() {
+            if mine(hash) {
+                t.count_big(hash, index(i));
+            }
+        }
+        true
+    };
+    if parts == 1 {
+        run((0, table))
+    } else {
+        table.par_chunks_mut(len).enumerate().all(run)
+    }
+}
+
+/// The slot a hash starts probing from, out of `total`: its high bits,
+/// since it is already uniform (the low bits are the stratum's zeros).
+fn home(hash: u64, total: usize) -> usize {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the product shifted by 64 is below total"
+    )]
+    let slot = ((u128::from(hash) * total as u128) >> 64) as usize;
+    slot
 }
 
 #[allow(
@@ -397,34 +514,25 @@ pub(crate) fn index(i: usize) -> u32 {
     i as u32
 }
 
-/// Open addressing with linear probing over a fixed slot count, keyed by
-/// the line hash itself: it is already uniform, so the slot comes straight
-/// from its high bits (the low bits are the stratum's zeros).
-struct Table {
-    slots: Vec<Entry>,
+/// Open addressing with linear probing over one range of a table's slots,
+/// keyed by the line hash itself. Probes wrap within the range.
+struct Table<'t> {
+    slots: &'t mut [Entry],
+    /// Index of `slots[0]` in the whole table.
+    start: usize,
+    /// Slots in the whole table.
+    total: usize,
+    /// Occupied slots.
+    used: usize,
 }
 
-impl Table {
-    fn new(slots: u64) -> Self {
-        let vacant = Entry {
-            hash: 0,
-            small: VACANT,
-            big: VACANT,
-        };
-        Self {
-            slots: vec![vacant; usize::try_from(slots).expect("slot count fits usize")],
-        }
-    }
-
-    /// The slot holding `hash`, or the vacant slot where it belongs. The
-    /// load cap guarantees a vacant slot exists.
+impl Table<'_> {
+    /// The slot holding `hash`, or the vacant slot where it belongs. A
+    /// vacant slot exists: the whole table's load cap guarantees it for a
+    /// single range, and `count_small` stops a range from filling.
     fn find(&self, hash: u64) -> usize {
         let len = self.slots.len();
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "the product shifted by 64 is below len"
-        )]
-        let mut i = ((u128::from(hash) * len as u128) >> 64) as usize;
+        let mut i = home(hash, self.total) - self.start;
         loop {
             let e = &self.slots[i];
             if e.small == VACANT || e.hash == hash {
@@ -437,10 +545,17 @@ impl Table {
         }
     }
 
-    fn count_small(&mut self, hash: u64, i: u32) {
+    /// Counts a hash of the smaller side; `false`, counting nothing, when
+    /// it would take the range's last vacant slot.
+    fn count_small(&mut self, hash: u64, i: u32) -> bool {
         let slot = self.find(hash);
+        let full = self.used + 1 == self.slots.len();
         let e = &mut self.slots[slot];
         if e.small == VACANT {
+            if full {
+                return false;
+            }
+            self.used += 1;
             *e = Entry {
                 hash,
                 small: i,
@@ -449,6 +564,7 @@ impl Table {
         } else {
             e.small = MANY;
         }
+        true
     }
 
     fn count_big(&mut self, hash: u64, i: u32) {
@@ -457,14 +573,6 @@ impl Table {
         if e.small != VACANT {
             e.big = if e.big == VACANT { i } else { MANY };
         }
-    }
-
-    /// `(small, big)` sample indices of every hash seen once on each side.
-    fn unique(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        self.slots
-            .iter()
-            .filter(|e| e.small < MANY && e.big < MANY)
-            .map(|e| (e.small, e.big))
     }
 }
 
@@ -503,6 +611,75 @@ mod tests {
     fn keeps_hashes_unique_in_both_files() {
         let pairs = select_of(&[1, 2, 2, 3, 4], &[3, 1, 5, 4, 4]);
         assert_eq!(pairs, [Pair { a: 0, b: 1 }, Pair { a: 3, b: 0 }]);
+    }
+
+    /// Pairs from a hash map, for checking the table.
+    fn oracle(ha: &[u64], hb: &[u64]) -> Vec<Pair> {
+        let count = |h: &[u64]| {
+            let mut m = std::collections::HashMap::new();
+            for (i, &x) in h.iter().enumerate() {
+                m.entry(x).or_insert((0, i)).0 += 1;
+            }
+            m
+        };
+        let (ca, cb) = (count(ha), count(hb));
+        let mut out: Vec<Pair> = ca
+            .iter()
+            .filter(|&(_, &(n, _))| n == 1)
+            .filter_map(|(h, &(_, a))| match cb.get(h) {
+                Some(&(1, b)) => Some(Pair {
+                    a: u32::try_from(a).unwrap(),
+                    b: u32::try_from(b).unwrap(),
+                }),
+                _ => None,
+            })
+            .collect();
+        out.sort_unstable_by_key(|p| p.a);
+        out
+    }
+
+    #[test]
+    fn many_samples_split_the_table_with_the_same_result() {
+        let mut x = 7u64;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        // Uniform hashes with repeats on each side; then a quarter of them
+        // crowded into the first hundredth of the slots, which overfills
+        // the first of eight ranges and sends the table to one thread.
+        let spread = |x: u64| x.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let uniform: Vec<u64> = (0..200_000).map(|_| spread(rnd() % 150_000)).collect();
+        let crowded: Vec<u64> = (0..120_000u64)
+            .map(|i| if i % 4 == 0 { i << 40 } else { spread(i) })
+            .collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .unwrap();
+        for ha in [uniform, crowded] {
+            let mut hb = ha.clone();
+            hb.rotate_left(1000);
+            hb.truncate(hb.len() * 3 / 4);
+            let budget = Budget::new(Bytes::mib(64));
+            let (sa, sb) = (hashed(&ha), hashed(&hb));
+            let got = pool
+                .install(|| unique_hashes(line_hashes(&sa), line_hashes(&sb), &budget))
+                .unwrap();
+            assert_eq!(got.pairs(), oracle(&ha, &hb));
+        }
+    }
+
+    fn hashed(h: &[u64]) -> Vec<Sample> {
+        h.iter()
+            .map(|&hash| Sample {
+                hash,
+                line: LineNo(0),
+                offset: ByteOffset(0),
+            })
+            .collect()
     }
 
     #[test]

@@ -78,7 +78,10 @@ fn gap_windows<'a>(
     samples: &'a [Sample],
     gaps: &'a [Range<usize>],
     w: usize,
-) -> (usize, impl Iterator<Item = (usize, u64)> + 'a) {
+) -> (
+    usize,
+    impl Iterator<Item = (usize, u64)> + Clone + Sync + 'a,
+) {
     let count = gaps.iter().map(|r| (r.len() + 1).saturating_sub(w)).sum();
     let windows = gaps.iter().flat_map(move |r| {
         let start = r.start;
@@ -110,6 +113,7 @@ fn windows(samples: &[Sample], w: usize) -> Windows<'_> {
     it
 }
 
+#[derive(Clone)]
 /// Rolls `rolled`, the polynomial over the steps of samples `start ..
 /// start + w - 1`, along the samples.
 struct Windows<'a> {
