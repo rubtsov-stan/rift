@@ -1,0 +1,37 @@
+name: Debian packages
+
+# A release created with the workflow token does not fire a `release` event,
+# so this follows the dist Release workflow instead. That workflow also runs
+# on pull requests, hence the `push` check: it only pushes for version tags.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same glibc floor as the dist archives, which build on 22.04.
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - run: rustup toolchain install
+      - run: cargo install --locked cargo-deb --version 3.8.0
+      - run: cargo deb -p rift-diff
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: gh release upload "$TAG" target/debian/*.deb --repo "$GITHUB_REPOSITORY" --clobber
