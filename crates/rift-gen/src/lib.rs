@@ -12,7 +12,7 @@ pub mod synthetic;
 
 use std::io::{self, Write};
 
-pub use profile::{NOKEY_POOL, Profile, Rows};
+pub use profile::{NOKEY_POOL, Profile, RUN_LINES, Rows};
 pub use rng::Rng;
 
 /// Kind of mutation applied to a region. Line numbers are 0-based.
@@ -105,6 +105,10 @@ pub struct Config {
     pub profile: Profile,
     /// Row format of the `nokey` and `shuffled` profiles.
     pub rows: Rows,
+    /// Different lines of a `distinct` file.
+    pub distinct: u64,
+    /// Lines in one period of a `periodic` file.
+    pub period: u64,
     /// Probability that a mutation starts at a given line.
     pub change_ratio: f64,
     /// Kinds eligible for random selection.
@@ -115,8 +119,8 @@ impl Config {
     /// Settings with every kind enabled, except `Long` below 64 MiB where a
     /// 1 MiB line would dominate the file.
     ///
-    /// `nokey` leaves out the kinds that would add a line found once:
-    /// `LowUniq`, `Long`, `Crlf` and `NoEol`. `shuffled` keeps the changes
+    /// `nokey` and the low-entropy profiles leave out the kinds that would
+    /// add a line found once: `LowUniq`, `Long`, `Crlf` and `NoEol`. `shuffled` keeps the changes
     /// a key can name, `Insert`, `Delete` and `Modify`, and moves blocks on
     /// its own schedule (see [`Profile::Shuffled`]).
     #[must_use]
@@ -125,7 +129,7 @@ impl Config {
             .into_iter()
             .filter(|k| *k != Kind::Long || size >= 64 << 20)
             .filter(|k| match profile {
-                Profile::Nokey => matches!(
+                p if p == Profile::Nokey || p.is_low_entropy() => matches!(
                     k,
                     Kind::Insert | Kind::Delete | Kind::Modify | Kind::Move | Kind::Dup
                 ),
@@ -138,6 +142,8 @@ impl Config {
             size,
             profile,
             rows: Rows::default(),
+            distinct: 100,
+            period: 1000,
             change_ratio: 0.001,
             kinds,
         }
@@ -219,7 +225,7 @@ struct Generator<'c, A, B, M> {
 impl<A: Write, B: Write, M: Write> Generator<'_, A, B, M> {
     fn new(config: &Config, a: A, b: B, manifest: M) -> Generator<'_, A, B, M> {
         let mut rng = Rng::new(config.seed);
-        let lines = profile::Lines::new(config.profile, config.rows, &mut rng);
+        let lines = profile::Lines::new(config, &mut rng);
         Generator {
             config,
             rng,
@@ -754,6 +760,105 @@ mod tests {
         };
         assert_eq!(sorted(&a), sorted(&b));
         assert!(muts.iter().all(|m| m.kind == Kind::Move));
+    }
+
+    /// A low-entropy config: `k` is `--distinct` or `--period`.
+    fn low_entropy(profile: Profile, k: u64, seed: u64) -> Config {
+        let mut cfg = Config::new(seed, 1 << 20, profile);
+        cfg.distinct = k;
+        cfg.period = k;
+        cfg
+    }
+
+    fn distinct_lines(data: &[u8]) -> usize {
+        lines(data).into_iter().collect::<HashSet<_>>().len()
+    }
+
+    #[test]
+    fn low_entropy_profiles_without_changes_have_their_shape() {
+        for k in [1, 2, 10, 100] {
+            let mut cfg = low_entropy(Profile::Distinct, k, 5);
+            cfg.kinds.clear();
+            let (a, b, _) = pair(&cfg);
+            assert_eq!(a, b);
+            assert_eq!(distinct_lines(&a) as u64, k);
+        }
+        let mut cfg = low_entropy(Profile::Periodic, 1000, 5);
+        cfg.kinds.clear();
+        let (a, _, _) = pair(&cfg);
+        let la = lines(&a);
+        assert!(la.len() > 3000);
+        assert_eq!(distinct_lines(&a), 1000);
+        assert!(la.iter().zip(&la[1000..]).all(|(x, y)| x == y));
+
+        let mut cfg = low_entropy(Profile::Alternating, 0, 5);
+        cfg.kinds.clear();
+        let (a, _, _) = pair(&cfg);
+        let la = lines(&a);
+        assert_eq!(distinct_lines(&a), 2);
+        assert!(la.windows(2).all(|w| w[0] != w[1]));
+        assert!(la.iter().zip(&la[2..]).all(|(x, y)| x == y));
+
+        let mut cfg = low_entropy(Profile::Empty, 0, 5);
+        cfg.kinds.clear();
+        let (a, _, _) = pair(&cfg);
+        assert!(a.len() >= 1 << 20 && a.iter().all(|&c| c == b'\n'));
+
+        let mut cfg = low_entropy(Profile::Runs, 0, 5);
+        cfg.size = 8 << 20;
+        cfg.kinds.clear();
+        let (a, _, _) = pair(&cfg);
+        let la = lines(&a);
+        let runs: Vec<usize> = la.chunk_by(|x, y| x == y).map(<[_]>::len).collect();
+        assert!(runs.len() > 2, "{} runs", runs.len());
+        let (lo, hi) = (RUN_LINES.0 as usize, RUN_LINES.1 as usize);
+        assert!(runs[..runs.len() - 1].iter().all(|n| (lo..=hi).contains(n)));
+        assert_eq!(distinct_lines(&a), runs.len());
+    }
+
+    #[test]
+    fn low_entropy_changes_follow_the_manifest() {
+        let points = [
+            (Profile::Distinct, 1),
+            (Profile::Distinct, 2),
+            (Profile::Distinct, 10),
+            (Profile::Distinct, 100),
+            (Profile::Distinct, 10_000),
+            (Profile::Periodic, 1000),
+            (Profile::Runs, 0),
+            (Profile::Alternating, 0),
+            (Profile::Empty, 0),
+        ];
+        for (profile, k) in points {
+            let mut cfg = low_entropy(profile, k, 11);
+            cfg.change_ratio = 0.01;
+            assert_eq!(pair(&cfg), pair(&cfg), "{profile:?} {k} is reproducible");
+            let (a, b, muts) = pair(&cfg);
+            let (la, lb) = (lines(&a), lines(&b));
+            let mut kinds = HashSet::new();
+            for mu in &muts {
+                kinds.insert(mu.kind);
+                let (ia, ib, n) = (mu.line_a as usize, mu.line_b as usize, mu.count as usize);
+                match mu.kind {
+                    Kind::Modify => {
+                        for i in 0..n {
+                            assert_eq!(lb[ib + i], [la[ia + i], b"~"].concat(), "{profile:?}");
+                        }
+                    }
+                    Kind::Move | Kind::Dup => assert_eq!(&la[ia..ia + n], &lb[ib..ib + n]),
+                    Kind::Insert | Kind::Delete => {}
+                    k => panic!("{profile:?} produced {k:?}"),
+                }
+            }
+            for kind in [Kind::Insert, Kind::Delete, Kind::Modify, Kind::Move] {
+                assert!(kinds.contains(&kind), "{profile:?} never produced {kind:?}");
+            }
+            // A modify appends `~`, so B has at most twice A's lines.
+            assert!(distinct_lines(&b) <= 2 * distinct_lines(&a), "{profile:?}");
+            if profile == Profile::Distinct {
+                assert!(distinct_lines(&a) as u64 <= k);
+            }
+        }
     }
 
     #[test]

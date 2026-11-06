@@ -2,6 +2,7 @@
 
 use std::io::Write;
 
+use crate::Config;
 use crate::rng::Rng;
 
 /// Shape of the generated lines.
@@ -23,6 +24,38 @@ pub enum Profile {
     /// moves. Changes keep the key: an insert adds keys, a delete removes
     /// them, a modify rewrites a row under the same key.
     Shuffled,
+    /// Lines drawn at random from `--distinct` different lines.
+    Distinct,
+    /// The same `--period` different lines over and over, in one order.
+    Periodic,
+    /// Runs of one line, [`RUN_LINES`] long at the shortest, each run with
+    /// a line of its own.
+    Runs,
+    /// Two different lines, one after the other.
+    Alternating,
+    /// Every line empty.
+    Empty,
+}
+
+/// Shortest and longest run of a [`Profile::Runs`] file, in lines.
+pub const RUN_LINES: (u64, u64) = (1_000, 100_000);
+
+impl Profile {
+    /// Whether a file of this profile has few different lines for its
+    /// size. A modified line in these profiles is the line it replaces
+    /// with a `~` appended, so B has at most twice as many different lines
+    /// as A and a modify always changes the line.
+    #[must_use]
+    pub fn is_low_entropy(self) -> bool {
+        matches!(
+            self,
+            Profile::Distinct
+                | Profile::Periodic
+                | Profile::Runs
+                | Profile::Alternating
+                | Profile::Empty
+        )
+    }
 }
 
 /// Row format of the [`Profile::Nokey`] and [`Profile::Shuffled`] profiles.
@@ -54,12 +87,18 @@ pub struct Lines {
     /// The rows of a `nokey` file, back to back, and where each ends.
     pool: Vec<u8>,
     pool_ends: Vec<usize>,
+    /// `--distinct` or `--period`, whichever the profile reads.
+    count: u64,
+    /// The low-entropy line produced last, and the lines left in the
+    /// current run of a `runs` file.
+    last: u64,
+    run_left: u64,
 }
 
 impl Lines {
     /// Builds the producer; the text vocabulary is derived from `rng`.
-    /// `rows` matters only to the `nokey` and `shuffled` profiles.
-    pub fn new(profile: Profile, rows: Rows, rng: &mut Rng) -> Self {
+    pub fn new(config: &Config, rng: &mut Rng) -> Self {
+        let (profile, rows) = (config.profile, config.rows);
         let mut vocab = String::with_capacity(WORDS * 8);
         let mut vocab_at = Vec::with_capacity(WORDS);
         for _ in 0..WORDS {
@@ -79,6 +118,12 @@ impl Lines {
             vocab_at,
             pool: Vec::new(),
             pool_ends: Vec::new(),
+            count: match profile {
+                Profile::Periodic => config.period,
+                _ => config.distinct,
+            },
+            last: 0,
+            run_left: 0,
         };
         if profile == Profile::Nokey {
             let mut pool = Vec::new();
@@ -111,12 +156,17 @@ impl Lines {
 
     /// Appends, without a terminator, a row with the key of the row
     /// [`next_line`](Self::next_line) produced last and new values. Only
-    /// `shuffled` rows have a key; other profiles get their next line.
+    /// `shuffled` rows have a key; the low-entropy profiles get that line
+    /// with `~` appended, the others their next line.
     pub fn same_key(&mut self, rng: &mut Rng, out: &mut Vec<u8>) {
-        if self.profile == Profile::Shuffled {
-            self.keyed_row(self.id - 1, rng, out);
-        } else {
-            self.next_line(rng, out);
+        match self.profile {
+            Profile::Shuffled => self.keyed_row(self.id - 1, rng, out),
+            Profile::Empty => out.push(b'~'),
+            p if p.is_low_entropy() => {
+                low_entropy_line(self.last, out);
+                out.push(b'~');
+            }
+            _ => self.next_line(rng, out),
         }
     }
 
@@ -150,7 +200,24 @@ impl Lines {
                 out.extend_from_slice(&self.pool[start..self.pool_ends[i]]);
             }
             Profile::Shuffled => self.keyed_row(id, rng, out),
+            Profile::Distinct => self.last_line(rng.below(self.count), out),
+            Profile::Periodic => self.last_line((id - 1) % self.count, out),
+            Profile::Alternating => self.last_line((id - 1) % 2, out),
+            Profile::Runs => {
+                if self.run_left == 0 {
+                    self.last += 1;
+                    self.run_left = rng.range(RUN_LINES.0, RUN_LINES.1);
+                }
+                self.run_left -= 1;
+                low_entropy_line(self.last, out);
+            }
+            Profile::Empty => {}
         }
+    }
+
+    fn last_line(&mut self, i: u64, out: &mut Vec<u8>) {
+        self.last = i;
+        low_entropy_line(i, out);
     }
 
     fn keyed_row(&self, id: u64, rng: &mut Rng, out: &mut Vec<u8>) {
@@ -265,6 +332,12 @@ fn csv_row(id: u64, rng: &mut Rng, out: &mut Vec<u8>) {
     );
 }
 
+/// Line `i` of the low-entropy profiles, the same for every seed.
+fn low_entropy_line(i: u64, out: &mut Vec<u8>) {
+    let h = Rng::new(i).next_u64();
+    let _ = write!(out, "INFO worker-{i} state {h:016x}");
+}
+
 const STATUS: [&str; 4] = ["new", "paid", "shipped", "cancelled"];
 const EVENTS: [&str; 4] = ["PushEvent", "WatchEvent", "IssuesEvent", "CreateEvent"];
 
@@ -282,7 +355,7 @@ impl Profile {
             Profile::Ndjson => {
                 let _ = write!(out, "{{\"type\":\"{}\"}}", EVENTS[(v % 4) as usize]);
             }
-            Profile::Text | Profile::Nokey | Profile::Shuffled => {
+            _ => {
                 let _ = write!(out, "{}", STATUS[(v % 4) as usize]);
             }
         }
