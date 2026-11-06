@@ -104,3 +104,37 @@ fn reordering_alone_reports_nothing() {
         assert_eq!(report.records_a, report.records_b);
     }
 }
+
+#[test]
+fn a_shuffled_pair_on_disk_through_the_binary() {
+    let (a, b, manifest) = generate(Rows::Csv, 3, 0.002);
+    let dir = tempfile::tempdir().unwrap();
+    let (pa, pb) = (dir.path().join("a"), dir.path().join("b"));
+    std::fs::write(&pa, &a).unwrap();
+    std::fs::write(&pb, &b).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rift"))
+        .args(["--key", "csv:1", "--mem", "512K"])
+        .arg(&pa)
+        .arg(&pb)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        printed.lines().count(),
+        expected(Rows::Csv, &a, &b, &manifest).len()
+    );
+    for line in printed.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(fields.len(), 3, "{line}");
+        let sign = &line[..1];
+        assert!(matches!(sign, "+" | "-" | "~"), "{line}");
+        assert_eq!(fields[1] == "-", sign == "+", "{line}");
+        assert_eq!(fields[2] == "-", sign == "-", "{line}");
+    }
+}
