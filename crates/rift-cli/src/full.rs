@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Context;
-use rift_core::diff::Diff;
+use rift_core::diff::{Config, Diff};
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict};
 use rift_core::{Budget, Bytes};
 
@@ -23,6 +23,8 @@ pub struct Files<'p> {
     pub b: Arc<FileSource>,
     pub path_a: &'p Path,
     pub path_b: &'p Path,
+    /// Look for moved blocks.
+    pub moves: bool,
 }
 
 fn threads() -> usize {
@@ -31,11 +33,12 @@ fn threads() -> usize {
 
 fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
     let budget = Budget::new(mem);
-    Ok(Diff::new(
+    Ok(Diff::with_config(
         Arc::clone(&files.a),
         Arc::clone(&files.b),
         &budget,
         threads(),
+        Config { moves: files.moves },
     )?)
 }
 

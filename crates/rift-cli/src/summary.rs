@@ -17,21 +17,30 @@ const MOVES_SCRATCH: Bytes = Bytes(4 << 10);
 
 /// Builds the map of `a` and `b` under `mem` and prints it. Exit code 0
 /// when the files are identical, 1 when they differ.
-pub fn run<A: Source, B: Source>(a: &A, b: &B, mem: Bytes) -> anyhow::Result<ExitCode> {
+pub fn run<A: Source, B: Source>(
+    a: &A,
+    b: &B,
+    mem: Bytes,
+    find_moves: bool,
+) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
     let budget = Budget::new(mem);
     let (scan_a, scan_b, map) = build_pair(a, b, &budget)?;
-    let lines_a = IndexedLines::new(a, scan_a.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
-    let lines_b = IndexedLines::new(b, scan_b.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
     let off_chain = map.off_chain();
-    let moves = Moves::find(
-        off_chain.pairs(),
-        map.segments(),
-        &lines_a,
-        &lines_b,
-        MOVES_SCRATCH,
-        &budget,
-    )?;
+    let moves = if find_moves {
+        let lines_a = IndexedLines::new(a, scan_a.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
+        let lines_b = IndexedLines::new(b, scan_b.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
+        Moves::find(
+            off_chain.pairs(),
+            map.segments(),
+            &lines_a,
+            &lines_b,
+            MOVES_SCRATCH,
+            &budget,
+        )?
+    } else {
+        Moves::off()
+    };
     let elapsed = start.elapsed();
 
     let segments = map.segments();
@@ -116,6 +125,9 @@ pub fn human(b: Bytes) -> String {
 /// `--stats` show them; candidates the skeleton had no room for are
 /// counted, since some moves may be missing because of them.
 pub fn print_moves(out: &mut impl Write, moves: &Moves, dropped: u64) -> io::Result<()> {
+    if moves.disabled() {
+        return writeln!(out, "moved    not searched, --no-moves");
+    }
     if moves.skipped() {
         return writeln!(out, "moved    not searched, the budget is too small");
     }

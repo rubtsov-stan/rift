@@ -88,6 +88,8 @@ rift --summary a.sql b.sql           # line counts and the segment map only
 rift --mem 1G a.csv b.csv            # a larger heap limit
 rift --stats a b > changes.patch     # also peak heap, time and approximate
                                      # regions, on standard error
+rift --no-moves a b > changes.patch  # skip the search for moved blocks;
+                                     # the diff is the same
 ```
 
 Exit codes follow `diff`: 0 when the files are identical, 1 when they

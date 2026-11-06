@@ -63,4 +63,10 @@ pub trait DiffView: Send + Sync {
     fn moved_blocks(&self) -> &[MovedBlock] {
         &[]
     }
+
+    /// Whether move detection was switched off, so an empty
+    /// [`moved_blocks`](Self::moved_blocks) says nothing about the files.
+    fn moves_disabled(&self) -> bool {
+        false
+    }
 }

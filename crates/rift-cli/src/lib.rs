@@ -6,6 +6,10 @@ use clap::Parser;
 
 /// Diff text files of any size under a hard memory limit.
 #[derive(Debug, Parser)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one bool per command-line flag"
+)]
 #[command(name = "rift", version)]
 pub struct Args {
     /// First file.
@@ -22,6 +26,9 @@ pub struct Args {
     /// Browse the diff in the terminal instead of printing it.
     #[arg(short, long, conflicts_with = "summary")]
     pub interactive: bool,
+    /// Skip the search for moved blocks. The diff is the same.
+    #[arg(long, conflicts_with = "key")]
+    pub no_moves: bool,
     /// After a diff, print peak heap, time and approximate regions to
     /// standard error.
     #[arg(long)]

@@ -78,6 +78,12 @@ number of approximate regions and the moved blocks. With \fB\-\-key\fR it
 prints the peak heap, the time, the number of passes over the files and
 the number of records in each file.
 .TP
+\fB\-\-no\-moves\fR
+Skips the search for moved blocks. The unified diff is byte for byte the
+same; the search only adds notes to \fB\-\-summary\fR, \fB\-\-stats\fR
+and the terminal view, which then say that it was off. It cannot be
+combined with \fB\-\-key\fR.
+.TP
 \fB\-\-mem\fR \fISIZE\fR
 Sets the heap limit. The default is 256M. A limit below about 12 MiB is
 refused with a budget error. In key mode a larger limit means fewer

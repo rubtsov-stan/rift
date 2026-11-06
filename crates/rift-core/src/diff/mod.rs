@@ -77,6 +77,21 @@ fn estimate(n: u64, m: u64) -> Bytes {
     Bytes(hashes + work_estimate(n, m).0 + hunk)
 }
 
+/// Settings of a [`Diff`] other than the sources, the budget and the
+/// thread count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Config {
+    /// Look for moved blocks. When false no seed is compared and nothing
+    /// is reserved for the blocks; the edit script is the same either way.
+    pub moves: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { moves: true }
+    }
+}
+
 /// A diff of two sources, refined lazily under a memory budget.
 ///
 /// Implements [`DiffView`] for the terminal interface; [`write_unified`]
@@ -125,6 +140,21 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     /// [`Error::Budget`] when the budget cannot hold the map, the front
     /// end's share and one worker; [`Error::Io`] from either source.
     pub fn new(a: Arc<A>, b: Arc<B>, budget: &Budget, threads: usize) -> Result<Self> {
+        Self::with_config(a, b, budget, threads, Config::default())
+    }
+
+    /// [`Diff::new`] with settings other than the defaults.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Diff::new`].
+    pub fn with_config(
+        a: Arc<A>,
+        b: Arc<B>,
+        budget: &Budget,
+        threads: usize,
+        config: Config,
+    ) -> Result<Self> {
         let (scan_a, scan_b, skeleton) = build_pair(&*a, &*b, budget)?;
         let (level, anchors) = (skeleton.level(), skeleton.anchors());
         let (index_a, held_a) = scan_a.into_index();
@@ -180,7 +210,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             .collect::<Result<Vec<_>>>()?;
         // Readers of their own with small buffers keep the comparison
         // buffers small; all of it is released once the blocks are found.
-        let moves = {
+        let moves = if config.moves {
             let (ix_a, ix_b) = (&*index_a, &*index_b);
             let ma = IndexedLines::new(&*a, ix_a, budget, Half::Refine, WORKER_SCRATCH)?;
             let mb = IndexedLines::new(&*b, ix_b, budget, Half::Refine, WORKER_SCRATCH)?;
@@ -192,6 +222,8 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
                 WORKER_SCRATCH,
                 budget,
             )?
+        } else {
+            Moves::off()
         };
         let lines_a = IndexedLines::new(a, index_a, budget, Half::Refine, FRONT_SCRATCH)?;
         let lines_b = IndexedLines::new(b, index_b, budget, Half::Refine, FRONT_SCRATCH)?;
@@ -349,6 +381,10 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
 
     fn moved_blocks(&self) -> &[MovedBlock] {
         self.moves.blocks()
+    }
+
+    fn moves_disabled(&self) -> bool {
+        self.moves.disabled()
     }
 }
 

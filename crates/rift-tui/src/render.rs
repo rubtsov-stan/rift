@@ -546,6 +546,8 @@ impl App<'_> {
             let moved = self.view.moved_blocks().len();
             if moved > 0 {
                 let _ = write!(sc.status, "  moved {moved}");
+            } else if self.view.moves_disabled() {
+                sc.status.push_str("  moves off");
             }
             if !self.message.is_empty() {
                 let _ = write!(sc.status, "  {}", self.message);

@@ -8,7 +8,7 @@ rift \- Diff text files of any size under a hard memory limit
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH SYNOPSIS
-\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> 
+\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> 
 .SH DESCRIPTION
 \fBrift\fR compares two text files of any size, from megabytes to
 hundreds of gigabytes, under a heap limit set with \fB\-\-mem\fR. It
@@ -31,6 +31,9 @@ Heap limit, in bytes or with a K, M, G or T unit (powers of 1024)
 .TP
 \fB\-i\fR, \fB\-\-interactive\fR
 Browse the diff in the terminal instead of printing it
+.TP
+\fB\-\-no\-moves\fR
+Skip the search for moved blocks. The diff is the same
 .TP
 \fB\-\-stats\fR
 After a diff, print peak heap, time and approximate regions to standard error
@@ -128,6 +131,12 @@ After a diff, prints to standard error the peak heap, the time, the
 number of approximate regions and the moved blocks. With \fB\-\-key\fR it
 prints the peak heap, the time, the number of passes over the files and
 the number of records in each file.
+.TP
+\fB\-\-no\-moves\fR
+Skips the search for moved blocks. The unified diff is byte for byte the
+same; the search only adds notes to \fB\-\-summary\fR, \fB\-\-stats\fR
+and the terminal view, which then say that it was off. It cannot be
+combined with \fB\-\-key\fR.
 .TP
 \fB\-\-mem\fR \fISIZE\fR
 Sets the heap limit. The default is 256M. A limit below about 12 MiB is

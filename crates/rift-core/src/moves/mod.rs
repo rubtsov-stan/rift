@@ -79,10 +79,23 @@ const BLOCK_STEP: usize = 16;
 pub struct Moves {
     blocks: Vec<MovedBlock>,
     skipped: bool,
+    disabled: bool,
     _reservation: Option<Reservation>,
 }
 
 impl Moves {
+    /// No search: an empty list that reports itself
+    /// [`disabled`](Self::disabled). Reserves nothing.
+    #[must_use]
+    pub fn off() -> Self {
+        Self {
+            blocks: Vec::new(),
+            skipped: false,
+            disabled: true,
+            _reservation: None,
+        }
+    }
+
     /// Finds the moved blocks seeded by `pairs`, `[line in A, line in B]`
     /// in A order, over the segment map `segments` of the files `a` and
     /// `b`, whose readers return lines of up to `line_cap` bytes whole.
@@ -106,6 +119,7 @@ impl Moves {
         let skipped = Self {
             blocks: Vec::new(),
             skipped: true,
+            disabled: false,
             _reservation: None,
         };
         let limit = budget.available(Half::Refine).0 / BLOCK_SHARE / BLOCK_BYTES;
@@ -159,6 +173,7 @@ impl Moves {
         Ok(Self {
             blocks,
             skipped: false,
+            disabled: false,
             _reservation: Some(held),
         })
     }
@@ -174,6 +189,13 @@ impl Moves {
     #[must_use]
     pub fn skipped(&self) -> bool {
         self.skipped
+    }
+
+    /// Whether detection was switched off, so the empty list says nothing
+    /// about the files.
+    #[must_use]
+    pub fn disabled(&self) -> bool {
+        self.disabled
     }
 }
 

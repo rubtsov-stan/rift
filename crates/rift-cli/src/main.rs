@@ -35,13 +35,14 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
         return keyed::run(&a, &b, spec, args.mem, args.stats);
     }
     if args.summary {
-        return summary::run(&a, &b, args.mem);
+        return summary::run(&a, &b, args.mem, !args.no_moves);
     }
     let files = full::Files {
         a: Arc::new(a),
         b: Arc::new(b),
         path_a: &args.a,
         path_b: &args.b,
+        moves: !args.no_moves,
     };
     if args.interactive {
         full::interactive(&files, args.mem)

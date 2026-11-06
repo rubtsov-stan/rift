@@ -529,7 +529,9 @@ takes what is left: 32 bytes per block for the life of the diff, capped
 at 1/8 of what the half has free, and while the search runs two readers
 with 4 KiB buffers and two comparison buffers of 128 KiB. When either does
 not fit, the search keeps nothing and the summary says moves were not
-searched. `--summary` and `--stats` print the block count, the first ten
+searched. `--no-moves` (`diff::Config { moves: false }`) skips the search
+and takes no memory for it; `--summary` and `--stats` say so, and the
+terminal status line shows `moves off`. `--summary` and `--stats` print the block count, the first ten
 blocks as `a` and `b` ranges, and how many candidates the skeleton
 dropped, when it dropped any. The terminal view marks both sides of a
 moved block with `m` and a colour of their own, and `m` jumps from the

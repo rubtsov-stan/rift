@@ -266,3 +266,28 @@ proptest! {
         check(&text(&a), &text(&b), Bytes(mem), 2);
     }
 }
+
+#[test]
+fn moves_off_finds_nothing_and_keeps_the_script() {
+    let lines = |order: &[u64]| {
+        rows(order.len() as u64, |i| {
+            format!("line {}\n", order[i as usize])
+        })
+    };
+    let a = lines(&(0..200).collect::<Vec<_>>());
+    let b = lines(&(100..200).chain(0..100).collect::<Vec<_>>());
+    let build = |moves| {
+        Diff::with_config(
+            Arc::<[u8]>::from(&a[..]),
+            Arc::<[u8]>::from(&b[..]),
+            &Budget::new(Bytes::mib(64)),
+            2,
+            Config { moves },
+        )
+        .unwrap()
+    };
+    let (on, off) = (build(true), build(false));
+    assert!(!on.moves().blocks().is_empty() && !on.moves_disabled());
+    assert!(off.moves().blocks().is_empty() && off.moves_disabled());
+    assert_eq!(script(&on), script(&off));
+}

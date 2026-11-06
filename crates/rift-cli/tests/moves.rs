@@ -195,3 +195,69 @@ fn summary_says_when_the_budget_skips_moves() {
         "{text}"
     );
 }
+
+/// The search for moved blocks only annotates: with it off the unified
+/// diff is byte for byte the same, at a roomy and a tight heap limit.
+#[test]
+fn no_moves_leaves_the_unified_diff_unchanged() {
+    use std::fs;
+    use std::process::Command;
+    let cases = [
+        (1, Profile::Shuffled, Rows::Csv),
+        (2, Profile::Shuffled, Rows::Ndjson),
+        (3, Profile::Sql, Rows::Csv),
+        (4, Profile::Text, Rows::Csv),
+        (5, Profile::Nokey, Rows::Csv),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let (pa, pb) = (dir.path().join("a"), dir.path().join("b"));
+    for (seed, profile, rows) in cases {
+        let mut config = Config::new(seed, 2 << 20, profile);
+        config.rows = rows;
+        let p = generate(config);
+        fs::write(&pa, &p.a).unwrap();
+        fs::write(&pb, &p.b).unwrap();
+        for mem in ["16M", "256M"] {
+            let run = |extra: &[&str]| {
+                Command::new(env!("CARGO_BIN_EXE_rift"))
+                    .args(["--mem", mem])
+                    .args(extra)
+                    .arg(&pa)
+                    .arg(&pb)
+                    .output()
+                    .unwrap()
+            };
+            let (on, off) = (run(&[]), run(&["--no-moves"]));
+            assert_eq!(on.status.code(), Some(1), "seed {seed} mem {mem}");
+            assert_eq!(off.status.code(), Some(1), "seed {seed} mem {mem}");
+            assert!(on.stdout == off.stdout, "seed {seed} mem {mem}");
+        }
+    }
+}
+
+#[test]
+fn no_moves_is_reported_where_moves_are() {
+    use std::fs;
+    use std::process::Command;
+    let p = shuffled(Rows::Csv, 6);
+    let dir = tempfile::tempdir().unwrap();
+    let (pa, pb) = (dir.path().join("a"), dir.path().join("b"));
+    fs::write(&pa, &p.a).unwrap();
+    fs::write(&pb, &p.b).unwrap();
+    let rift = |extra: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rift"))
+            .args(extra)
+            .arg(&pa)
+            .arg(&pb)
+            .output()
+            .unwrap();
+        (out.stdout, String::from_utf8(out.stderr).unwrap())
+    };
+    let (out, _) = rift(&["--summary", "--no-moves"]);
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("moved    not searched, --no-moves"), "{out}");
+    let (_, err) = rift(&["--stats", "--no-moves"]);
+    assert!(err.contains("moved    not searched, --no-moves"), "{err}");
+    let (_, err) = rift(&["--key", "csv:1", "--no-moves"]);
+    assert!(err.contains("cannot be used with"), "{err}");
+}
