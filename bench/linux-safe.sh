@@ -239,14 +239,35 @@ heap_bytes() {
 # MODE: null (stdout discarded), count (stdout counted by wc -c), file
 # (stdout kept, for rift --summary). time -v writes to its own file, so the
 # command's stderr stays clean for rift's --stats line.
+# scope_result UNIT: systemd's Result for the scope (success, oom-kill,
+# exit-code, ...), read without root. A failed scope stays loaded until
+# reset-failed, which also keeps the user manager tidy; a clean one is
+# collected and reads as success. n/a without a systemd scope.
+scope_result() {
+  [ -n "$1" ] || { echo n/a; return; }
+  sw=0
+  while [ "$sw" -lt 50 ]; do
+    case $(systemctl --user show "$1.scope" -p ActiveState --value 2>/dev/null) in
+      active|activating|deactivating) sleep 0.1; sw=$((sw + 1)) ;;
+      *) break ;;
+    esac
+  done
+  sr=$(systemctl --user show "$1.scope" -p Result --value 2>/dev/null || true)
+  systemctl --user reset-failed "$1.scope" >/dev/null 2>&1 || true
+  echo "${sr:-unknown}"
+}
+
 run_one() {
   grp=$1 prof=$2 sz=$3 tool=$4 thr=$5 cap=$6 rep=$7 mode=$8; shift 8
   n=$((n + 1))
   id=$(printf '%03d' "$n")
   b=$raw/$id
   echo "[$id] $grp $prof $(gib "$sz") $tool threads=$thr rep=$rep" >&2
+  unit=
   case $limiter in
-    systemd) lim="systemd-run --user --scope -q -p MemoryMax=$cap -p MemorySwapMax=0 $niceio" ;;
+    systemd)
+      unit=rift-bench-$$-$id
+      lim="systemd-run --user --scope -q --unit=$unit -p MemoryMax=$cap -p MemorySwapMax=0 $niceio" ;;
     prlimit) lim="prlimit --as=$cap $niceio" ;;
     *) lim=$niceio ;;
   esac
@@ -262,10 +283,7 @@ run_one() {
   user=$(awk -F': ' '/User time/ {print $2}' "$b.time" 2>/dev/null || true)
   sys=$(awk -F': ' '/System time/ {print $2}' "$b.time" 2>/dev/null || true)
   rss=$(awk -F': ' '/Maximum resident/ {print $2}' "$b.time" 2>/dev/null || true)
-  # The scope kills time along with the command, so a missing report or a
-  # signal 9 is how an OOM kill shows up without root. Inferred, not proven.
-  oom=no
-  if [ -z "$ec" ] || grep -q 'terminated by signal 9' "$b.time" 2>/dev/null; then oom=yes; fi
+  result=$(scope_result "$unit")
   heap=
   case $tool in
     *--summary*) heap=$(heap_bytes "$b.out") ;;
@@ -277,7 +295,7 @@ run_one() {
     *) out= ;;
   esac
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$wall" "$user" "$sys" "$rss" "$ec" "$heap" "$out" "$oom" "$*" >> "$runs"
+    "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$wall" "$user" "$sys" "$rss" "$ec" "$heap" "$out" "$result" "$*" >> "$runs"
 }
 
 # core_runs GROUP PROFILE SIZE A B: the runs every pair gets.
@@ -363,11 +381,11 @@ function num(x) { return x == "" ? "null" : x }
 $1 == "F" { f[++nf] = $2; v[nf] = $3; next }
 $1 == "N" { nt[++nn] = $2; next }
 {
-  r[++nr] = sprintf("    {\"id\": \"%s\", \"group\": \"%s\", \"profile\": \"%s\", \"size_bytes\": %s, \"tool\": \"%s\", \"threads\": \"%s\", \"cap_bytes\": %s, \"rep\": %s, \"wall_s\": %s, \"user_s\": %s, \"sys_s\": %s, \"max_rss_kb\": %s, \"exit_code\": %s, \"rift_peak_heap_bytes\": %s, \"output_bytes\": %s, \"oom_killed\": %s, \"command\": \"%s\"}",
-    $2, $3, $4, num($5), esc($6), $7, num($8), num($9), num($10), num($11), num($12), num($13), num($14), num($15), num($16), ($17 == "yes" ? "true" : "false"), esc($18))
+  r[++nr] = sprintf("    {\"id\": \"%s\", \"group\": \"%s\", \"profile\": \"%s\", \"size_bytes\": %s, \"tool\": \"%s\", \"threads\": \"%s\", \"cap_bytes\": %s, \"rep\": %s, \"wall_s\": %s, \"user_s\": %s, \"sys_s\": %s, \"max_rss_kb\": %s, \"exit_code\": %s, \"rift_peak_heap_bytes\": %s, \"output_bytes\": %s, \"result\": \"%s\", \"oom_killed\": %s, \"command\": \"%s\"}",
+    $2, $3, $4, num($5), esc($6), $7, num($8), num($9), num($10), num($11), num($12), num($13), num($14), num($15), num($16), $17, ($17 == "oom-kill" ? "true" : "false"), esc($18))
 }
 END {
-  print "{\n  \"schema_version\": 1,\n  \"host\": {"
+  print "{\n  \"schema_version\": 2,\n  \"host\": {"
   for (i = 1; i <= nf; i++) printf "    \"%s\": \"%s\"%s\n", f[i], esc(v[i]), (i < nf ? "," : "")
   print "  },\n  \"notes\": ["
   for (i = 1; i <= nn; i++) printf "    \"%s\"%s\n", esc(nt[i]), (i < nn ? "," : "")
@@ -397,9 +415,9 @@ END {
   echo
   echo "## Runs"
   echo
-  echo "wall, user and sys in seconds; peak heap is rift's own count; oom is inferred from a missing time report or signal 9."
+  echo "wall, user and sys in seconds; peak heap is rift's own count; result is systemd's verdict on the run's scope (oom-kill means the cap killed it; n/a without systemd)."
   echo
-  echo "| id | group | profile | size | tool | threads | rep | wall | user | sys | max RSS | peak heap | output | exit | oom |"
+  echo "| id | group | profile | size | tool | threads | rep | wall | user | sys | max RSS | peak heap | output | exit | result |"
   echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
   awk -F'\t' '
   function h(b,   u, i) { if (b == "") return ""; split("B KiB MiB GiB TiB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } return sprintf(i == 1 ? "%d %s" : "%.1f %s", b, u[i]) }

@@ -12,7 +12,7 @@ bench/linux-safe.sh --yes         # no wait
 
 Options: `--ref REF` (tag, branch or commit; default `v0.1.0`), `--repo URL`, `--read-only-pair DIR`.
 
-The result is `rift-bench-<host>-<date>.tar.gz` in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 1) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
+The result is `rift-bench-<host>-<date>.tar.gz` in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 2) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
 Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to clone and fetch crates, GNU `time` at `/usr/bin/time`, `awk`, `tar`. `systemd-run --user`, `ionice`, `taskset`, `lscpu` and `systemd-detect-virt` are used when present. No Python.
 
@@ -32,7 +32,7 @@ Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to c
 
 Seed 7, profiles `sql` and `csv`, changes at 0.1% (`rift-gen --change-ratio 0.001`, also the default). For each profile and size, three repetitions of `cat a b`, `rift --summary --mem 256M` and `rift --stats --mem 256M` (the diff goes through `wc -c`), and one run each of `rift --stats` at `--mem 64M` and `--mem 1G`. On the 1 GiB pair also `diff` and `git diff --no-index` (three repetitions) and thread scaling: `rift --summary` on 1, 2, 4 and all CPUs.
 
-Per run: wall, user and sys time, max RSS, exit code, rift's peak heap, output bytes, and whether the scope killed the process. The kill is inferred (no `time` report, or signal 9), not read from the kernel log, which needs root. Exit code 1 from `rift`, `diff` and `git diff` means the files differ.
+Per run: wall, user and sys time, max RSS, exit code, rift's peak heap, output bytes, and systemd's result for the run's scope: `oom-kill` when the cap killed it. Each scope gets its own unit name, and the result is read with `systemctl --user show`, which needs no root. Without systemd the result is `n/a`. Exit code 1 from `rift`, `diff` and `git diff` means the files differ.
 
 Thread count is set with `taskset -c 0-<k-1>`, not `RAYON_NUM_THREADS`: rift sizes its threads from `std::thread::available_parallelism()`, which follows the CPU affinity mask. If your CPU 0 is not in the allowed set, `taskset` fails and the scaling rows show it.
 
