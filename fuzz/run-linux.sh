@@ -46,9 +46,9 @@ child=$((rss_mb * MIB + GIB / 2))
 # The fork-mode parent, the margin left to the host, and the tmpfs the
 # binaries and corpora take once the build is gone.
 parent=$((GIB / 2)) margin=$((2 * GIB)) kept=$GIB
-# The build: tmpfs for the clone, crates and target directory, and the
-# RSS of up to four compilers.
-build_tmpfs=$((3 * GIB)) build_rss=$((3 * GIB)) build_jobs=4
+# The build: tmpfs for the clone, crates and target directory, and the RSS
+# of the compilers, about 0.75 GiB each; 4 at once when memory allows.
+build_tmpfs=$((3 * GIB)) job_rss=$((3 * GIB / 4)) build_jobs=4
 
 self=$(cd "$(dirname "$0")/.." && pwd)
 repo=$self ref=HEAD yes=0 dry=0 secs=1800 jobs=
@@ -137,9 +137,14 @@ limit=$((avail * 60 / 100))
 mem_total=$(awk '/^MemTotal:/ {print $2 * 1024}' "$meminfo")
 cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 
-need_build=$((build_tmpfs + build_rss + margin))
+# Fewer compilers at once when memory is short: slower, not larger.
+for j in 4 2 1; do
+  build_jobs=$j
+  need_build=$((build_tmpfs + j * job_rss + margin))
+  [ "$need_build" -gt "$limit" ] || break
+done
 [ "$need_build" -le "$limit" ] ||
-  die "refusing to start: the build needs $((need_build * 100 / 60 / MIB)) MiB of MemAvailable (60% rule), this host has $((avail / MIB)) MiB"
+  die "refusing to start: the build needs $((need_build * 100 / 60 / MIB)) MiB of MemAvailable even with one compiler (60% rule), this host has $((avail / MIB)) MiB"
 
 # ---- cores -----------------------------------------------------------------
 
@@ -223,7 +228,7 @@ plan() {
     echo "  source            $repo at $ref"
   fi
   echo "  toolchain         $nightly (never installed by this script)"
-  echo "  build             cargo fuzz build -O -s $sanitizer, $build_jobs jobs; then only the binaries are kept"
+  echo "  build             cargo fuzz build -O -s $sanitizer, compilers at once: $build_jobs; then only the binaries are kept"
   echo "  targets           $targets"
   echo "  jobs              $jobs targets at once ($jobs_how; $phys physical cores, $cpus threads)"
   [ -z "$jobs_note" ] || echo "                    note: $jobs_note"
