@@ -41,8 +41,8 @@ Needs: Linux, `taskset` (util-linux), a non-root user, rustup with a nightly too
 
 The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, labelled by CPU model and date, never by hostname or user:
 
-- `report.md`: host, plan, and per target the run time, executions, exec/s, libFuzzer's coverage and features, corpus files and bytes before and after, and crash, timeout and OOM counts;
-- `results.json`: the same, `schema_version` 2;
+- `report.md`: host, plan, and per target the run time, executions, exec/s, libFuzzer's coverage and features, corpus files and bytes before and after, crash, timeout and OOM counts, and the peak memory of the target's scope;
+- `results.json`: the same, `schema_version` 3 (3 added `memory_peak_bytes` per target: the scope's `MemoryPeak` in bytes, `null` when unknown);
 - `artifacts/<target>/`: every input that crashed (`crash-*`), timed out (`timeout-*`) or ran out of memory (`oom-*`);
 - `logs/<target>.log`: libFuzzer's output, with the stack trace of each crash (first 8 MiB).
 
@@ -54,7 +54,7 @@ The result is `rift-fuzz-linux-<cpu>-<date>.tar.gz` in the current directory, la
 - The only disk write is the archive. `systemd-run` leaves a few lines in the journal.
 - No root, no `sudo`, no kernel settings. It never installs a toolchain (`RUSTUP_AUTO_INSTALL=0`).
 - Each target runs as `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0 nice -n 10 ionice -c3 taskset -c <cores> <target> -fork=<k> ...`, with AddressSanitizer. Without a systemd user session it uses `prlimit --as` per process instead, and builds without AddressSanitizer, which needs more address space than such a limit allows; the report says so. With neither, it does not run.
-- Sizing, all within 60% of `MemAvailable`: the build needs 3 GiB of tmpfs, 3 GiB for four compiler jobs and a 2 GiB margin, so the script stops below 13.3 GiB of `MemAvailable`. Fuzzing runs `N` targets at once. A fork worker is counted at 2.5 GiB (libFuzzer's 2 GiB RSS limit plus slack), the parent at 0.5 GiB, and 1 GiB of tmpfs and the 2 GiB margin are shared. When `N` targets with one worker each do not fit, `N` is lowered and the plan says so: 2 at 16 GiB of `MemAvailable`, 5 at 32 GiB. Workers per target are then as many as the slot's cores and the remaining memory allow (one at both sizes); the cap is the same for every target.
+- Sizing, all within 60% of `MemAvailable`: the build needs 3 GiB of tmpfs, 3 GiB for four compiler jobs and a 2 GiB margin, so the script stops below 13.3 GiB of `MemAvailable`. Fuzzing runs `N` targets at once. A fork worker is counted at 1.5 GiB (libFuzzer's 1 GiB RSS limit plus slack), the parent at 0.5 GiB, so a slot with one worker is 2 GiB; 1 GiB of tmpfs and the 2 GiB margin are shared. When `N` targets with one worker each do not fit, `N` is lowered and the plan says so: 2 at 13 GiB of `MemAvailable`, 3 at 16 GiB, the default 4 at 32 GiB. Workers per target are then as many as the slot's cores and the remaining memory allow (one at 13 and 16 GiB, two at 32 GiB); the cap is the same for every target. The 1 GiB limit (`rss_mb` in the script, used for the sizing, the scope's `MemoryMax` and `-rss_limit_mb`) is a cap, not a measurement. Each target's `MemoryPeak` is sampled once a second while it runs and lands in `results.json` and the report; tune `rss_mb` from those figures. They are `unknown` under `prlimit` or when systemd does not report the property (it needs a recent systemd and cgroup v2).
 - libFuzzer runs in fork mode with `-ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1`, so a crash does not end a target's run; `-timeout=10` per input; leak detection is off, since growing memory hits the RSS limit and lazily built statics would read as leaks.
 
 ## Turning a crash into a regression test

@@ -38,10 +38,13 @@ set -eu
 
 GIB=1073741824
 MIB=1048576
-schema=2
+schema=3
 targets="scan keyed_csv keyed_ndjson keyed_copy keyed_reader pipeline unified tui_render sanitize mcp_request mcp_tools"
 # Per fuzzing process: libFuzzer's own RSS limit, and the cap around it.
-rss_mb=2048
+# rss_mb is a cap, not a measurement: it sizes the slots, the scope's
+# MemoryMax and -rss_limit_mb alike. Tune it from the memory_peak_bytes
+# of a real run (results.json), not from this number.
+rss_mb=1024
 child=$((rss_mb * MIB + GIB / 2))
 # The fork-mode parent, the margin left to the host, and the tmpfs the
 # binaries and corpora take once the build is gone.
@@ -399,6 +402,7 @@ run_target() {
     *) lim=$niceio ;;
   esac
   start=$(date +%s)
+  rm -f "$scratch/runs.d/$t.peak"
   # Leaks are not reported: memory that grows is caught by the RSS limit,
   # and lazily built statics would read as leaks. $lim is a word list.
   # shellcheck disable=SC2086
@@ -407,8 +411,29 @@ run_target() {
     -max_total_time="$secs" -rss_limit_mb="$rss_mb" -timeout=10 -detect_leaks=0 \
     -artifact_prefix="$art/" "$corpus" > "$log" 2>&1 &
   fpid=$!
+  # A successful scope is collected the moment its last process exits, and
+  # with it MemoryPeak, so the figure is sampled while the scope exists. The
+  # peak only grows: the last good sample is the answer, short of what the
+  # final second added. Anything that is not a plain number (property
+  # missing, "[not set]", infinity) is not recorded.
+  sampler=
+  if [ -n "$unit" ]; then
+    (
+      while kill -0 "$fpid" 2>/dev/null; do
+        p=$(systemctl --user show "$unit.scope" -p MemoryPeak --value 2>/dev/null || true)
+        case $p in
+          ''|*[!0-9]*) ;;
+          *) [ "${#p}" -gt 18 ] || echo "$p" > "$scratch/runs.d/$t.peak" ;;
+        esac
+        sleep 1
+      done
+    ) &
+    sampler=$!
+  fi
   ec=0
   wait "$fpid" || ec=$?
+  [ -z "$sampler" ] || wait "$sampler" || true
+  peak=$(cat "$scratch/runs.d/$t.peak" 2>/dev/null || true)
   end=$(date +%s)
   result=$(scope_result "$unit")
   after=$(corpus_stats "$corpus")
@@ -425,8 +450,8 @@ run_target() {
     note "$t: log cut to its first 8 MiB"
   fi
   [ "$ec" = 0 ] || note "$t: libFuzzer exited with $ec"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$t" "$((end - start))" "$stats" "${before% *}" "${before#* }" "${after% *}" "${after#* }" "$nart" "$ec" "$result" > "$scratch/runs.d/$t"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$t" "$((end - start))" "$stats" "${before% *}" "${before#* }" "${after% *}" "${after#* }" "$nart" "$ec" "$result" "${peak:-unknown}" > "$scratch/runs.d/$t"
 }
 
 # Target i goes to slot i mod jobs and the slot's targets run one after the
@@ -454,14 +479,15 @@ fact load_after "$(loadavg)"
 
 # runs.tsv: target seconds runs cov ft exec/s ooms timeouts crashes
 # files_before bytes_before files_after bytes_after artifacts exit result
+# memory_peak (bytes or unknown)
 { awk '{print "F\t" $0}' "$facts"; awk '{print "N\t" $0}' "$notes"; awk '{print "R\t" $0}' "$runs"; } | awk -F'\t' -v schema="$schema" '
 function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/[\001-\037]/, " ", s); return s }
 function num(x) { return x == "" ? "null" : x }
 $1 == "F" { f[++nf] = $2; v[nf] = $3; next }
 $1 == "N" { nt[++nn] = $2; next }
 {
-  r[++nr] = sprintf("    {\"target\": \"%s\", \"seconds\": %s, \"executions\": %s, \"exec_per_s\": %s, \"coverage\": %s, \"features\": %s, \"corpus_files_before\": %s, \"corpus_bytes_before\": %s, \"corpus_files_after\": %s, \"corpus_bytes_after\": %s, \"crashes\": %s, \"timeouts\": %s, \"ooms\": %s, \"artifacts\": %s, \"exit_code\": %s, \"result\": \"%s\"}",
-    $2, num($3), num($4), num($7), num($5), num($6), num($11), num($12), num($13), num($14), num($10), num($9), num($8), num($15), num($16), $17)
+  r[++nr] = sprintf("    {\"target\": \"%s\", \"seconds\": %s, \"executions\": %s, \"exec_per_s\": %s, \"coverage\": %s, \"features\": %s, \"corpus_files_before\": %s, \"corpus_bytes_before\": %s, \"corpus_files_after\": %s, \"corpus_bytes_after\": %s, \"crashes\": %s, \"timeouts\": %s, \"ooms\": %s, \"artifacts\": %s, \"exit_code\": %s, \"result\": \"%s\", \"memory_peak_bytes\": %s}",
+    $2, num($3), num($4), num($7), num($5), num($6), num($11), num($12), num($13), num($14), num($10), num($9), num($8), num($15), num($16), $17, ($18 ~ /^[0-9]+$/ ? $18 : "null"))
 }
 END {
   print "{\n  \"schema_version\": " schema ",\n  \"host\": {"
@@ -494,12 +520,13 @@ END {
   echo
   echo "## Targets"
   echo
-  echo "Executions, coverage (libFuzzer's cov) and features (ft) are from the last status line. Corpus is files / bytes. Result is systemd's verdict on the target's scope (oom-kill means the cap killed it; n/a without systemd)."
+  echo "Executions, coverage (libFuzzer's cov) and features (ft) are from the last status line. Corpus is files / bytes. Result is systemd's verdict on the target's scope (oom-kill means the cap killed it; n/a without systemd). Peak memory is the scope's MemoryPeak, sampled once a second while the target ran: parent and all workers together, page cache included; unknown without a systemd user scope or when systemd does not report it."
   echo
-  echo "| target | seconds | executions | exec/s | cov | ft | corpus before | corpus after | crashes | timeouts | OOMs | artifacts | exit | result |"
-  echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
-  awk -F'\t' '{ printf "| %s | %s | %s | %s | %s | %s | %s / %s | %s / %s | %s | %s | %s | %s | %s | %s |\n",
-      $1, $2, $3, $6, $4, $5, $10, $11, $12, $13, $9, $8, $7, $14, $15, $16 }' "$runs"
+  echo "| target | seconds | executions | exec/s | cov | ft | corpus before | corpus after | crashes | timeouts | OOMs | artifacts | exit | result | peak memory |"
+  echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+  awk -F'\t' '{ printf "| %s | %s | %s | %s | %s | %s | %s / %s | %s / %s | %s | %s | %s | %s | %s | %s | %s |\n",
+      $1, $2, $3, $6, $4, $5, $10, $11, $12, $13, $9, $8, $7, $14, $15, $16,
+      ($17 ~ /^[0-9]+$/ ? sprintf("%d MiB", $17 / 1048576) : "unknown") }' "$runs"
 } > "$pkg/report.md"
 
 name=rift-fuzz-$label
