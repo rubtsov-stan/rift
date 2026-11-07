@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block bodyclass %}land{% endblock bodyclass %}
+{% block fault %}
+<div class="fl" aria-hidden="true"><i class="r"></i><i class="g"></i></div>
+{% endblock fault %}
+{% block head %}
+{%- set stats = load_data(path="data/stats.json") %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Rift",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux",
+  "description": "{{ config.description }}",
+  "license": ["https://opensource.org/licenses/MIT", "https://www.apache.org/licenses/LICENSE-2.0"],
+  {%- if stats.release %}
+  "softwareVersion": "{{ stats.release | trim_start_matches(pat="v") }}",
+  {%- endif %}
+  "downloadUrl": "{{ config.extra.repo_url }}/releases/latest",
+  "url": "{{ config.base_url }}/",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+{% endblock head %}
+{% block main %}
+{%- set stats = load_data(path="data/stats.json") -%}
+{%- set vscode = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
+{%- set meta = load_data(path="data/captures/meta.txt", format="plain") | trim | split(pat="\n") -%}
+<div class="split">
+<svg class="fault" viewBox="0 0 40 72" preserveAspectRatio="none" aria-hidden="true"><path class="fr" d="M16 0 L2 28 L22 44 L8 72"/><path class="fg" d="M28 0 L14 28 L34 44 L20 72"/></svg>
+<aside class="text"><div class="stick">
+{%- if stats.release %}<p class="kicker">Latest release {{ stats.release }}</p>{% endif %}
+<h1>Diff huge text files under a hard memory limit.</h1>
+<p class="lede">Rift diffs large text files under a heap limit you set on the command line, <code>--mem</code>. It writes a unified diff that <code>patch</code> applies to the first file to get the second, and a terminal view lets you jump through the differences before the whole diff is done.</p>
+<ul class="chips" aria-label="Project status">
+<li><a class="chip" href="{{ config.extra.repo_url }}/actions/workflows/ci.yml"><i class="dot {% if stats.ci == 'success' %}ok{% else %}no{% endif %}"></i><span class="k">ci</span><span class="v">{% if stats.ci == 'success' %}passing{% else %}{{ stats.ci }}{% endif %}</span></a></li>
+{%- if stats.scorecard %}
+<li><a class="chip" href="https://scorecard.dev/viewer/?uri=github.com/{{ config.extra.repo }}"><i class="dot"></i><span class="k">scorecard</span><span class="v">{{ stats.scorecard }}/10</span></a></li>
+{%- endif %}
+{%- if stats.release %}
+<li><a class="chip" href="{{ config.extra.repo_url }}/releases/latest"><i class="dot"></i><span class="k">release</span><span class="v">{{ stats.release }}</span></a></li>
+{%- endif %}
+{%- if stats.downloads >= config.extra.download_threshold %}
+<li><a class="chip" href="{{ config.extra.repo_url }}/releases"><i class="dot"></i><span class="k">downloads</span><span class="v">{{ stats.downloads }}</span></a></li>
+{%- endif %}
+{%- if stats.stars >= config.extra.star_threshold %}
+<li><a class="chip" href="{{ config.extra.repo_url }}/stargazers"><i class="dot"></i><span class="k">stars</span><span class="v">{{ stats.stars }}</span></a></li>
+{%- endif %}
+</ul>
+<h2 id="install">Install</h2>
+{{ m::cmdbox(code="curl --proto '=https' --tlsv1.2 -LsSf " ~ config.extra.repo_url ~ "/releases/latest/download/rift-diff-installer.sh | sh") }}
+{{ m::cmdbox(code="cargo install --git " ~ config.extra.repo_url ~ " rift-diff") }}
+<p class="note">Binaries for macOS and Linux on x86_64 and arm64, a <code>.deb</code> for Debian and Ubuntu, or from source with Rust 1.97 or later.</p>
+<p class="links"><a href="{{ get_url(path='guide/') | safe }}">Guide</a> <a href="{{ get_url(path='use-cases/') | safe }}">Use cases</a> <a href="{{ get_url(path='how-it-works/') | safe }}">How it works</a></p>
+</div></aside>
+<main class="plates">
+<section>{{ m::term(name="hero", kind="summary", title="a.sql, b.sql: a 64 MiB pair", typed=true, caption="Real output on a generated pair: <code>rift-gen --seed 7 --size 64M --profile sql</code>. The page shows 12 selected lines of the full summary. " ~ meta[1] ~ ", " ~ meta[2] ~ ".") }}</section>
+<section class="plate band" id="scale"><h2>The file grows. The heap does not.</h2>
+<div class="ledhead"><span>Input size, to scale up to 2 GiB</span><span>Peak heap against the 256 MiB limit</span></div>
+{{ m::ledger() }}
+{%- set lin = load_data(path="data/bench-linux.json") %}
+<p class="src">Rift at <code>--mem 256M</code> on generated SQL pairs, full diff, {{ lin.host.cpu }}, {{ lin.host.ram_gb }} GB RAM, {{ lin.host.os }}, files in {{ lin.host.scratch }}, median of three runs, {{ lin.host.date }}. The gauge is the 256 MiB limit; the bar is Rift's own peak heap count. Source: <code>{{ lin.report }}</code>. The largest pair measured so far is 10 GiB, on a Mac (see the table below).</p></section>
+<section><p class="cap">The unified diff <span>{{ load_data(path="data/captures/sql-hunks.txt", format="plain") | trim }} hunks in all</span></p>
+{{ m::term(name="sql-diff-excerpt", kind="diff", title="the first and the third hunk", caption="Lines cut at 70 columns, timestamps dropped.") }}</section>
+<section><p class="cap">What a demo looks like <span>summary, then the terminal view</span></p>
+{{ m::media(ready=true, mp4="demo.mp4", gif="demo.gif", poster="demo-poster.jpg", width=960, height=540, alt="rift --summary on a 64 MiB pair, then the terminal view jumping between differences") }}</section>
+<section id="benchmarks"><p class="cap">1 GiB pair, full diff <span>Apple M1</span></p>{{ m::chart() }}
+{%- set mac = load_data(path="data/bench-mac.json") %}
+<p class="note">{{ mac.host.cpu }}, {{ mac.host.ram_gb }} GB RAM, {{ mac.host.storage }}, {{ mac.host.os }}, {{ mac.host.cache }}. Source: <code>{{ mac.source }}</code>. All tables, with commands, are on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
+<section><p class="cap">Apple M1 <span>{{ mac.host.os }}, {{ mac.host.cache }}</span></p>{{ m::benchtable(name="mac") }}<p class="note">{{ mac.note }}</p></section>
+<section><p class="cap">{{ lin.host.cpu }} <span>{{ lin.host.os }}, {{ lin.host.scratch }}</span></p>{{ m::benchtable(name="linux", brief=true) }}<p class="note">Median of three runs. GNU diff was killed at a 3 GiB cap on the 1 GiB pair. On the 1 GiB pair <code>git diff</code> printed no diff: it treats the files as binary. More rows on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
+<section><p class="cap">What is guaranteed</p>
+<ul class="plain">
+<li>The output is a correct edit script: applied to the first file it gives exactly the second, byte for byte.</li>
+<li>A line counts as unchanged only after its bytes are compared. Hashes only propose matches.</li>
+<li>The heap stays at or under <code>--mem</code>. Files are read with <code>pread</code> into fixed buffers, never <code>mmap</code>.</li>
+<li>A region Rift could not refine within the budget is marked approximate in every output.</li>
+</ul>
+<p class="cap">What is not</p>
+<ul class="plain">
+<li>The diff is not minimal.</li>
+<li>A moved block shows in the unified diff as a deletion and an insertion. <code>--summary</code>, <code>--stats</code> and the terminal view list moved blocks, and detection does not find every block.</li>
+<li>Windows is not supported.</li>
+</ul></section>
+{%- if vscode %}
+<section id="vscode"><p class="cap">VS Code <span>extension</span></p>
+<p class="prose-lite">Compare two large files from the editor: a tree of differences, two-pane hunk diffs, next and previous. <a href="{{ get_url(path='guide/vscode/') | safe }}">Read the extension guide</a>.</p>
+{{ m::media(ready=config.extra.vscode_media, mp4="vscode-demo.mp4", gif="vscode-demo.gif", poster="vscode-demo-poster.jpg", width=1280, height=800, alt="The Rift extension comparing two large files in VS Code") }}</section>
+{%- endif %}
+</main>
+</div>
+{% endblock main %}
