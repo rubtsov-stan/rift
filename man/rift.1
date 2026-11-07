@@ -10,11 +10,10 @@ rift \- Diff text files of any size under a hard memory limit
 .SH SYNOPSIS
 \fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> 
 .SH DESCRIPTION
-\fBrift\fR compares two text files of any size, from megabytes to
-hundreds of gigabytes, under a heap limit set with \fB\-\-mem\fR. It
-writes a unified diff that \fBpatch\fR(1) applies to \fIA\fR to get
-\fIB\fR. Its other modes print a summary, open a terminal view, or
-compare records by key.
+\fBrift\fR compares two text files of any size under a heap limit set
+with \fB\-\-mem\fR. It writes a unified diff that \fBpatch\fR(1)
+applies to \fIA\fR to get \fIB\fR. Its other modes print a summary, open
+a terminal view, or compare records by key.
 .PP
 Rift hashes every line once and cuts the pair into segments at lines that
 occur once in each file. Segments with identical bytes are equal. The
