@@ -112,6 +112,12 @@ impl DiffView for View {
     fn set_visible(&self, _range: Range<LineNo>) {}
 }
 
+/// The largest screen drawn. The sanitizer and the layout do not change
+/// with size past a typical terminal, and bigger screens only cost time
+/// that content could use.
+const MAX_COLS: u16 = 80;
+const MAX_ROWS: u16 = 24;
+
 /// A key from one byte: navigation, go-to-line digits and editing keys.
 fn key(byte: u8) -> KeyEvent {
     let code = match byte % 12 {
@@ -141,7 +147,8 @@ pub(crate) fn hidden(c: char) -> bool {
 }
 
 /// Draws A against B in a terminal of the size the first two bytes give,
-/// after each of up to 32 keys from the third field.
+/// capped at [`MAX_COLS`] by [`MAX_ROWS`], after each of up to 32 keys from
+/// the third field.
 ///
 /// Fields: width and height bytes, approx flag byte, then A, B and the
 /// keys separated by NUL.
@@ -165,7 +172,10 @@ pub fn check(data: &[u8]) {
     let view = View::new(&lines_a, &lines_b, flags & 1 != 0);
     let (ma, mb) = (MemLines::new(a), MemLines::new(b));
     let mut app = App::new(&view, &ma, &mb);
-    let backend = TestBackend::new(u16::from(w).max(1), u16::from(h % 64).max(1));
+    let backend = TestBackend::new(
+        u16::from(w).clamp(1, MAX_COLS),
+        u16::from(h).clamp(1, MAX_ROWS),
+    );
     let mut term = Terminal::new(backend).expect("test backend");
     for k in std::iter::once(None).chain(keys.iter().take(32).map(Some)) {
         if let Some(&k) = k {
