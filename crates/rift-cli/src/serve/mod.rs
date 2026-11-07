@@ -22,7 +22,6 @@ mod methods;
 mod notify;
 mod wire;
 
-use std::ffi::OsString;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,8 +29,8 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
-use clap::Parser;
 use rift_core::Bytes;
+use rift_diff::ServeArgs;
 use rift_session::{
     Limits, MAX_CONTEXT, MAX_LINE_BYTES, MAX_LINES, MAX_PAGE, MAX_SESSIONS, Sessions, code,
 };
@@ -59,40 +58,15 @@ const PROTOCOL_RESERVE: Bytes = Bytes::mib(8);
 /// The input and output buffers.
 const IO_BUF: usize = 64 << 10;
 
-/// Serve Rift's protocol on standard input and output.
-#[derive(Debug, Parser)]
-#[command(name = "rift serve", version)]
-struct Cli {
-    /// Most memory one session may ask for, as for --mem.
-    #[arg(long, default_value = "1G", value_parser = Bytes::parse_budget)]
-    max_session_mem: Bytes,
-    /// Memory for all sessions together and the protocol's buffers.
-    #[arg(long, default_value = "2G", value_parser = Bytes::parse_budget)]
-    max_total_mem: Bytes,
-    /// On exit, print the peak heap to standard error.
-    #[arg(long)]
-    stats: bool,
-}
-
-/// Runs `rift serve` when it is the first argument and no file name
-/// follows it. `None` for any other command line, so `rift serve other`
-/// still diffs a file called `serve`.
-pub fn dispatch(argv: &[OsString]) -> Option<ExitCode> {
-    if argv.get(1)? != "serve"
-        || argv
-            .get(2)
-            .is_some_and(|a| !a.to_string_lossy().starts_with('-'))
-    {
-        return None;
-    }
-    let cli = Cli::parse_from(&argv[1..]);
-    Some(match run(&cli) {
+/// Runs `rift serve` with `cli`.
+pub fn main(cli: &ServeArgs) -> ExitCode {
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("rift serve: {err:#}");
             ExitCode::from(2)
         }
-    })
+    }
 }
 
 /// A request being answered.
@@ -303,7 +277,7 @@ fn write_all(rx: &Receiver<Box<dyn Body>>) -> io::Result<()> {
     out.flush()
 }
 
-fn run(cli: &Cli) -> anyhow::Result<()> {
+fn run(cli: &ServeArgs) -> anyhow::Result<()> {
     let sessions_mem = Bytes(cli.max_total_mem.0.saturating_sub(PROTOCOL_RESERVE.0));
     anyhow::ensure!(
         sessions_mem.0 > 0,

@@ -8,7 +8,7 @@ rift \- Diff text files of any size under a hard memory limit
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH SYNOPSIS
-\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> 
+\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> [\fIsubcommands\fR]
 .SH DESCRIPTION
 \fBrift\fR compares two text files of any size under a heap limit set
 with \fB\-\-mem\fR. It writes a unified diff that \fBpatch\fR(1)
@@ -56,6 +56,15 @@ Second file
 \fBrift\fR [\fIoptions\fR] \fIA\fR \fIB\fR
 Writes a unified diff to standard output, as \fBdiff \-u\fR does.
 \fBpatch\fR(1) applied to \fIA\fR gives \fIB\fR.
+.TP
+\fBrift serve\fR [\fIoptions\fR]
+Serves Rift's protocol to an editor or another program; see SERVE.
+.TP
+\fBrift git\-diff\fR [\fB\-\-mem\fR \fISIZE\fR] \fIpath old\-file old\-hex old\-mode new\-file new\-hex new\-mode\fR
+The command git runs for an external diff; see GIT.
+.IP
+\fBserve\fR and \fBgit\-diff\fR are subcommands, so a file of either name
+is given with a path: \fBrift ./serve other\fR.
 .TP
 \fB\-\-summary\fR
 Writes no diff. Prints the line and byte count of each file, the number
@@ -265,8 +274,7 @@ buffers. At most four sessions are open, and none is closed for being
 idle. \fB\-\-stats\fR prints the peak heap to standard error on exit.
 .PP
 The server exits with status 0 when standard input closes, and 2 when
-it cannot start. With a file argument after it, \fBserve\fR is a file
-name: \fBrift serve other\fR diffs a file called \fBserve\fR.
+it cannot start.
 .SH EXAMPLES
 Write a patch and apply it:
 .PP

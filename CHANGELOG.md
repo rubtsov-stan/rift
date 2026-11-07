@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `serve` and `git-diff` are subcommands, listed in `rift --help`, so a
+  file named `serve` or `git-diff` must now be given as `./serve` or
+  `./git-diff`.
+
 ## [0.2.0] - 2026-11-07
 
 ### Added

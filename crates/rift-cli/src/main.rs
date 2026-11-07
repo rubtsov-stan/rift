@@ -16,7 +16,7 @@ use anyhow::Context;
 use clap::Parser;
 use rift_core::alloc::CountingAlloc;
 use rift_core::{BudgetExceeded, Bytes};
-use rift_diff::Args;
+use rift_diff::{Args, Command};
 
 use crate::source::FileSource;
 
@@ -33,10 +33,13 @@ fn tui_alias(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
 }
 
 fn run(args: &Args) -> anyhow::Result<ExitCode> {
-    let a = FileSource::open(&args.a).with_context(|| format!("open {}", args.a.display()))?;
-    let b = FileSource::open(&args.b).with_context(|| format!("open {}", args.b.display()))?;
+    let (Some(path_a), Some(path_b)) = (&args.a, &args.b) else {
+        unreachable!("clap requires both files when no subcommand is given");
+    };
+    let a = FileSource::open(path_a).with_context(|| format!("open {}", path_a.display()))?;
+    let b = FileSource::open(path_b).with_context(|| format!("open {}", path_b.display()))?;
     if let Some(spec) = &args.key {
-        return keyed::run(&a, &b, [&args.a, &args.b], spec, args.mem, args.stats);
+        return keyed::run(&a, &b, [path_a, path_b], spec, args.mem, args.stats);
     }
     if args.summary {
         return summary::run(&a, &b, args.mem, !args.no_moves);
@@ -44,8 +47,8 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
     let files = full::Files {
         a: Arc::new(a),
         b: Arc::new(b),
-        path_a: &args.a,
-        path_b: &args.b,
+        path_a,
+        path_b,
         moves: !args.no_moves,
     };
     if args.interactive {
@@ -56,11 +59,12 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
 }
 
 fn main() -> ExitCode {
-    let raw: Vec<_> = std::env::args_os().collect();
-    if let Some(code) = gitdiff::dispatch(&raw).or_else(|| serve::dispatch(&raw)) {
-        return code;
-    }
     let args = Args::parse_from(tui_alias(std::env::args_os().collect()));
+    match &args.command {
+        Some(Command::Serve(cli)) => return serve::main(cli),
+        Some(Command::GitDiff(cli)) => return gitdiff::main(cli),
+        None => {}
+    }
     match run(&args) {
         Ok(code) => code,
         Err(err) => {

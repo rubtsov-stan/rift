@@ -14,9 +14,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use clap::Parser;
-use rift_core::Bytes;
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options};
+use rift_diff::GitDiffArgs;
 
 use crate::full::{self, Files};
 use crate::lfs::Pointer;
@@ -24,19 +23,6 @@ use crate::source::FileSource;
 
 /// Git writes this for the side of an added or deleted file.
 const DEV_NULL: &str = "/dev/null";
-
-/// Arguments of `rift git-diff`: options, then what git passes.
-#[derive(Debug, Parser)]
-#[command(name = "rift git-diff", version)]
-struct Cli {
-    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
-    #[arg(long, default_value = "256M", value_parser = Bytes::parse_budget)]
-    mem: Bytes,
-    /// `path old-file old-hex old-mode new-file new-hex new-mode`, and for a
-    /// rename or copy `new-path` and the rename header.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    external: Vec<OsString>,
-}
 
 /// One side of the comparison.
 #[derive(Debug)]
@@ -168,7 +154,7 @@ fn content(side: &Side, name: &[u8]) -> anyhow::Result<PathBuf> {
     Ok(side.file.clone())
 }
 
-fn run(cli: &Cli) -> anyhow::Result<()> {
+fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
     let call = Call::parse(&cli.external)?;
     let old = content(&call.old, &call.old_path)?;
     let new = content(&call.new, &call.new_path)?;
@@ -205,14 +191,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Runs `rift git-diff` when it is the first argument. `None` for any
-/// other command line.
-pub fn dispatch(argv: &[OsString]) -> Option<ExitCode> {
-    if argv.get(1)? != "git-diff" {
-        return None;
-    }
-    let cli = Cli::parse_from(&argv[1..]);
-    Some(match run(&cli) {
+/// Runs `rift git-diff` with `cli`.
+pub fn main(cli: &GitDiffArgs) -> ExitCode {
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             match crate::mem_advice(&err, cli.mem) {
@@ -221,7 +202,7 @@ pub fn dispatch(argv: &[OsString]) -> Option<ExitCode> {
             }
             ExitCode::from(2)
         }
-    })
+    }
 }
 
 #[cfg(test)]
