@@ -1,6 +1,6 @@
 [package]
 name = "rift-diff"
-description = "Diff text files of any size under a hard memory limit"
+description = "Diff large text files under a hard memory limit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -42,8 +42,7 @@ name = "rift-diff"
 section = "utils"
 priority = "optional"
 extended-description = """\
-Rift compares text files of tens to hundreds of gigabytes under a hard \
-heap limit and prints a unified diff."""
+Rift compares large text files under a hard heap limit and prints a unified diff."""
 assets = [
     ["target/release/rift", "usr/bin/", "755"],
     ["../../man/rift.1", "usr/share/man/man1/", "644"],

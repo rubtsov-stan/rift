@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use rift_core::Bytes;
 
-/// Diff text files of any size under a hard memory limit.
+/// Diff large text files under a hard memory limit.
 #[derive(Debug, Parser)]
 #[allow(
     clippy::struct_excessive_bools,
