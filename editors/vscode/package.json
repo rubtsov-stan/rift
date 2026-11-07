@@ -1,0 +1,228 @@
+{
+  "name": "rift-vscode",
+  "displayName": "Rift",
+  "description": "Compare text files of tens to hundreds of GB with Rift, one difference at a time.",
+  "version": "0.3.0",
+  "publisher": "rift-placeholder",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rubtsov-stan/rift.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "rift.compareFiles",
+        "title": "Compare Files…",
+        "category": "Rift"
+      },
+      {
+        "command": "rift.compareSelected",
+        "title": "Compare with Rift",
+        "category": "Rift"
+      },
+      {
+        "command": "rift.nextDifference",
+        "title": "Next Difference",
+        "category": "Rift",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "rift.previousDifference",
+        "title": "Previous Difference",
+        "category": "Rift",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "rift.goToLineInA",
+        "title": "Go to Line in File A…",
+        "category": "Rift"
+      },
+      {
+        "command": "rift.closeComparison",
+        "title": "Close Comparison",
+        "category": "Rift",
+        "icon": "$(close)"
+      },
+      {
+        "command": "rift.openSegment",
+        "title": "Open Difference",
+        "category": "Rift"
+      },
+      {
+        "command": "rift.openMove",
+        "title": "Open Moved Block",
+        "category": "Rift"
+      },
+      {
+        "command": "rift.loadMore",
+        "title": "Load More",
+        "category": "Rift"
+      },
+      {
+        "command": "rift.rerunWithMem",
+        "title": "Rerun with Suggested Memory",
+        "category": "Rift"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "rift.compareSelected",
+          "when": "listDoubleSelection && !explorerResourceIsFolder",
+          "group": "3_compare@10"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "rift.compareSelected",
+          "when": "false"
+        },
+        {
+          "command": "rift.openSegment",
+          "when": "false"
+        },
+        {
+          "command": "rift.openMove",
+          "when": "false"
+        },
+        {
+          "command": "rift.loadMore",
+          "when": "false"
+        },
+        {
+          "command": "rift.rerunWithMem",
+          "when": "false"
+        },
+        {
+          "command": "rift.nextDifference",
+          "when": "rift.active"
+        },
+        {
+          "command": "rift.previousDifference",
+          "when": "rift.active"
+        },
+        {
+          "command": "rift.goToLineInA",
+          "when": "rift.active"
+        },
+        {
+          "command": "rift.closeComparison",
+          "when": "rift.active"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "rift.previousDifference",
+          "when": "view == rift.comparison && rift.active",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rift.nextDifference",
+          "when": "view == rift.comparison && rift.active",
+          "group": "navigation@2"
+        },
+        {
+          "command": "rift.closeComparison",
+          "when": "view == rift.comparison && rift.active",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "rift.nextDifference",
+        "key": "ctrl+alt+n",
+        "when": "rift.active"
+      },
+      {
+        "command": "rift.previousDifference",
+        "key": "ctrl+alt+p",
+        "when": "rift.active"
+      },
+      {
+        "command": "rift.goToLineInA",
+        "key": "ctrl+alt+g",
+        "when": "rift.active"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rift",
+          "title": "Rift",
+          "icon": "media/rift.svg"
+        }
+      ]
+    },
+    "views": {
+      "rift": [
+        {
+          "id": "rift.comparison",
+          "name": "Rift",
+          "contextualTitle": "Rift comparison"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "rift.comparison",
+        "contents": "No comparison is open.\n[Compare Files…](command:rift.compareFiles)"
+      }
+    ],
+    "configuration": {
+      "title": "Rift",
+      "properties": {
+        "rift.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path of the `rift` binary. Empty uses the binary bundled with the extension."
+        },
+        "rift.mem": {
+          "type": "string",
+          "default": "256M",
+          "markdownDescription": "Heap budget of one comparison, written as for `rift --mem` (`64M`, `1G`, `300K`, a number of bytes). The server refuses a value over its own limit."
+        },
+        "rift.contextLines": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 100,
+          "markdownDescription": "Lines of context shown around a difference."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p . --noEmit",
+    "build": "tsc -p .",
+    "lint": "eslint .",
+    "test": "npm run build && node out/test/run.js",
+    "check-mock": "node test/check-mock.js",
+    "package": "vsce package"
+  },
+  "bugs": {
+    "url": "https://github.com/rubtsov-stan/rift/issues"
+  },
+  "homepage": "https://github.com/rubtsov-stan/rift#readme",
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/mocha": "10.0.10",
+    "@types/node": "20.19.43",
+    "@types/vscode": "1.100.0",
+    "@vscode/test-electron": "2.5.2",
+    "@vscode/vsce": "3.9.2",
+    "eslint": "9.39.5",
+    "mocha": "11.8.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1"
+  }
+}
