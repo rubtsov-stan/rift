@@ -155,6 +155,11 @@ pub struct Session {
     pub(crate) bytes: [Bytes; 2],
     watch: Watch,
     built: OnceLock<Result<Built, Error>>,
+    /// Set once the scan has let go of the session, after `built`: until
+    /// then the session counts as scanning. Eviction takes every holder of
+    /// a session for a call using it, so a ready one must be held by calls
+    /// only.
+    ended: Arc<OnceLock<()>>,
     held: Held,
 }
 
@@ -162,7 +167,7 @@ impl Session {
     /// Where the session is in its life.
     #[must_use]
     pub fn state(&self) -> SessionState {
-        match self.built.get() {
+        match self.result() {
             None => SessionState::Scanning,
             Some(Ok(_)) => SessionState::Ready,
             Some(Err(_)) => SessionState::Failed,
@@ -171,14 +176,14 @@ impl Session {
 
     /// Blocks until the scan ends and returns the state it left.
     pub fn wait(&self) -> SessionState {
-        self.built.wait();
+        self.ended.wait();
         self.state()
     }
 
     /// The error the scan failed with, once it has.
     #[must_use]
     pub fn error(&self) -> Option<&Error> {
-        self.built.get().and_then(|b| b.as_ref().err())
+        self.result().and_then(|b| b.as_ref().err())
     }
 
     /// Bytes the scan has covered, and of how many: twice the size of both
@@ -190,9 +195,14 @@ impl Session {
         (self.watch.done().min(total), total)
     }
 
+    /// What the scan left, once it has ended.
+    fn result(&self) -> Option<&Result<Built, Error>> {
+        self.ended.get().and(self.built.get())
+    }
+
     /// The finished diff.
     pub(crate) fn built(&self) -> Result<&Built, Error> {
-        match self.built.get() {
+        match self.result() {
             Some(Ok(b)) => Ok(b),
             _ => Err(Error::NotReady {
                 session: self.id,
@@ -397,6 +407,7 @@ impl Sessions {
         // Never set before: the session was made by this call and is not
         // in the table yet.
         let _ = session.built.set(Ok(built));
+        let _ = session.ended.set(());
         // Two first calls on the same new pair both scan it and the later
         // insert wins. That costs one extra scan and its budget while both
         // run. A per-key build latch would fix it if concurrent first calls
@@ -461,6 +472,11 @@ impl Sessions {
                 }
                 // Only this thread sets the result.
                 let _ = scan.built.set(result);
+                #[cfg(test)]
+                drop(tests::SCAN_END.read());
+                let ended = Arc::clone(&scan.ended);
+                drop(scan);
+                let _ = ended.set(());
             });
         if let Err(error) = spawned {
             self.close(session.id);
@@ -569,6 +585,7 @@ impl Sessions {
             bytes,
             watch: Watch::new(),
             built: OnceLock::new(),
+            ended: Arc::default(),
             held: Held {
                 total: Arc::clone(&self.held),
                 mem: AtomicU64::new(mem.0),
@@ -582,5 +599,46 @@ impl Sessions {
 impl Session {
     pub fn fuzz_diff(&self) -> &Diff<FileSource, FileSource> {
         &self.built().expect("a session from get is ready").diff
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::RwLock;
+
+    use super::*;
+
+    /// Held for writing, stops every scan thread after it has set the
+    /// result and before it lets go of the session.
+    pub(super) static SCAN_END: RwLock<()> = RwLock::new(());
+
+    fn write(dir: &std::path::Path, name: &str, bytes: &[u8]) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.to_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_session_is_ready_only_once_its_scan_thread_lets_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(dir.path(), "a", b"one\n");
+        let b = write(dir.path(), "b", b"two\n");
+        let c = write(dir.path(), "c", b"three\n");
+        let s = Sessions::new(Limits {
+            sessions: 1,
+            ..Limits::default()
+        });
+        let pause = SCAN_END.write().unwrap();
+        let session = s.open(&a, &b, None).unwrap().session;
+        while session.built.get().is_none() {
+            std::thread::yield_now();
+        }
+        // The scan thread still holds the session: eviction would take it
+        // for a user, so it must not look ready yet.
+        assert_eq!(session.state(), SessionState::Scanning);
+        drop(pause);
+        assert_eq!(session.wait(), SessionState::Ready);
+        drop(session);
+        s.open(&a, &c, None).unwrap();
     }
 }
