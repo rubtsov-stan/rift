@@ -10,7 +10,8 @@
 //! [`PROTOCOL_RESERVE`], which pays for the protocol: the input buffer and
 //! one request body of at most [`frame::MAX_BODY`] while it is parsed, the
 //! checked params of the requests in flight, up to [`QUEUE`] messages
-//! waiting for the writer and the writer's buffer. The large answers hold
+//! waiting for the writer, the writer's buffer, and the notifier's list of
+//! the segments one session has refined since the last tick. The large answers hold
 //! no memory of their own: pages of segments and moved blocks are written
 //! straight from the session's map, and a hunk's lines live in the
 //! session's response pool until they are written. Every message is
@@ -52,8 +53,9 @@ const QUEUE: usize = 16;
 /// parse one body (a 64 KiB array of zeros is 32 Ki values of 32 bytes,
 /// plus the growth of their vector), 512 KiB for the paths of the requests
 /// in flight, under 4 MiB for the queue, whose largest messages are file
-/// errors that quote a path of a whole body three times, and 128 KiB of
-/// input and output buffers.
+/// errors that quote a path of a whole body three times, 128 KiB of
+/// input and output buffers, and 48 KiB for the notifier's list: two pages
+/// of segments, an index and a status name each.
 const PROTOCOL_RESERVE: Bytes = Bytes::mib(8);
 /// The input and output buffers.
 const IO_BUF: usize = 64 << 10;
