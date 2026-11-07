@@ -185,6 +185,38 @@ record fits.
   against the process.
 - Windows is not supported.
 
+## Git
+
+`rift git-diff` is git's external diff command. Use it for large files
+only, so everything else keeps git's own diff:
+
+```sh
+echo '*.sql diff=rift' >> .gitattributes
+echo '*.csv diff=rift' >> .gitattributes
+git config diff.rift.command 'rift git-diff --mem 1G'
+```
+
+`git diff` then prints git's headers with the paths from git and a
+unified diff from Rift. The command exits 0 when files differ, since git
+treats any other status as a failure. Git runs the command through the
+shell, so options go inside the quotes. Renames and copies work. Unlike
+git's own output, hunk headers have no function name and a work tree
+file's hash shows as `0000000`.
+
+If a side is a Git LFS pointer, Rift reads the object from
+`.git/lfs/objects` in place, after checking its size against the pointer.
+A missing object stops the run and names its oid; fetch it with
+`git lfs fetch`. Without LFS, git first copies each blob that is not in
+the work tree to a temporary file: on a 10 GB file that is 10 GB of disk
+and the time to write it.
+
+For the terminal view, use `git difftool`:
+
+```sh
+git config difftool.rift.cmd 'rift -i "$LOCAL" "$REMOTE"'
+git difftool -t rift
+```
+
 ## MCP server
 
 `rift-mcp` serves a diff to an MCP client over standard input and output,

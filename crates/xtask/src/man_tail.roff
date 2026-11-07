@@ -141,6 +141,59 @@ positions is reported as moved. The unified diff still shows it as a
 deletion and an insertion. \fB\-\-summary\fR and \fB\-\-stats\fR list the
 blocks, and the \fBm\fR key in the terminal view jumps to the other end
 of one. When the budget leaves no room for the search, the output says so.
+.SH GIT
+\fBrift git\-diff\fR is the command git runs for an external diff. Git
+passes it \fIpath old\-file old\-hex old\-mode new\-file new\-hex
+new\-mode\fR, and for a rename or copy also the new path and git's
+rename lines. Rift prints a unified diff with git's headers
+(\fBdiff \-\-git\fR, mode lines, \fBindex\fR, \fB\-\-\- a/\fIpath\fR,
+\fB+++ b/\fIpath\fR, and \fB/dev/null\fR for an added or deleted file)
+and exits 0 whether or not the files differ, because git treats any other
+status as a failure and stops with status 128. The status of
+\fBgit diff\fR is git's own: 0, or 1 with \fB\-\-exit\-code\fR when there
+are differences. Rift exits 2 on an error. Options such as
+\fB\-\-mem\fR go before the arguments git adds.
+.PP
+To use it for large files only, name them in \fB.gitattributes\fR and
+define the driver. Git runs the command through the shell, so a quoted
+string can carry options:
+.PP
+.RS
+.nf
+*.sql diff=rift
+*.csv diff=rift
+
+git config diff.rift.command 'rift git\-diff \-\-mem 1G'
+.fi
+.RE
+.PP
+The headers match \fBgit diff\fR, except that the hunk headers carry no
+function name, the hash of a work tree file is written as 0000000
+because git does not pass one, and hashes are always 7 characters.
+.PP
+A file that is a Git LFS pointer on either side is replaced by the object
+in \fB.git/lfs/objects\fR of the common git directory, found with
+\fBgit rev\-parse \-\-git\-common\-dir\fR, and read in place. If the
+object is missing Rift names its oid and suggests \fBgit lfs fetch\fR.
+If its size differs from the pointer's, Rift stops. Rift does not
+check the hash, and ignores \fBlfs.storage\fR.
+.PP
+Git writes every blob that is not in the work tree to a temporary file
+before it runs the command. For a file that is not stored with LFS, that
+is a full copy: on a 10 GB file, 10 GB of disk and the time to write it.
+Comparing a work tree file with the index has one such copy; comparing two
+commits has two.
+.PP
+For the terminal view, use \fBgit difftool\fR. It passes the two files as
+\fB$LOCAL\fR and \fB$REMOTE\fR and does not resolve LFS pointers:
+.PP
+.RS
+.nf
+git config difftool.rift.cmd 'rift \-i "$LOCAL" "$REMOTE"'
+git config difftool.prompt false
+git difftool \-t rift
+.fi
+.RE
 .SH EXAMPLES
 Write a patch and apply it:
 .PP
