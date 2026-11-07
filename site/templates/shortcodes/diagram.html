@@ -1,0 +1,16 @@
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-labelledby="dg-t dg-d">
+<title id="dg-t">How Rift cuts a pair of files into segments</title>
+<desc id="dg-d">Two horizontal bars, the first and second file. Lines join sampled lines that occur once in each file. Four joined lines are in the same order in both files and cut the pair into segments: green segments are equal, red segments differ. One joined line crosses the others and is dropped.</desc>
+<text x="20" y="22" font-weight="700">first file A</text>
+<rect class="eq" x="20" y="34" width="150" height="26"/><rect class="df" x="170" y="34" width="60" height="26"/><rect class="eq" x="230" y="34" width="190" height="26"/><rect class="df" x="420" y="34" width="60" height="26"/><rect class="eq" x="480" y="34" width="220" height="26"/>
+<path class="link" d="M170 60 L170 190 M230 60 L250 190 M420 60 L440 190 M480 60 L480 190"/>
+<path class="link" stroke-dasharray="5 4" d="M330 60 L110 190"/>
+<text x="338" y="112" font-size="12">sampled once in each file, out of order: left out of the chain</text>
+<rect class="eq" x="20" y="190" width="150" height="26"/><rect class="df" x="170" y="190" width="80" height="26"/><rect class="eq" x="250" y="190" width="190" height="26"/><rect class="df" x="440" y="190" width="40" height="26"/><rect class="eq" x="480" y="190" width="220" height="26"/>
+<text x="20" y="236" font-weight="700">second file B</text>
+<text x="20" y="260" font-size="12">green: equal, confirmed byte by byte</text>
+<text x="300" y="260" font-size="12">red: differs, refined on demand</text>
+</svg>
+<figcaption>The lines that join the two files are anchors: sampled lines that occur exactly once in each file. The longest chain of anchors in the same order cuts the pair into segments.</figcaption>
+</figure>
