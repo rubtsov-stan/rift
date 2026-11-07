@@ -120,7 +120,8 @@ in [DESIGN.md](DESIGN.md).
 ## Git
 
 `rift git-diff` is git's external diff command, for files git would call
-binary. The
+binary. It is not in v0.2.0: it is on `main` and planned for 0.3, so
+build from source to use it. The
 [git guide](https://rubtsov-stan.github.io/rift/guide/git/) has the
 `.gitattributes` setup, the LFS behaviour and the cost of the temporary
 copy git makes.

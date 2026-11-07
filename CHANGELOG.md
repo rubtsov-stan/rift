@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `rift git-diff`, the command git runs for an external diff. It takes
+  the seven arguments git passes and prints a unified diff with git's
+  headers, and reads a Git LFS object in place when a side is a pointer.
+- `rift serve`, Rift's protocol on standard input and output, JSON-RPC 2.0
+  framed as in LSP, for editors. `docs/protocol.md` specifies it.
+- `rift-session`, the crate that keeps the live diffs shared by
+  `rift serve` and `rift-mcp`.
 - A VS Code extension in `editors/vscode`, built on `rift serve`. It is not
   yet published.
 
