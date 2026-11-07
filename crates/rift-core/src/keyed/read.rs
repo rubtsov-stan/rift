@@ -463,6 +463,14 @@ pub struct Reader<'s, S: ?Sized> {
     /// Chunks of the last round that count.
     valid: usize,
     seen: [u32; SUSPECTS],
+    /// The buffer could not grow to hold one record.
+    oversized: bool,
+}
+
+/// Refine-half bytes a reader holds for a `buf`-byte window cut into
+/// `chunks` chunks, before its record lists grow.
+pub(crate) fn reader_bytes(buf: usize, chunks: usize) -> u64 {
+    (buf + chunks.max(1) * size_of::<Chunk>()) as u64
 }
 
 impl<'s, S: Source + ?Sized> Reader<'s, S> {
@@ -481,10 +489,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
         chunks: usize,
     ) -> Result<Self> {
         let chunks = chunks.max(1);
-        let res = budget.try_reserve(
-            Half::Refine,
-            Bytes((buf + chunks * size_of::<Chunk>()) as u64),
-        )?;
+        let res = budget.try_reserve(Half::Refine, Bytes(reader_bytes(buf, chunks)))?;
         let (kind, col) = match spec {
             KeySpec::Csv(CsvColumn::Index(i)) => (Kind::Csv { name: None }, Some(*i)),
             KeySpec::Csv(CsvColumn::Header(name)) => (
@@ -545,6 +550,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             chunks: list,
             valid: 0,
             seen: [0; SUSPECTS],
+            oversized: false,
         })
     }
 
@@ -736,7 +742,10 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
                     cap: Bytes(self.buf.len() as u64),
                 }));
             }
-            self.res.grow(Bytes(more as u64))?;
+            if let Err(e) = self.res.grow(Bytes(more as u64)) {
+                self.oversized = true;
+                return Err(e.into());
+            }
             if self.buf.try_reserve_exact(more).is_err() {
                 self.res.shrink(Bytes(more as u64));
                 return Err(io::Error::from(io::ErrorKind::OutOfMemory).into());
@@ -761,6 +770,84 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             }
         }
         Ok(())
+    }
+}
+
+impl<S: Source + ?Sized> Reader<'_, S> {
+    /// Bytes the window holds now, chunks included.
+    pub(crate) fn held(&self) -> u64 {
+        reader_bytes(self.buf.len(), self.chunks.len())
+    }
+
+    /// Whether the window could not grow to hold the record at its front.
+    pub(crate) fn oversized(&self) -> bool {
+        self.oversized
+    }
+
+    /// Bytes the window has grown to beyond `share`, its size when the
+    /// reader was made: it held a record that long, or half as long.
+    pub(crate) fn grown(&self, share: usize) -> Option<u64> {
+        (self.buf.len() > share).then_some(self.buf.len() as u64)
+    }
+
+    /// The bytes the record at the window's front takes, terminator
+    /// included, found by reading on to its end.
+    ///
+    /// Reads through a stack buffer and allocates nothing; only the --mem
+    /// advice of a refusal calls it.
+    ///
+    /// # Errors
+    ///
+    /// A read error.
+    #[cold]
+    pub(crate) fn front_record(&self) -> Result<u64> {
+        // The record ends at the first line break outside quotes, as
+        // `csv_record` and `line_record` end it; at the end of the file it
+        // takes the rest.
+        let csv = matches!(self.kind, Kind::Csv { .. });
+        let mut quoted = false;
+        let mut end_in = |bytes: &[u8]| {
+            let mut i = 0;
+            loop {
+                let hit = if csv {
+                    memchr2(b'"', b'\n', &bytes[i..])
+                } else {
+                    memchr(b'\n', &bytes[i..])
+                };
+                let j = i + hit?;
+                if bytes[j] == b'"' {
+                    quoted = !quoted;
+                } else if !quoted {
+                    return Some(j + 1);
+                }
+                i = j + 1;
+            }
+        };
+        let held = &self.buf[self.start..self.end];
+        if let Some(n) = end_in(held) {
+            return Ok(n as u64);
+        }
+        if self.eof {
+            return Ok(held.len() as u64);
+        }
+        let mut len = held.len() as u64;
+        let mut chunk = [0u8; 16 << 10];
+        loop {
+            match self
+                .src
+                .read_at(&mut chunk, ByteOffset(self.pos + len - held.len() as u64))
+            {
+                Ok(0) => return Ok(len),
+                Ok(n) => {
+                    if let Some(end) = end_in(&chunk[..n]) {
+                        return Ok(len + end as u64);
+                    }
+                    len += n as u64;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 }
 

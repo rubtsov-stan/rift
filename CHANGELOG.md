@@ -60,7 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rerun with --mem 10333K`. It is not a lower bound: a smaller limit can
   take another path and succeed. A run at that limit can stop at a later
   stage and name a higher one. A diff whose refine half cannot hold one
-  worker reports the whole amount at once.
+  worker reports the whole amount at once. In key mode, a record too
+  long for the budget is read to its end, and the limit named is one
+  under which it fits.
 - There is no fixed minimum `--mem`. The 0.1.0 notes said a budget below
   about 12 MiB is refused; the smallest budget that works depends on the
   files.

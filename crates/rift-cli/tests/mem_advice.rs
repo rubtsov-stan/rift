@@ -109,39 +109,68 @@ fn key_mode_advises_a_mem_that_works() {
     );
 }
 
-/// A record larger than the budget allows is a budget refusal too. The
-/// read windows grow with --mem, so following the advice from far below
-/// takes many small steps; from just below the smallest --mem that works,
-/// one step is enough.
+/// Bytes a refusal says were requested.
+fn requested(out: &Output) -> u64 {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (_, rest) = stderr.split_once(" requested ").expect("a budget refusal");
+    rest.split_once(' ').unwrap().0.parse().unwrap()
+}
+
+/// A record larger than the budget allows is read to its end, and the
+/// advice is enough for it: one rerun at the advised value succeeds.
+/// From the smallest --mem, a few refusals for the readers' smallest
+/// windows come first. Every --mem here is below the threshold for more
+/// than one thread.
 #[test]
-fn key_mode_advises_a_mem_for_a_long_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let long = "x".repeat(200_000);
-    let (a, b) = pair(
-        dir.path(),
-        &format!("id,v\n1,{long}\n2,y\n"),
-        &format!("id,v\n2,y\n1,{long}z\n"),
-    );
-    let args = ["--key", "csv:id"];
-    let kib = |k: u64| format!("{k}K");
-    // The smallest limit in KiB, by bisection; every refusal on the way
-    // advises more than it was given.
-    let (mut lo, mut hi) = (64, 8 << 10);
-    assert!(advice(&rift(&args, &kib(lo), &a, &b)).is_some());
-    assert_eq!(rift(&args, &kib(hi), &a, &b).status.code(), Some(1));
-    while hi - lo > 1 {
-        let mid = u64::midpoint(lo, hi);
-        let out = rift(&args, &kib(mid), &a, &b);
-        if let Some(next) = advice(&out) {
-            assert_eq!(out.status.code(), Some(2));
-            assert!(bytes(&next) > mid << 10, "{mid}K advised {next}");
-            lo = mid;
-        } else {
-            assert_eq!(out.status.code(), Some(1), "{mid}K");
-            hi = mid;
+fn a_long_record_needs_one_rerun() {
+    let long = "x".repeat(150_000);
+    let quoted = format!("\"{}\"", "a,b\n".repeat(40_000));
+    let cases = [
+        (
+            "csv:id",
+            format!("id,v\n1,{quoted}\n2,y\n3,z\n"),
+            "id,v\n3,z\n2,y\n1,\"short\"\n".to_owned(),
+            "~1\t2\t4\n",
+        ),
+        (
+            "csv:id",
+            format!("id,v\n1,{long}\n2,y\n"),
+            format!("id,v\n2,y\n1,{long}z\n"),
+            "~1\t2\t3\n",
+        ),
+        (
+            "json:id",
+            format!("{{\"id\":1,\"v\":\"{long}\"}}\n{{\"id\":2}}\n"),
+            "{\"id\":2}\n{\"id\":1,\"v\":\"s\"}\n".to_owned(),
+            "~1\t1\t2\n",
+        ),
+        (
+            "copy:id",
+            format!("COPY public.t (id, v) FROM stdin;\n1\t{long}\n2\ty\n\\.\n"),
+            "COPY public.t (id, v) FROM stdin;\n2\ty\n1\tshort\n\\.\n".to_owned(),
+            "~1\t2\t3\n",
+        ),
+    ];
+    for (spec, a, b, changed) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = pair(dir.path(), &a, &b);
+        for start in ["64K", "256K"] {
+            let (refused, last) = follow(&["--key", spec], start.into(), &a, &b);
+            assert_eq!(refused, [start], "{spec} from {start}");
+            assert_eq!(last.status.code(), Some(1), "{spec} from {start}");
+            assert_eq!(String::from_utf8_lossy(&last.stdout), changed, "{spec}");
         }
+        // Only the last refusal asks for the record's window, so the one
+        // rerun after it succeeds.
+        let (refused, last) = follow(&["--key", spec], "1".into(), &a, &b);
+        let asked: Vec<u64> = refused
+            .iter()
+            .map(|mem| requested(&rift(&["--key", spec], mem, &a, &b)))
+            .collect();
+        let (record, small) = asked.split_last().unwrap();
+        assert!(*record > 150_000, "{spec}: {refused:?} asked {asked:?}");
+        assert!(small.iter().all(|&n| n < 1024), "{spec}: {asked:?}");
+        assert_eq!(last.status.code(), Some(1), "{spec} from 1");
+        assert_eq!(String::from_utf8_lossy(&last.stdout), changed, "{spec}");
     }
-    let (refused, last) = follow(&args, kib(lo), &a, &b);
-    assert_eq!(refused, [kib(lo)]);
-    assert_eq!(String::from_utf8_lossy(&last.stdout), "~1\t2\t3\n");
 }

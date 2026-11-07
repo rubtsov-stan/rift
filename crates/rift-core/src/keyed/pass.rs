@@ -25,7 +25,7 @@ use std::sync::Mutex;
 
 use rayon::prelude::*;
 
-use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow};
+use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow, reader_bytes};
 use super::{ChangeKind, KeyError, KeyedChange, Side};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
@@ -92,26 +92,15 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    let (threads, _pool) = threads(budget)?;
-    let refine = budget.available(Half::Refine).0;
-    let (len_a, len_b) = (a.len().0, b.len().0);
-    // Windows in proportion to the files keep both at the same relative
-    // position.
-    let window = (refine / 16).clamp(64, WINDOW);
-    let longest = len_a.max(len_b).max(1);
-    let win = |len: u64| {
-        let w = u128::from(window) * u128::from(len) / u128::from(longest);
-        usize::try_from(w).unwrap_or(usize::MAX).max(64)
-    };
-    // A chunk per thread once the budget is large enough to care.
-    let chunks = usize::try_from(refine / SHARD_BYTES)
-        .unwrap_or(usize::MAX)
-        .clamp(1, threads);
-    let mut ra = Reader::new(a, Side::A, spec, budget, win(len_a), chunks)?;
-    let mut rb = Reader::new(b, Side::B, spec, budget, win(len_b), chunks)?;
+    let (threads, pool) = threads(budget)?;
+    let lens = [a.len().0, b.len().0];
+    let (len_a, len_b) = (lens[0], lens[1]);
+    let sizes = Sizes::new(budget.available(Half::Refine).0, threads, lens);
+    let mut ra = Reader::new(a, Side::A, spec, budget, sizes.windows[0], sizes.chunks)?;
+    let mut rb = Reader::new(b, Side::B, spec, budget, sizes.windows[1], sizes.chunks)?;
     let tables = Mutex::new(Tables::new(budget)?);
     let keys = ra.estimate_lines()? + rb.estimate_lines()?;
-    let (mut shards, _list) = Pass::shards(budget, keys, chunks)?;
+    let (mut shards, _list) = Pass::shards(budget, keys, sizes.chunks)?;
     let mut pending = Pending::new(budget)?;
     let mut report = Report::default();
     let (mut lo, mut width) = (0, END);
@@ -120,7 +109,9 @@ where
     loop {
         let hi = lo + width.min(END - lo);
         let mut readers = (&mut ra, &mut rb, &tables);
-        match read_pass(&mut readers, &mut shards, lo, hi, &pending.list)? {
+        let read = read_pass(&mut readers, &mut shards, lo, hi, &pending.list);
+        let read = read.map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens));
+        match read? {
             Outcome::Overflow(half, progress) => {
                 let w = hi - lo;
                 if w <= 1 {
@@ -142,7 +133,8 @@ where
                         pending.take_from(s)?;
                     }
                     let mut readers = (&mut ra, &mut rb, &tables);
-                    read_pass(&mut readers, &mut shards, END, END, &pending.list)?;
+                    read_pass(&mut readers, &mut shards, END, END, &pending.list)
+                        .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
                     dups = pending.duplicates(&ra, &rb);
                 }
                 return Err(if dups.is_empty() {
@@ -196,6 +188,123 @@ where
         }
     }
     Ok(report)
+}
+
+/// How the read windows are sized for a refine half with `refine` bytes
+/// free after the thread pool's share.
+struct Sizes {
+    /// The share before it is split in proportion to the files.
+    window: u64,
+    windows: [usize; 2],
+    chunks: usize,
+}
+
+impl Sizes {
+    fn new(refine: u64, threads: usize, lens: [u64; 2]) -> Self {
+        // Windows in proportion to the files keep both at the same
+        // relative position.
+        let window = (refine / 16).clamp(64, WINDOW);
+        let longest = lens[0].max(lens[1]).max(1);
+        let win = |len: u64| {
+            let w = u128::from(window) * u128::from(len) / u128::from(longest);
+            usize::try_from(w).unwrap_or(usize::MAX).max(64)
+        };
+        Self {
+            window,
+            windows: [win(lens[0]), win(lens[1])],
+            // A chunk per thread once the budget is large enough to care.
+            chunks: usize::try_from(refine / SHARD_BYTES)
+                .unwrap_or(usize::MAX)
+                .clamp(1, threads),
+        }
+    }
+}
+
+/// Turns a refusal to grow a window for one long record into a refusal
+/// that names a refine half under which that record fits.
+///
+/// Each window starts at its [`Sizes`] share and doubles until the record
+/// fits, so at a refine half of `r` bytes the window ends at `s(r)`, the
+/// first `window(r) · 2^k` that holds the record. Besides the windows, the
+/// half holds the pool, `p(r)`, and lists of the records a window holds
+/// or that wait for their match. Those are taken to grow with the window
+/// share, `window(r)`, from the `rest` they took at the refusal: they
+/// take up to half of what is free each time they grow, and a window of
+/// twice the bytes holds twice the records. The half needed is the
+/// smallest `r` above the current one with
+///
+/// `r ≥ p(r) + Σ reader_bytes(s_side(r), chunks(r)) + rest · window(r) / window(now)`
+///
+/// where `s_side(r)` is the window grown for the record at that side's
+/// front, read to its end, or for the longest record it held before. The
+/// search steps by 1/512, so the answer is at most that much above the
+/// least `r`.
+#[cold]
+fn sized_for_record<A, B>(
+    err: Error,
+    ra: &Reader<'_, A>,
+    rb: &Reader<'_, B>,
+    pool: u64,
+    budget: &Budget,
+    lens: [u64; 2],
+) -> Error
+where
+    A: Source + ?Sized,
+    B: Source + ?Sized,
+{
+    let Error::Budget(refusal) = err else {
+        return err;
+    };
+    if refusal.half != Half::Refine || !(ra.oversized() || rb.oversized()) {
+        return err;
+    }
+    // Each window must grow to hold the record at its front and, if it
+    // grew before, the longest it held so far.
+    let cap = budget.capacity(Half::Refine).0;
+    let now = Sizes::new(cap.saturating_sub(pool), 1, lens);
+    let shares = now.windows;
+    let records = match (ra.front_record(), rb.front_record()) {
+        (Ok(a), Ok(b)) => [
+            a.max(ra.grown(shares[0]).unwrap_or(0)),
+            b.max(rb.grown(shares[1]).unwrap_or(0)),
+        ],
+        (Err(e), _) | (_, Err(e)) => return e,
+    };
+    let used = cap.saturating_sub(refusal.available.0);
+    let held = [ra.held(), rb.held()];
+    let rest = used.saturating_sub(pool + held[0] + held[1]);
+    let threads = rayon::current_num_threads().clamp(1, MAX_SHARDS);
+    let fits = |r: u64| {
+        let (threads, pool) = if r < PARALLEL_REFINE {
+            (1, 0)
+        } else {
+            (threads, POOL_PER_THREAD * threads as u64)
+        };
+        let sizes = Sizes::new(r.saturating_sub(pool), threads, lens);
+        let mut need = pool;
+        for (&share, &record) in sizes.windows.iter().zip(&records) {
+            let mut window = share as u64;
+            while window < record {
+                window *= 2;
+            }
+            need += reader_bytes(usize::try_from(window).unwrap_or(usize::MAX), sizes.chunks);
+        }
+        let lists = u128::from(rest) * u128::from(sizes.window) / u128::from(now.window);
+        let lists = u64::try_from(lists).unwrap_or(u64::MAX);
+        need.saturating_add(lists) <= r
+    };
+    let mut r = cap + 1;
+    while r < 1 << 60 {
+        if fits(r) {
+            return Error::Budget(BudgetExceeded {
+                half: Half::Refine,
+                requested: Bytes(r - used),
+                available: refusal.available,
+            });
+        }
+        r += (r / 512).max(1 << 10);
+    }
+    err
 }
 
 /// The range a pass that ran out of `half` at `progress` through the files
