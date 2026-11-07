@@ -49,6 +49,6 @@
 <button class="btn" type="button" data-theme-toggle hidden>Light</button>
 </div></header>
 {% block main %}{% endblock main %}
-<footer class="foot"><div class="wrap"><p>MIT or Apache 2.0. <a href="{{ config.extra.repo_url }}">Source on GitHub</a>.{% if stats.release %} Latest release <a href="{{ config.extra.repo_url }}/releases/latest">{{ stats.release }}</a>.{% endif %}</p></div></footer>
+<footer class="foot"><div class="wrap"><p>MIT or Apache 2.0. <a href="{{ config.extra.repo_url }}">Source on GitHub</a>. <a href="{{ get_url(path='roadmap/') | safe }}">Roadmap</a>.{% if stats.release %} Latest release <a href="{{ config.extra.repo_url }}/releases/latest">{{ stats.release }}</a>.{% endif %}</p></div></footer>
 </body>
 </html>
