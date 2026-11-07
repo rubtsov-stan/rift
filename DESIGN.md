@@ -582,3 +582,51 @@ On the 10 GiB pair, which is larger than the page cache, both modes are
 bound by the disk: `--summary` takes 2.2 times `cat` and the full diff
 spends 93% of its samples in `pread`, mostly the reads of differing
 regions.
+
+## Clients
+
+One protocol serves every client that is not the terminal interface:
+`rift serve`, JSON-RPC 2.0 over standard input and output with LSP's
+`Content-Length` framing, specified in `docs/protocol.md` with a JSON
+schema per message under `docs/protocol/`. It is a subcommand of the
+`rift` binary, so a client ships or finds one executable. Three clients
+use it or are planned on it:
+
+- **The VS Code extension** (`editors/vscode/`) never opens the big
+  files in an editor. It lists the differing segments and moved blocks
+  in a tree, asks for one segment's lines on both sides with context,
+  and opens VS Code's own diff editor on those two excerpts, titled
+  with their line ranges in the original files.
+- **`rift-mcp`** answers MCP clients with the same sessions. It keeps
+  its MCP transport and renders its own unified text, and moves onto
+  the protocol once that covers what its tools return.
+- **A GUI**, later, on the same methods.
+
+The session logic lives once, in `rift-session`: one diff per pair of
+files, opened read-only after the path checks of the MCP server, cached
+while the files are unchanged, dropped when idle or for room, and
+bounded in count and in the sum of budgets. It is synchronous. The core
+has nothing to await: scanning is two passes of `pread`, refinement runs
+on the scheduler's threads, and an excerpt is a bounded number of reads.
+`rift serve` reads requests on one thread and answers each on its own;
+`rift-mcp`, whose MCP library runs on tokio, calls in from
+`spawn_blocking`.
+
+Every response has a bound that does not depend on the files: pages of
+at most 1000 segments or blocks, which borrow from the map, and
+excerpts of at most `max_lines` lines per side and `max_line_bytes`
+bytes per line. An excerpt's lines and text are built inside a response
+pool taken from the session's Refine half when it opens, 1/16 of the
+half and at most 8 MiB, so the budget covers responses as it covers the
+diff, and a larger `--mem` allows larger excerpts.
+
+Line text crosses the protocol as UTF-8 with invalid sequences
+replaced and the line flagged `lossy`, with its terminator named apart.
+Every client shows text, none applies a patch from an excerpt, and an
+excerpt cut at `max_line_bytes` is not exact anyway; the byte-exact
+edit script stays in `rift`'s own output.
+
+Errors are typed from the core to the client. Each has a JSON-RPC code
+in Rift's range and structured data; a budget refusal carries the
+`--mem` to reopen with, computed by `BudgetExceeded::mem_advice`, the
+same function behind the CLI's `rerun with --mem`.
