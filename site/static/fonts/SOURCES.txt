@@ -1,0 +1,11 @@
+Both faces are the Latin subset, variable weight 400 to 700, as served by Google Fonts. SIL Open Font License 1.1.
+
+Source Serif 4  (text)   SourceSerif4-latin-var.woff2
+  https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400..700
+  https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kDXr4Y3qwzQ.woff2
+  upstream: https://github.com/adobe-fonts/source-serif, licence: LICENSE-SourceSerif4.md
+
+JetBrains Mono  (code and numbers)   JetBrainsMono-latin-var.woff2
+  https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400..700
+  https://fonts.gstatic.com/s/jetbrainsmono/v24/tDbv2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKwBNntkaToggR7BYRbKPxDcwgknk-4.woff2
+  upstream: https://github.com/JetBrains/JetBrainsMono, licence: OFL-JetBrainsMono.txt

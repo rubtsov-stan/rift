@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="docwrap">
+<aside class="side" aria-label="In this section">
+<ul>
+{%- for p in section.pages %}
+<li><a href="{{ p.permalink | safe }}">{{ p.extra.nav | default(value=p.title) }}</a></li>
+{%- endfor %}
+</ul>
+</aside>
+<main class="prose">
+<p class="crumbs"><a href="{{ get_url(path='/') | safe }}">Rift</a> / {{ section.extra.nav_title | default(value=section.title) }}</p>
+<h1>{{ section.extra.h1 | default(value=section.title) }}</h1>
+{% if section.extra.lead %}<p class="lead">{{ section.extra.lead }}</p>{% endif %}
+{{ section.content | safe }}
+<ul class="index-list">
+{%- for p in section.pages %}
+<li><a href="{{ p.permalink | safe }}">{{ p.extra.nav | default(value=p.title) }}</a><p>{{ p.extra.summary | default(value=p.description) }}</p></li>
+{%- endfor %}
+</ul>
+</main>
+</div>
+{% endblock main %}

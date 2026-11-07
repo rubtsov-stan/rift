@@ -1,0 +1,26 @@
+# Zola site for Rift. Build with scripts/build.sh, which fetches the GitHub
+# numbers and renders the man page first.
+base_url = "https://rubtsov-stan.github.io/rift"
+title = "Rift"
+description = "Rift diffs large text files under a heap limit you set with --mem."
+default_language = "en"
+compile_sass = false
+build_search_index = false
+generate_feeds = false
+minify_html = false
+
+[markdown]
+smart_punctuation = false
+external_links_target_blank = false
+external_links_no_follow = false
+external_links_no_referrer = false
+
+[extra]
+repo = "rubtsov-stan/rift"
+repo_url = "https://github.com/rubtsov-stan/rift"
+# Shown only at or above these counts, checked at build time and again in the
+# browser for stars.
+star_threshold = 50
+download_threshold = 500
+# Set to true when site/static/vscode-demo.{mp4,gif} and the poster exist.
+vscode_media = false

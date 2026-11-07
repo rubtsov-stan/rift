@@ -1,0 +1,82 @@
+{% macro term(name, kind="plain", title="terminal", caption="", typed=false) %}
+{%- set text = load_data(path="data/captures/" ~ name ~ ".out", format="plain") -%}
+{%- set command = load_data(path="data/captures/" ~ name ~ ".cmd", format="plain") | trim_end -%}
+<figure class="termwin"{% if typed %} data-term{% endif %}><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span class="ttl">{{ title }}</span></div>
+<pre class="tb">{% for c in command | split(pat="\n") %}<span class="pr">$ </span><span class="cmd">{{ c }}</span>
+{% endfor -%}
+{% for line in text | trim_end | split(pat="\n") -%}
+{%- if kind == "summary" -%}
+{%- if line is starting_with("equal") %}{% set c = "t-grn" %}{% elif line is starting_with("differs") %}{% set c = "t-red" %}{% elif line is starting_with("moved") %}{% set c = "t-acc" %}{% elif line is starting_with("  ") or line is starting_with("peak") or line is starting_with("time") or line is starting_with("first") %}{% set c = "t-mut" %}{% else %}{% set c = "" %}{% endif -%}
+<span class="{% if typed %}ln {% endif %}{{ c }}">{{ line }}{% if typed %}
+{% endif %}</span>{% if not typed %}
+{% endif %}
+{%- elif kind == "diff" -%}
+{%- if line is starting_with("---") or line is starting_with("+++") %}{% set c = "file" %}{% elif line is starting_with("-") %}{% set c = "del" %}{% elif line is starting_with("+") %}{% set c = "add" %}{% elif line is starting_with("@@") %}{% set c = "hunk" %}{% else %}{% set c = "ctx" %}{% endif -%}
+<span class="d {{ c }}">{{ line }}</span>
+{%- elif kind == "keys" -%}
+{%- if line is starting_with("~") %}{% set c = "t-acc" %}{% elif line is starting_with("-") %}{% set c = "t-red" %}{% elif line is starting_with("+") %}{% set c = "t-grn" %}{% else %}{% set c = "t-mut" %}{% endif -%}
+<span class="{{ c }}">{{ line }}</span>
+{% else -%}
+<span>{{ line }}</span>
+{% endif -%}
+{%- endfor -%}
+{%- if typed %}<span class="ln"><span class="pr">$ </span><span class="cur"></span></span>{% endif -%}
+</pre>
+{%- if caption != "" %}<figcaption>{{ caption | safe }}</figcaption>{% endif -%}
+</figure>
+{% endmacro term %}
+
+{% macro benchtable(name, brief=false) %}
+{%- set b = load_data(path="data/bench-" ~ name ~ ".json") -%}
+<div class="table-wrap"><table><thead><tr><th scope="col">Pair</th><th scope="col">Tool</th><th scope="col" class="n">Time</th><th scope="col" class="n">Peak memory</th>{% if name == "linux" %}<th scope="col" class="n">Peak heap</th>{% endif %}</tr></thead><tbody>
+{%- if name == "mac" %}
+{%- for r in b.rows %}<tr><td>{{ r.size }}</td><td>{{ r.tool }}</td><td class="n">{{ r.time }}</td><td class="n">{{ r.mem }}</td></tr>{% endfor %}
+{%- else %}
+{%- for r in b.rows %}{% if not brief or r.tool == "rift (full diff)" or r.tool == "GNU diff" or r.tool == "git diff --no-index" %}<tr><td>{{ r.size }}</td><td>{{ r.tool }}</td>{% if r.time %}<td class="n">{{ r.time }}</td><td class="n">{{ r.rss }}</td><td class="n">{{ r.heap }}</td>{% else %}<td class="n">{{ r.note }}</td><td class="n"></td><td class="n"></td>{% endif %}</tr>{% endif %}{% endfor %}
+{%- endif %}
+</tbody></table></div>
+{% endmacro benchtable %}
+
+{% macro ledger() %}
+{%- set b = load_data(path="data/bench-linux.json") -%}
+<ol class="ledger" data-reveal>
+{%- set i = 0 -%}
+{%- for r in b.rows %}{% if r.tool == "rift (full diff)" %}
+<li><div><span class="lab">input, each of A and B</span><b data-count data-delay="{{ i * 280 }}">{{ r.size }}</b><i class="sbar"><u style="--w:{{ r.sbar }}%;--i:{{ i }}"></u></i><small>each of A and B</small></div>
+<div><span class="lab">peak heap</span><b data-count data-delay="{{ i * 280 }}">{{ r.heap }}</b><i class="gauge"><u style="--w:{{ r.hbar }}%;--i:{{ i }}"></u></i><small>RSS {{ r.rss }}, full diff in {{ r.time }}</small></div></li>
+{%- set_global i = i + 1 -%}
+{% endif %}{% endfor %}
+</ol>
+{% endmacro ledger %}
+
+{% macro chart() %}
+{%- set b = load_data(path="data/bench-mac.json") -%}
+{%- set a = b.rows | filter(attribute="tool", value="rift (full diff)") | first -%}
+{%- set d = b.rows | filter(attribute="tool", value="system diff") | first -%}
+{%- set rows = b.rows | filter(attribute="size", value="1 GiB") -%}
+<svg viewBox="0 0 480 214" width="480" height="214" role="img" aria-labelledby="ch-t ch-d" class="chart" data-reveal>
+<title id="ch-t">Rift against diff on a 1 GiB pair</title>
+<desc id="ch-d">Rift took {{ a.time }} and {{ a.mem }}. System diff took {{ d.time }} and {{ d.mem }}. {{ b.host.cpu }}, {{ b.host.ram_gb }} GB RAM, {{ b.host.os }}, {{ b.host.cache }}.</desc>
+<text x="0" y="16" class="ct">Wall time</text>
+<text x="0" y="42" class="cl">rift</text><text x="480" y="42" class="cv" text-anchor="end" data-count>{{ a.time }}</text><rect x="0" y="48" width="{{ (480 * a.wall_s / d.wall_s) | round(precision=1) }}" height="12" class="bar b-rift"/>
+<text x="0" y="82" class="cl">diff</text><text x="480" y="82" class="cv" text-anchor="end" data-count data-delay="200">{{ d.time }}</text><rect x="0" y="88" width="480" height="12" class="bar b-other" style="transition-delay:200ms"/>
+<text x="0" y="130" class="ct">Peak memory</text>
+<text x="0" y="156" class="cl">rift</text><text x="480" y="156" class="cv" text-anchor="end" data-count data-delay="400">{{ a.mem }}</text><rect x="0" y="162" width="{{ (480 * a.mem_mib / d.mem_mib) | round(precision=1) }}" height="12" class="bar b-rift" style="transition-delay:400ms"/>
+<text x="0" y="196" class="cl">diff</text><text x="480" y="196" class="cv" text-anchor="end" data-count data-delay="600">{{ d.mem }}</text><rect x="0" y="202" width="480" height="12" class="bar b-other" style="transition-delay:600ms"/>
+</svg>
+{% endmacro chart %}
+
+{% macro cmdbox(code) %}
+<div class="cmdbox"><pre class="cmd">{{ code }}</pre><button class="btn copy" type="button" data-copy hidden aria-live="polite">Copy</button></div>
+{% endmacro cmdbox %}
+
+{% macro media(ready, mp4, gif, poster, width, height, alt, caption="") %}
+<figure class="media" style="--ar:{{ width }}/{{ height }}">
+{%- if ready %}
+<video controls muted playsinline preload="none" width="{{ width }}" height="{{ height }}" poster="{{ get_url(path=poster) | safe }}" aria-label="{{ alt }}"><source src="{{ get_url(path=mp4) | safe }}" type="video/mp4"><img src="{{ get_url(path=gif) | safe }}" width="{{ width }}" height="{{ height }}" alt="{{ alt }}" loading="lazy"></video>
+{%- else %}
+<div class="slot empty" role="img" aria-label="{{ alt }}">Recording to come</div>
+{%- endif %}
+{%- if caption != "" %}<figcaption>{{ caption }}</figcaption>{% endif %}
+</figure>
+{% endmacro media %}

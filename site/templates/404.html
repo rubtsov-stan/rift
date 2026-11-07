@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="docwrap"><main class="prose"><h1>Page not found</h1><p>This address has no page. Start from the <a href="{{ get_url(path='/') | safe }}">home page</a> or the <a href="{{ get_url(path='guide/') | safe }}">guide</a>.</p></main></div>
+{% endblock main %}

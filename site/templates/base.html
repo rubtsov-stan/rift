@@ -1,0 +1,53 @@
+{%- set stats = load_data(path="data/stats.json") -%}
+{%- set vscode = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
+{%- if page -%}{%- set title = page.title -%}{%- set description = page.description | default(value=config.description) -%}
+{%- elif section -%}{%- set title = section.title -%}{%- set description = section.description | default(value=config.description) -%}
+{%- else -%}{%- set title = "Page not found: Rift" -%}{%- set description = config.description -%}{%- endif -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<meta name="description" content="{{ description }}">
+<meta name="color-scheme" content="dark light">
+{% if current_url %}<link rel="canonical" href="{{ current_url | safe }}">{% endif %}
+<meta property="og:site_name" content="Rift">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ title }}">
+<meta property="og:description" content="{{ description }}">
+{% if current_url %}<meta property="og:url" content="{{ current_url | safe }}">{% endif %}
+<meta property="og:image" content="{{ get_url(path='social-preview.png') | safe }}">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Rift logo and the line: diff huge text files under a hard memory limit">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ title }}">
+<meta name="twitter:description" content="{{ description }}">
+<meta name="twitter:image" content="{{ get_url(path='social-preview.png') | safe }}">
+<link rel="icon" href="{{ get_url(path='favicon.svg') | safe }}" type="image/svg+xml">
+<link rel="stylesheet" href="{{ get_url(path='style.css', cache_busting=true) | safe }}">
+<link rel="preload" href="{{ get_url(path='fonts/SourceSerif4-latin-var.woff2') | safe }}" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{ get_url(path='fonts/JetBrainsMono-latin-var.woff2') | safe }}" as="font" type="font/woff2" crossorigin>
+<script>(function(d){var r=d.documentElement;r.className="js";try{var t=localStorage.getItem("rift-theme");if(t==="light"||t==="dark")r.setAttribute("data-theme",t)}catch(e){}if(!matchMedia("(prefers-reduced-motion: reduce)").matches&&"IntersectionObserver"in window)r.className+=" anim"})(document)</script>
+<script src="{{ get_url(path='rift.js', cache_busting=true) | safe }}" defer></script>
+{%- block head %}{% endblock head %}
+</head>
+<body class="{% block bodyclass %}doc{% endblock bodyclass %}" id="top">
+{%- block fault %}{% endblock fault %}
+<header class="top"><div class="bar">
+<a class="brand" href="{{ get_url(path='/') | safe }}"><svg class="logo" viewBox="0 0 128 128" width="36" height="36" aria-hidden="true"><rect x="8" y="8" width="112" height="112" rx="24" fill="#1f2328"/><path d="M28 28 H66 L52 56 L72 72 L58 100 H28 Z" fill="#e5534b"/><path d="M100 28 V100 H70 L84 72 L64 56 L78 28 Z" fill="#57ab5a"/></svg><span>Rift</span></a>
+<nav aria-label="Main">
+<a href="{{ get_url(path='guide/') | safe }}">Guide</a>
+<a href="{{ get_url(path='use-cases/') | safe }}">Use cases</a>
+<a href="{{ get_url(path='how-it-works/') | safe }}">How it works</a>
+<a href="{{ get_url(path='benchmarks/') | safe }}">Benchmarks</a>
+<a href="{{ get_url(path='reference/') | safe }}">Reference</a>
+</nav>
+<a class="star" href="{{ config.extra.repo_url }}"><span class="st"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 .6l2.1 4.7 5.1.5-3.8 3.4 1.1 5-4.5-2.6-4.5 2.6 1.1-5L.8 5.8l5.1-.5z"/></svg></span><span class="long">Star on GitHub</span>{% if stats.stars >= config.extra.star_threshold %}<b data-star-min="{{ config.extra.star_threshold }}" data-repo="{{ config.extra.repo }}">{{ stats.stars }}</b>{% elif stats.release %}<b data-star-min="{{ config.extra.star_threshold }}" data-repo="{{ config.extra.repo }}">{{ stats.release }}</b>{% endif %}</a>
+<button class="btn" type="button" data-theme-toggle hidden>Light</button>
+</div></header>
+{% block main %}{% endblock main %}
+<footer class="foot"><div class="wrap"><p>MIT or Apache 2.0. <a href="{{ config.extra.repo_url }}">Source on GitHub</a>.{% if stats.release %} Latest release <a href="{{ config.extra.repo_url }}/releases/latest">{{ stats.release }}</a>.{% endif %}</p></div></footer>
+</body>
+</html>

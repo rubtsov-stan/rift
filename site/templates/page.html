@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block main %}
+{%- set parent = get_section(path=page.ancestors | last) -%}
+<div class="docwrap">
+<aside class="side" aria-label="In this section">
+{%- if parent.extra.nav_title %}<h2>{{ parent.extra.nav_title }}</h2>{% endif %}
+<ul>
+{%- for p in parent.pages %}
+<li><a href="{{ p.permalink | safe }}"{% if p.permalink == page.permalink %} aria-current="page"{% endif %}>{{ p.extra.nav | default(value=p.title) }}</a></li>
+{%- endfor %}
+</ul>
+</aside>
+<main class="prose">
+<p class="crumbs"><a href="{{ get_url(path='/') | safe }}">Rift</a>{% if parent.path != "/" %} / <a href="{{ parent.permalink | safe }}">{{ parent.extra.nav_title | default(value=parent.title) }}</a>{% endif %}</p>
+<h1>{{ page.extra.h1 | default(value=page.title) }}</h1>
+{% if page.extra.lead %}<p class="lead">{{ page.extra.lead }}</p>{% endif %}
+{% block article %}{{ page.content | safe }}{% endblock article %}
+{%- if page.higher or page.lower %}
+<nav class="pager" aria-label="Next and previous pages">
+<span>{% if page.lower %}<a href="{{ page.lower.permalink | safe }}">&larr; {{ page.lower.extra.nav | default(value=page.lower.title) }}</a>{% endif %}</span>
+<span>{% if page.higher %}<a href="{{ page.higher.permalink | safe }}">{{ page.higher.extra.nav | default(value=page.higher.title) }} &rarr;</a>{% endif %}</span>
+</nav>
+{%- endif %}
+</main>
+</div>
+{% endblock main %}
