@@ -407,7 +407,9 @@ impl Session {
             .max(worst(window_b.end - window_b.start))
             + scratch;
         let least = 2 * (FIRST_LINES * LINE + TEXT_PER_BYTE * line_bytes) + scratch;
-        let grant = want.min(pool.available(Half::Refine).0);
+        // A short window can want less than the floor every excerpt is
+        // checked against.
+        let grant = want.max(least).min(pool.available(Half::Refine).0);
         if grant < least {
             return Err(Error::ResponsesBusy);
         }

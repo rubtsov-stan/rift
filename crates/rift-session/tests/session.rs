@@ -544,3 +544,15 @@ fn room_is_made_from_failed_sessions_first_and_never_from_scanning_ones() {
     drop(in_use);
     set.close(slow.id());
 }
+
+#[test]
+fn an_excerpt_of_one_line_fits_an_empty_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let session = open(&sessions(), &a, &b);
+    let mut req = ExcerptRequest::new(At::LineA(LineNo(9)));
+    req.max_lines = 1;
+    req.context = 0;
+    let e = session.excerpt(&req).unwrap();
+    assert_eq!((e.a.lines.len(), e.b.lines.len()), (1, 1));
+}
