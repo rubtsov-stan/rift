@@ -17,3 +17,9 @@ workspace = true
 
 [dev-dependencies]
 rift-core = { path = "../rift-core", features = ["counting-alloc"] }
+
+# libtest runs its own thread beside the test and may allocate there, and
+# this test asserts that reads allocate exactly nothing.
+[[test]]
+name = "synthetic_reads"
+harness = false
