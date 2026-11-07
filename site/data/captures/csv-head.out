@@ -1,0 +1,2 @@
+id,pickup_at,passengers,pickup_lat,pickup_lon,dropoff_lat,dropoff_lon,fare,payment
+1,2024-12-25 11:56:34,4,40.549135,-73.402144,40.028372,-73.611914,12.97,3

@@ -1,0 +1,11 @@
+a: 843633 lines, 67108879 bytes
+b: 845034 lines, 67182379 bytes
+equal    436 segments, 835632 lines in a, 835632 in b
+differs  435 segments, 8001 lines in a, 9402 in b
+first differing ranges (0-based, end exclusive):
+  a 381..383  b 381..382
+  a 1005..1011  b 1004..1010
+moved    62 blocks, 2737 lines
+  a 21557..21560  b 22434..22437
+peak heap 78.6 MiB of 256.0 MiB (82397510 bytes)
+time 0.13 s

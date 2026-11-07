@@ -1,0 +1,4 @@
+identical: exit 0
+differ: exit 1
+rift: open missing.sql: No such file or directory (os error 2)
+missing file: exit 2

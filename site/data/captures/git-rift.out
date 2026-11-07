@@ -1,0 +1,12 @@
+diff --git a/a.sql b/b.sql
+index 86d4681..61a1efd 100644
+--- a/a.sql
++++ b/b.sql
+@@ -380,7 +380,6 @@
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (380, 514366, 'shipped', 5
+ 381	178722	cancelled	2930.54	wmojdqnzik
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (382, 679322, 'cancelled',
+-383	668107	shipped	5325.74	zu
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (384, 442363, 'new', 6149.
+ 385	359182	cancelled	475.15	ztbyhdlmxk
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (386, 967299, 'shipped', 4

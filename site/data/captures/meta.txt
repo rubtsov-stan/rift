@@ -1,0 +1,3 @@
+rift 0.2.0
+built from 3fcd321
+Apple M1, 17 GB RAM, macOS 27.0.1

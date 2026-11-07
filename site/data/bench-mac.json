@@ -1,0 +1,21 @@
+{
+ "source": "README.md, section Benchmarks",
+ "script": "bench/run.sh; data from bench/data.sh (rift-gen seed 7, profile sql, 1 GiB and 10 GiB)",
+ "host": {
+  "cpu": "Apple M1",
+  "ram_gb": 16,
+  "storage": "internal SSD",
+  "os": "macOS",
+  "cache": "warm page cache",
+  "date": "not recorded in the README; the table entered the repository on 2026-11-05 (commit c4f2771)"
+ },
+ "note": "git diff has no 1 GiB row: it treats files over 512 MiB as binary and prints no diff. Peak memory is the resident set; Rift's heap peaked at 83.5 MiB on the 1 GiB pair and 94.1 MiB on the 10 GiB pair.",
+ "rows": [
+  {"size": "1 GiB", "tool": "rift --summary", "time": "1.26 s", "mem": "127.7 MiB"},
+  {"size": "1 GiB", "tool": "rift (full diff)", "time": "0.93 s", "mem": "130.8 MiB", "wall_s": 0.93, "mem_mib": 130.8},
+  {"size": "1 GiB", "tool": "system diff", "time": "17.55 s", "mem": "3.2 GiB", "wall_s": 17.55, "mem_mib": 3277},
+  {"size": "10 GiB", "tool": "rift --summary", "time": "13.37 s", "mem": "136.5 MiB"},
+  {"size": "10 GiB", "tool": "rift (full diff)", "time": "26.16 s", "mem": "136.5 MiB"},
+  {"size": "10 GiB", "tool": "diff, git diff", "time": "did not run: needs more than 16 GB of RAM", "mem": ""}
+ ]
+}
