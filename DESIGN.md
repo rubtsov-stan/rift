@@ -95,7 +95,8 @@ skeleton, streaming equality check of segments.
 The lower zone works lazily. The terminal interface requests the visible
 region; the unified diff writer walks segments in order through the same
 scheduler. Refinement of a segment runs recursive patience diff, then Myers
-with linear memory and a cost cutoff.
+with linear memory and a cost cutoff; pieces of 12 lines or fewer go to a
+quadratic DP table instead.
 
 The core (everything except the terminal interface and output) lives in
 `rift-core` and knows nothing about the terminal or the file system. Data
@@ -110,12 +111,13 @@ comes through a source trait; tests run on in-memory data.
 | Anchor selection | occurrence counts, uniqueness in both files, byte comparison against hash collisions | open-addressing hash table preallocated from the budget | O(n / 2^L) |
 | Skeleton | longest increasing subsequence (patience sorting) | vector of segments with status Equal / Differs / Approx | O(m log m) in anchors |
 | Equality check | streaming comparison of the segment's byte ranges | two fixed buffers | O(n) |
-| Segment refinement | recursive patience, then linear-memory Myers (middle snake) with a cost cutoff | local arrays of line hashes | O((N+M)·D) time, O(N+M) memory |
-| Oversized segment | resample at stratum `L-k` inside the segment only | same structures, within the refinement budget | recursion over strata |
-| Laziness | priority scheduler: visible, then adjacent, then background | priority heap plus LRU cache of finished hunks | evicted hunks are recomputed deterministically |
+| Segment refinement | recursive patience, then linear-memory Myers (middle snake) with a cost cutoff; a piece of 12 lines or fewer (A plus B, after its common prefix and suffix) goes to a quadratic DP table | local arrays of line hashes | O((N+M)·D) time, O(N+M) memory |
+| Oversized segment | resample inside the segment only, at the lowest stratum below the parent's whose samples fit, with unique-line and shingle anchors | same structures, within the refinement budget | recursion over strata |
+| Laziness | scheduler in a fixed order: visible segments, then the 4 after and the 4 before them (nearest first), then segments a front end asked for by number, lowest first, then the rest in file order from a cursor; `Diff::write_unified` turns that last stage off | one row per segment, linked into an LRU list of finished hunks, and a sorted set of requested segments | evicted hunks are recomputed deterministically, on request |
 
 The first screen costs two linear passes over the disk and O(m log m) in the
-number of anchors `m`. Detailed work happens only where the user looks.
+number of anchors `m`. Refinement starts where the user looks; the rest
+runs in the background.
 
 ## Guarantees
 
@@ -123,8 +125,10 @@ number of anchors `m`. Detailed work happens only where the user looks.
   exactly B.
 - Equal segments and anchors are confirmed byte by byte. A hash match is
   never treated as equality.
-- Peak heap stays under `--mem`, confirmed by the allocator counter and by
-  peak RSS measurement on both platforms.
+- Peak heap stays under `--mem`. CI checks it on macOS and Linux with
+  `bench/ci-mem.sh`, which asserts the counting allocator's peak heap
+  against `--mem` for `--summary`, the full diff and key mode. The script
+  prints peak RSS but does not assert it.
 - Approximate regions are marked explicitly in every output: terminal
   interface, unified diff and summary statistics.
 - Exit codes follow `diff`: 0 identical, 1 different, 2 error.
@@ -143,11 +147,18 @@ number of anchors `m`. Detailed work happens only where the user looks.
 
 - Regions without unique lines (identical lines, repeated CSV values). In
   0.1 these fell back to Myers with a cutoff and an Approx mark. Since 0.2,
-  shingle anchors, hashes of a window of `w` samples, cover most of them
-  (see "Shingle anchors"); a region too large for the budget is still
-  marked Approx.
-- Lines longer than the read buffer are hashed in streaming mode and shown
-  truncated.
+  `anchors::select` adds shingle anchors, hashes of a window of `w`
+  samples, in the gaps unique lines leave (see "Shingle anchors"). A
+  segment too large to refine in one job is resampled inside itself at a
+  lower stratum and cut at the anchors found there, recursively. A piece
+  becomes Approx only when no stratum below its parent's gives it an
+  anchor, when Myers on a piece that fits passes its cost cutoff, or
+  when the job's own budget runs out, which turns the rest of the
+  segment into one replacement.
+- Lines longer than the read buffer are hashed in streaming mode. The
+  unified diff writes them whole, in pieces of 64 KiB; only the terminal
+  view and the excerpts of `rift-mcp` and `rift serve` cut them for
+  display.
 - Hash collisions cause a false match only if the byte check is skipped;
   it never is.
 
@@ -257,7 +268,9 @@ line counts, the segment list, `hunk(i)` returning `Ready`, `Pending` or
 with the A lines on screen so the scheduler can prioritize.
 
 **`Error`** (`error`). One enum for the crate: I/O, budget exceeded, line
-too long for its buffer, line out of range, invalid edit script.
+too long for its buffer, line out of range, invalid edit script, `Keyed`
+when key mode cannot compare the files (it wraps a `KeyError`), and
+`Cancelled` when a scan was stopped through its `Watch`.
 
 **Counting allocator** (`alloc`, feature `counting-alloc`). A wrapper over
 the system allocator with current and peak counters. `rift-cli` installs it
@@ -490,14 +503,18 @@ pool's own heap is reserved from the refine half, 16 KiB per thread.
 
 A fingerprint cannot tell which keys lie above a new top of the range,
 so when a shard's table or waiting records fill up the pass starts over
-on a narrower range: the tables fill as the files are read, so the new
-range is the share they should hold to the end; waiting records halve
-it at most, and cap how far the next passes widen it back. A pass that
-ends with its tables under 90% full widens the next one, at most
-twofold. On the 10 GiB `shuffled` CSV pair (seed 7, `--mem 256M`, Apple
-M1, files larger than the page cache) this takes 6 passes and about
-41 s, against 13 passes and 157 to 231 s before; each pass now runs at
-the speed of the disk, about 3.2 GB/s.
+on a narrower range. The tables fill as the files are read, so when
+they overflow the new range keeps the share that leaves them 90% full
+at the end: `0.9 × progress / fill` of the old one. Waiting records do
+not pile up that way, so when they overflow the refine half the new
+range keeps the smaller of that share and one half: it is at least
+halved and can shrink further. That overflow also sets a ceiling of 90%
+of the range that overflowed. A pass that ends with its tables under
+90% full widens the next one toward 90%, at most twofold and never
+above the ceiling. On the 10 GiB `shuffled` CSV pair (seed 7,
+`--mem 256M`, Apple M1, files larger than the page cache) this takes
+6 passes and about 41 s, against 13 passes and 157 to 231 s before;
+each pass now runs at the speed of the disk, about 3.2 GB/s.
 
 A key found twice while its first record waits is a duplicate. A key
 whose fingerprint matches a matched key is only a suspect, since the
@@ -526,8 +543,11 @@ form one run, and a seed costs two reads. On the generated profiles, with
 and without moves, and on the real data sets, no block came out false at
 any length, so the minimum of 3 only drops moves of one or two lines,
 which read well as a plain deletion and insertion. Seeds are the
-skeleton's samples, so at stratum `L` a block of `n` lines has no seed,
-and goes unreported, with chance about `(1 - 2^-L)^n`. On `gen1g`
+`OffChain` pairs: the unique-line and shingle candidates from
+`anchors::select` that cross the chain, kept up to 1/8 of the skeleton
+half that is free when the chain search starts. Every seed is a sampled
+line, so at stratum `L` a block of `n` lines has no seed, and goes
+unreported, with chance at least `(1 - 2^-L)^n`. On `gen1g`
 (stratum 4) that leaves 424 of the 1 062 moves of 3 lines or more found.
 
 Memory comes from the refine half and is taken before the scheduler
