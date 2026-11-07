@@ -22,5 +22,6 @@ repo_url = "https://github.com/rubtsov-stan/rift"
 # browser for stars.
 star_threshold = 50
 download_threshold = 500
-# Set to true when site/static/vscode-demo.{mp4,gif} and the poster exist.
-vscode_media = false
+# The files site/static/vscode-demo.{mp4,gif} and vscode-demo-poster.jpg exist.
+# The slots appear only in builds with RIFT_SITE_VSCODE=1.
+vscode_media = true

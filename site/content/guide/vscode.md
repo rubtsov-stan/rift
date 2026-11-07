@@ -12,6 +12,6 @@ summary = "Compare two large files in VS Code with the Rift extension."
 
 Run **Rift: Compare Files** from the command palette and choose two files. The extension shows the differences as a tree. Expand a segment to see its hunks, open a hunk in a two-pane diff, and step through hunks with next and previous. Moved blocks have a group of their own.
 
-{{ media(ready=false, mp4="vscode-demo.mp4", gif="vscode-demo.gif", poster="vscode-demo-poster.png", width=1280, height=800, alt="The Rift extension comparing two large files in VS Code", caption="A recording on a generated 1 GiB pair.") }}
+{{ media(ready=true, mp4="vscode-demo.mp4", gif="vscode-demo.gif", poster="vscode-demo-poster.jpg", width=1280, height=800, alt="The Rift extension comparing two large files in VS Code", caption="A recording on a generated 1 GiB pair.") }}
 
 The extension talks to the same engine as the command line, so the [`--mem`](@/guide/memory.md) limit and the guarantees on this site apply.

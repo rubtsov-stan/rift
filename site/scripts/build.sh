@@ -21,3 +21,14 @@ drafts=
 [ "${RIFT_SITE_VSCODE:-0}" = 1 ] && drafts=--drafts
 # shellcheck disable=SC2086
 "${ZOLA:-zola}" build $drafts "$@"
+
+# The extension demo has one committed copy, in editors/vscode/media. Only a
+# build that links it (RIFT_SITE_VSCODE=1) gets it.
+if [ "${RIFT_SITE_VSCODE:-0}" = 1 ]; then
+  media=../editors/vscode/media
+  for f in mp4 gif; do
+    [ -f "$media/rift-demo.$f" ] && cp "$media/rift-demo.$f" "public/vscode-demo.$f"
+  done
+  [ -f "$media/rift-demo-poster.jpg" ] && cp "$media/rift-demo-poster.jpg" public/vscode-demo-poster.jpg
+fi
+exit 0
