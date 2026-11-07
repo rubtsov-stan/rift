@@ -162,6 +162,14 @@ struct Queue {
     stop: bool,
 }
 
+/// The smallest free Refine half [`Scheduler::new`] accepts for
+/// `segments` segments: the row table plus a cache and a work share of
+/// [`HUNK_OVERHEAD`] and two edits each.
+pub(crate) fn least_bytes(segments: usize) -> Bytes {
+    let share = HUNK_OVERHEAD.0 + 2 * size_of::<Edit>() as u64;
+    Bytes(Cache::table_bytes(segments).0 + 2 * share)
+}
+
 impl<J: Job> Scheduler<J> {
     /// Starts `threads` workers over `segments`, which must tile both files.
     ///
@@ -176,11 +184,11 @@ impl<J: Job> Scheduler<J> {
         let free = budget.available(Half::Refine);
         let table = Cache::table_bytes(segments.len());
         let share = free.0.saturating_sub(table.0) / 2;
-        let least = HUNK_OVERHEAD.0 + 2 * size_of::<Edit>() as u64;
-        if share < least {
+        let least = least_bytes(segments.len());
+        if free < least {
             return Err(BudgetExceeded {
                 half: Half::Refine,
-                requested: Bytes(table.0 + 2 * least),
+                requested: least,
                 available: free,
             }
             .into());

@@ -291,3 +291,29 @@ fn moves_off_finds_nothing_and_keeps_the_script() {
     assert!(off.moves().blocks().is_empty() && off.moves_disabled());
     assert_eq!(script(&on), script(&off));
 }
+
+#[test]
+fn a_refine_half_too_small_for_one_worker_is_refused_whole() {
+    let a = rows(2000, |i| format!("row {i}\n"));
+    let b = rows(2000, |i| {
+        if i % 100 == 0 {
+            format!("changed {i}\n")
+        } else {
+            format!("row {i}\n")
+        }
+    });
+    let budget = Budget::new(Bytes::mib(6));
+    let built = Diff::new(
+        Arc::<[u8]>::from(&a[..]),
+        Arc::<[u8]>::from(&b[..]),
+        &budget,
+        2,
+    );
+    let Err(Error::Budget(e)) = built else {
+        panic!("6 MiB leaves too little for one worker");
+    };
+    assert_eq!(e.half, Half::Refine);
+    // Twice what the half held plus the request is enough to start.
+    let held = budget.capacity(Half::Refine).0 - e.available.0;
+    check(&a, &b, Bytes(2 * (held + e.requested.0)), 2);
+}

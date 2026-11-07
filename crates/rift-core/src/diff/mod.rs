@@ -38,7 +38,7 @@ use crate::index::{IndexedLines, LineIndex};
 use crate::lines::{LineAccess, LineBuf};
 use crate::moves::{MovedBlock, Moves};
 use crate::refine::{Refiner, VERIFY_LINES, work_estimate};
-use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler};
+use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler, least_bytes};
 use crate::script::{LINES_PER_READ, PIECE, for_each_piece};
 use crate::segment::{Segment, SegmentStatus};
 use crate::skeleton::{OffChain, build_pair};
@@ -163,16 +163,27 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         let starts: Arc<[[ByteOffset; 2]]> = starts.into();
         let (index_a, index_b) = (Arc::new(index_a), Arc::new(index_b));
 
-        let front = budget.try_reserve(
-            Half::Refine,
-            Bytes(WRITER_BUF.0 + line_buf_bytes(FRONT_SCRATCH)),
-        )?;
-
         // Each worker: two readers and four line buffers (two in the
         // refiner, two for hashing and comparing). Keep at least half of
         // what is left, after the front end's two readers, for the
         // scheduler.
         let per_worker = 2 * WORKER_SCRATCH.0 + 4 * line_buf_bytes(WORKER_SCRATCH);
+        let front_bytes = WRITER_BUF.0 + line_buf_bytes(FRONT_SCRATCH);
+        // What one worker needs in all, refused at once rather than one
+        // reservation at a time, so the error names the whole amount. The
+        // readers of the move search are released before the front end's
+        // larger ones are taken, so they add nothing to the peak.
+        let least = front_bytes + per_worker + 2 * FRONT_SCRATCH.0 + least_bytes(segments.len()).0;
+        let free = budget.available(Half::Refine);
+        if free.0 < least {
+            return Err(BudgetExceeded {
+                half: Half::Refine,
+                requested: Bytes(least),
+                available: free,
+            }
+            .into());
+        }
+        let front = budget.try_reserve(Half::Refine, Bytes(front_bytes))?;
         let free = budget
             .available(Half::Refine)
             .0
