@@ -19,6 +19,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ruby -ryaml -e 'ARGV.each { |f| YAML.parse_file(f) }' .github/workflows/*.yml .github/dependabot.yml
 
+  # The protocol's schemas, the fixture and the mock server the VS Code
+  # extension is tested against; uses the runner's Node, no packages.
+  protocol-mock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: node editors/vscode/test/check-mock.js
+
   check:
     strategy:
       fail-fast: false
