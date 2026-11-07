@@ -96,10 +96,11 @@ async function main() {
     ],
     recordVideo: { dir: videoDir, size: { width: 1280, height: 800 } },
   });
+  const launched = Date.now();
   const page = await app.firstWindow();
   await app.evaluate(({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows()[0];
-    w.setSize(1280, 800);
+    w.setContentSize(1280, 800);
     w.center();
   });
   const pause = (ms) => page.waitForTimeout(ms);
@@ -108,6 +109,8 @@ async function main() {
 
   await row(names[0]).waitFor({ timeout: 60000 });
   await pause(1500);
+  // The first seconds of the recording are an empty window; the cut skips them.
+  const trim = Math.max(0, (Date.now() - launched) / 1000 - 0.3);
   await row(names[0]).click();
   await row(names[1]).click({ modifiers: [mod] });
   await pause(800);
@@ -123,23 +126,31 @@ async function main() {
   });
   await pause(2000);
 
+  // A hunk is shown once the diff editor has lines; the pause lets the view settle.
+  const shown = async () => {
+    await page.locator('.monaco-diff-editor .view-line').first().waitFor({ timeout: 60000 });
+    await pause(2500);
+  };
   const segments = page.locator('.monaco-list-row', { hasText: '↔ B' });
   await segments.nth(0).click();
-  await pause(2500);
+  await shown();
   await segments.nth(2).click();
-  await pause(2500);
+  await shown();
+  const posterAt = (Date.now() - launched) / 1000 - 1;
   await page.keyboard.press('Control+Alt+N');
-  await pause(2000);
+  await shown();
   await page.keyboard.press('Control+Alt+P');
-  await pause(2000);
+  await shown();
 
+  // Fold the long list so the moved-blocks group is on screen.
+  await page.locator('.monaco-list-row', { hasText: /^Differences/ }).first().click();
+  await pause(800);
   const moves = page.locator('.monaco-list-row', { hasText: /^Moved blocks/ }).first();
-  if (await moves.count()) {
-    await moves.click();
-    await pause(1200);
-    await page.locator('.monaco-list-row', { hasText: '→ B' }).first().click();
-    await pause(2500);
-  }
+  await moves.waitFor({ timeout: 10000 });
+  await moves.click();
+  await pause(1200);
+  await page.locator('.monaco-list-row', { hasText: '→ B' }).first().click();
+  await shown();
 
   await pause(1000);
   const video = page.video();
@@ -147,20 +158,25 @@ async function main() {
   const webm = await video.path();
 
   fs.mkdirSync(opts.out, { recursive: true });
+  // The capture has a few grey rows below the window; cut them and restore 1280x800.
+  const fit = 'crop=1280:794:0:0,scale=1280:800';
   const mp4 = path.join(opts.out, 'rift-demo.mp4');
-  sh('ffmpeg', ['-y', '-v', 'error', '-i', webm, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '26', '-movflags', '+faststart', mp4]);
+  sh('ffmpeg', ['-y', '-v', 'error', '-ss', String(trim), '-i', webm, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '26', '-vf', fit, '-movflags', '+faststart', mp4]);
 
   // The GIF must stay under 3 MB: step down until it does.
   const gif = path.join(opts.out, 'rift-demo.gif');
   for (const [fps, width] of [[8, 800], [6, 720], [5, 640], [4, 560], [3, 480]]) {
-    const vf = `fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4`;
-    sh('ffmpeg', ['-y', '-v', 'error', '-i', webm, '-vf', vf, '-loop', '0', gif]);
+    const vf = `${fit},fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4`;
+    sh('ffmpeg', ['-y', '-v', 'error', '-ss', String(trim), '-i', webm, '-vf', vf, '-loop', '0', gif]);
     if (fs.statSync(gif).size < 3 * 1024 * 1024) break;
   }
 
-  const duration = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', webm]).toString());
-  const poster = path.join(opts.out, 'rift-demo-poster.png');
-  sh('ffmpeg', ['-y', '-v', 'error', '-ss', String(duration * 0.6), '-i', webm, '-frames:v', '1', poster]);
+    const poster = path.join(opts.out, 'rift-demo-poster.png');
+  sh('ffmpeg', ['-y', '-v', 'error', '-ss', String(posterAt), '-i', webm, '-vf', fit, '-frames:v', '1', poster]);
 
-  for (const f of [mp4, gif, poster]) console.log(`${f} ${(fs.statSync(f).size / 1024).toFixed(0)} KiB`);
+  // The site shows the poster as a JPEG to keep the landing page light.
+  const posterJpg = path.join(opts.out, 'rift-demo-poster.jpg');
+  sh('ffmpeg', ['-y', '-v', 'error', '-i', poster, '-q:v', '4', posterJpg]);
+
+  for (const f of [mp4, gif, poster, posterJpg]) console.log(`${f} ${(fs.statSync(f).size / 1024).toFixed(0)} KiB`);
 }

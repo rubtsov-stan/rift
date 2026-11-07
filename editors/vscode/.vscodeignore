@@ -1,6 +1,7 @@
 **
 !out/*.js
-!media/**
+!media/rift.svg
+!media/icon.png
 !bin/**
 !package.json
 !README.md
