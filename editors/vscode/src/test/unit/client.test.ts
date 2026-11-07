@@ -1,25 +1,14 @@
 import * as assert from 'assert';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as os from 'os';
 import { Server, RpcError } from '../../client';
 import { Notification, OpenResult, Summary } from '../../protocol';
-
-const MOCK = path.join(__dirname, '..', '..', '..', 'test', 'mock-server.js');
-
-// A wrapper script so the server is one executable, as `rift.path` is.
-function wrapper(): string {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-mock-')), 'rift');
-  fs.writeFileSync(file, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${MOCK}"\n`, { mode: 0o755 });
-  return file;
-}
+import { mockBinary, until } from '../mock';
 
 function make(extra: Partial<ConstructorParameters<typeof Server>[0]> = {}) {
   const notes: Notification[] = [];
   const crashes: boolean[] = [];
   let restarted = () => {};
   const server = new Server({
-    command: wrapper,
+    command: mockBinary,
     args: ['serve'],
     busyDelaysMs: [5, 5, 5],
     minUptimeMs: 0,
@@ -29,11 +18,6 @@ function make(extra: Partial<ConstructorParameters<typeof Server>[0]> = {}) {
     ...extra,
   });
   return { server, notes, crashes, onRestarted: (f: () => void) => (restarted = f) };
-}
-
-async function until(f: () => boolean): Promise<void> {
-  for (let i = 0; i < 400 && !f(); i++) await new Promise((r) => setTimeout(r, 10));
-  assert.ok(f(), 'condition not reached');
 }
 
 describe('Server', () => {
