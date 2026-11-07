@@ -56,7 +56,7 @@ The budget also changes the result, within limits. A larger `--mem` buys a finer
 
 **Compare gaps.** A gap with the same line count and byte length on both sides is streamed and compared byte by byte. A run of such gaps that match becomes one `Equal` segment; anything else is `Differs`. This is the second pass over the disk, and it confirms the anchors as a side effect.
 
-**Refine.** A differing segment gets a line-level diff only when an output asks for it: the terminal view for the hunks on screen, the unified diff writer for each segment in turn. A scheduler runs these jobs within the refine half and caches the results. A segment too large for that half is sampled again inside itself; if even that fails, it becomes one replacement marked approximate. See Refinement.
+**Refine.** A differing segment gets a line-level diff only when an output asks for it: the terminal view for the hunks on screen, the unified diff writer for each segment in turn. A scheduler runs these jobs within the refine half and caches the results. A segment too large for that half is sampled again inside itself; if even that fails, it becomes one replacement marked approximate. See [Refinement](@/design/refinement.md).
 
 Sources: `crates/rift-core/src/diff/mod.rs`, `Diff::with_watch`; `skeleton/mod.rs`, `build_pair_watched` and `build_at`; `sched/mod.rs`, `Scheduler::new` and `worker`.
 
