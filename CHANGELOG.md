@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
 ### Added
 
 - Shingle anchors: where a region has no line that is unique in both
@@ -81,6 +83,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Header timestamps at the ends of the time range no longer overflow.
 - `-i` and `rift tui` exit with status 2 and `-i needs a terminal` when
   standard input or output is not a terminal, instead of panicking.
+- Key mode no longer reports the last CSV record as changed when a quote
+  left open runs to the end of the file and the files differ only in the
+  final newline or its line ending (`7dd49f5`).
+- The same holds when such a file ends in blank lines that differ only in
+  number or line endings (`b6b1de8`).
+- Key mode on a `pg_dump` file with many tables no longer slows down and
+  uses more memory with more threads: chunks parsed in parallel could
+  register tables a sequential read never sees. The output was not
+  affected (`3696ddd`).
+
+### Known limits
+
+- Speed on very low-entropy input (files of a few distinct short lines)
+  is not yet characterised; memory stays within `--mem`.
 
 ## [0.1.0] - 2026-11-05
 
@@ -116,5 +132,6 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rubtsov-stan/rift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rubtsov-stan/rift/releases/tag/v0.1.0
