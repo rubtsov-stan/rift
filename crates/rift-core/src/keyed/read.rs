@@ -792,7 +792,7 @@ fn trim_cr(buf: &[u8], end: usize) -> usize {
 fn csv_record(buf: &[u8], col: u32, eof: bool) -> Option<Split> {
     let (mut field, mut field_start, mut quoted) = (0u32, 0, false);
     let (mut key, mut lines, mut i) = (None, 0, 0);
-    let end = loop {
+    let (end, next) = loop {
         let hit = if key.is_some() {
             memchr2(b'"', b'\n', &buf[i..])
         } else {
@@ -803,14 +803,22 @@ fn csv_record(buf: &[u8], col: u32, eof: bool) -> Option<Split> {
                 return None;
             }
             // A quote left open runs to the end of the file, but the
-            // file's last line break still ends the record, as it does
-            // outside quotes: otherwise a change of the final line ending
-            // alone would change the record.
+            // file's last line break still ends the record, and the line
+            // breaks right before it are blank lines, as they are outside
+            // quotes: otherwise a change of the final line endings alone
+            // would change the record.
             if quoted && buf.ends_with(b"\n") {
                 lines -= 1;
-                break buf.len() - 1;
+                let mut end = buf.len() - 1;
+                while let Some(nl) = trim_cr(buf, end).checked_sub(1) {
+                    if buf[nl] != b'\n' {
+                        break;
+                    }
+                    end = nl;
+                }
+                break (end, buf.len());
             }
-            break buf.len();
+            break (buf.len(), buf.len());
         };
         i = j + 1;
         match buf[j] {
@@ -822,7 +830,7 @@ fn csv_record(buf: &[u8], col: u32, eof: bool) -> Option<Split> {
                 field += 1;
                 field_start = j + 1;
             }
-            b'\n' if !quoted => break j,
+            b'\n' if !quoted => break (j, j + 1),
             b'\n' => lines += 1,
             _ => {}
         }
@@ -833,7 +841,7 @@ fn csv_record(buf: &[u8], col: u32, eof: bool) -> Option<Split> {
     }
     Some(Split {
         len,
-        next: (end + 1).min(buf.len()),
+        next,
         lines: lines + 1,
         key,
     })
@@ -1032,6 +1040,18 @@ mod tests {
         ] {
             let s = csv_record(buf, 0, true).unwrap();
             assert_eq!((s.len, s.next, s.lines), (len, buf.len(), 2), "{buf:?}");
+        }
+    }
+
+    #[test]
+    fn open_quote_at_eof_leaves_out_trailing_blank_lines() {
+        for (buf, lines) in [
+            (&b"2,\"a\n\n"[..], 2),
+            (b"2,\"a\r\n\r\n", 2),
+            (b"2,\"a\n\r\n\n", 3),
+        ] {
+            let s = csv_record(buf, 0, true).unwrap();
+            assert_eq!((s.len, s.next, s.lines), (4, buf.len(), lines), "{buf:?}");
         }
     }
 
