@@ -7,6 +7,9 @@ selecting one opens VS Code's diff editor on just that excerpt.
 Select two files in the Explorer and choose **Compare with Rift**, or run
 **Rift: Compare Files…**.
 
+<!-- Demo media (media/rift-demo.gif, media/rift-demo.mp4) are produced by
+scripts/record-demo.sh against the real `rift serve` at integration; link them here then. -->
+
 ## Settings
 
 | Setting | Default | Meaning |

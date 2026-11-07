@@ -224,6 +224,7 @@
     "@vscode/vsce": "3.9.2",
     "eslint": "9.39.5",
     "mocha": "11.8.0",
+    "playwright-core": "1.65.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.1"
   }
