@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { Server } from '../../client';
-import { Comparison } from '../../comparison';
+import { Comparison, rerunOffer } from '../../comparison';
 import { RpcErrorObject } from '../../protocol';
 import { mockBinary, until } from '../mock';
 
@@ -50,5 +50,28 @@ describe('Comparison', () => {
     await cmp.hunk({ segment: 1 }, 3);
     await until(() => cmp.segments[0].status === 'approx');
     server.dispose();
+  });
+
+  it('closes its session on the server', async () => {
+    const { server, cmp } = setup();
+    await cmp.open();
+    const session = cmp.session;
+    await cmp.close();
+    await assert.rejects(server.request('summary', { session }), (e: { code: number }) => e.code === -32006);
+    server.dispose();
+  });
+});
+
+describe('rerunOffer', () => {
+  const err = (data: Record<string, unknown>, code = -32003) => ({ code, message: 'm', data });
+  it('offers the suggested budget', () => {
+    assert.deepStrictEqual(rerunOffer(err({ suggested_mem: '5120K', suggested_mem_bytes: 5242880 }), 1 << 30), { mem: '5120K' });
+  });
+  it('names the limit when the suggestion is over it', () => {
+    assert.deepStrictEqual(rerunOffer(err({ suggested_mem: '2G', suggested_mem_bytes: 2 ** 31 }), 1 << 30), { mem: '2G', limit: 1 << 30 });
+  });
+  it('offers nothing without a suggestion or for another error', () => {
+    assert.strictEqual(rerunOffer(err({ mem_bytes: 1 }), 1 << 30), undefined);
+    assert.strictEqual(rerunOffer(err({ suggested_mem: '1M' }, -32001), 1 << 30), undefined);
   });
 });
