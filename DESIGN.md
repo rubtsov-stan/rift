@@ -612,6 +612,17 @@ on the scheduler's threads, and an excerpt is a bounded number of reads.
 `rift-mcp`, whose MCP library runs on tokio, calls in from
 `spawn_blocking`.
 
+A session that `rift serve` opens scans on a thread of its own, so
+`open` answers at once. The core's scan takes a `Watch`: it counts the
+bytes both passes have covered, which the server reports as progress,
+and is checked before every read, so closing the session stops the scan
+within one chunk per scan thread and frees its memory then. One thread
+looks at every session each 50 ms and sends what changed, which caps
+notifications at 20 a second per session. The server keeps 8 MiB of
+`--max-total-mem` for its own buffers and gives the rest to sessions:
+request bodies are capped at 64 KiB, and every message is written
+through one fixed buffer after a pass that counts its length.
+
 Every response has a bound that does not depend on the files: pages of
 at most 1000 segments or blocks, which borrow from the map, and
 excerpts of at most `max_lines` lines per side and `max_line_bytes`

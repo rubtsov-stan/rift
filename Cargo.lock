@@ -1726,10 +1726,14 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
+ "memchr",
  "ratatui",
  "rift-core",
  "rift-gen",
+ "rift-session",
  "rift-tui",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

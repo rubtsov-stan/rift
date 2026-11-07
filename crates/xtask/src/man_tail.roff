@@ -194,6 +194,26 @@ git config difftool.prompt false
 git difftool \-t rift
 .fi
 .RE
+.SH SERVE
+\fBrift serve\fR [\fB\-\-max\-session\-mem\fR \fISIZE\fR]
+[\fB\-\-max\-total\-mem\fR \fISIZE\fR] [\fB\-\-stats\fR] speaks Rift's
+protocol, JSON\-RPC 2.0 framed as in LSP, on standard input and output,
+for editors and other programs. A client opens a pair of files as a
+session, then asks for counts, pages of differing segments and moved
+blocks, and the lines of one segment on both sides. Every answer has a
+size bound that does not depend on the files. The protocol is described
+in \fBdocs/protocol.md\fR in the source repository.
+.PP
+\fB\-\-max\-session\-mem\fR (default \fB1G\fR) is the most memory one
+session may ask for; a session gets 256 MiB when it does not ask.
+\fB\-\-max\-total\-mem\fR (default \fB2G\fR) bounds the heap of the whole
+server: the sessions share it, less 8 MiB the protocol keeps for its
+buffers. At most four sessions are open, and none is closed for being
+idle. \fB\-\-stats\fR prints the peak heap to standard error on exit.
+.PP
+The server exits with status 0 when standard input closes, and 2 when
+it cannot start. With a file argument after it, \fBserve\fR is a file
+name: \fBrift serve other\fR diffs a file called \fBserve\fR.
 .SH EXAMPLES
 Write a patch and apply it:
 .PP

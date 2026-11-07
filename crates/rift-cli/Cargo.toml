@@ -25,6 +25,10 @@ ratatui = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 libc.workspace = true
+memchr.workspace = true
+rift-session = { path = "../rift-session" }
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

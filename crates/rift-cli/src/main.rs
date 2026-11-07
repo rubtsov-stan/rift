@@ -5,6 +5,7 @@ mod full;
 mod gitdiff;
 mod keyed;
 mod lfs;
+mod serve;
 mod source;
 mod summary;
 
@@ -55,7 +56,8 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
 }
 
 fn main() -> ExitCode {
-    if let Some(code) = gitdiff::dispatch(&std::env::args_os().collect::<Vec<_>>()) {
+    let raw: Vec<_> = std::env::args_os().collect();
+    if let Some(code) = gitdiff::dispatch(&raw).or_else(|| serve::dispatch(&raw)) {
         return code;
     }
     let args = Args::parse_from(tui_alias(std::env::args_os().collect()));
