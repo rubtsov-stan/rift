@@ -18,7 +18,7 @@ The largest pair measured so far is 10 GiB. No pair above that has been run.
 - **System:** macOS, warm page cache.
 - **Date:** not recorded in the README; the table entered the repository on 2026-11-05.
 - **Commands:** `bench/run.sh` prints the full results with the commands and seeds. `bench/data.sh` regenerates the data.
-- **Source:** the Benchmarks section of `README.md`.
+- **Source:** the Benchmarks section of `README.md` at the `v0.1.0` tag. The README no longer carries it.
 
 {{ benchtable(name="mac") }}
 

@@ -9,6 +9,8 @@ lead = "Git calls any file over 512 MiB binary and prints no diff. rift git-diff
 summary = "Set up rift git-diff as an external diff for large files, and know what it costs."
 +++
 
+**Not in v0.2.0.** `rift git-diff` is on `main` and planned for 0.3. To use it now, build from source: `cargo install --git https://github.com/rubtsov-stan/rift rift-diff`.
+
 On a 640 MiB pair of generated SQL dumps, git prints this:
 
 {{ term(name="git-binary", title="git on a file over 512 MiB") }}

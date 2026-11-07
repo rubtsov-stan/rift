@@ -24,7 +24,7 @@ This is a one-person project. Every report gets read, and the reply comes when t
 
 ## Unsafe code
 
-`rift-gen`, `rift-mcp` and `rift-tui` forbid `unsafe_code`. `rift-cli` denies it except in two FFI modules. `rift-core` has one `unsafe` item, the counting allocator. Every block has a `// SAFETY:` comment, and the lint `clippy::undocumented_unsafe_blocks` is set to `deny`.
+`rift-gen`, `rift-mcp`, `rift-session` and `rift-tui` forbid `unsafe_code`. `rift-cli` denies it except in two FFI modules. `rift-core` has one `unsafe` item, the counting allocator. Every block has a `// SAFETY:` comment, and the lint `clippy::undocumented_unsafe_blocks` is set to `deny`.
 
 CI runs Miri on `rift-core` under Stacked Borrows and Tree Borrows, nightly, on demand, and on pull requests that touch `crates/rift-core`. The list of what Miri does not cover, and every unsafe block with its reason, is in SECURITY.md.
 

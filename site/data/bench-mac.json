@@ -1,5 +1,5 @@
 {
- "source": "README.md, section Benchmarks",
+ "source": "README.md at the v0.1.0 tag, section Benchmarks",
  "script": "bench/run.sh; data from bench/data.sh (rift-gen seed 7, profile sql, 1 GiB and 10 GiB)",
  "host": {
   "cpu": "Apple M1",

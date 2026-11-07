@@ -30,7 +30,7 @@ The largest pair measured so far is 10 GiB. On a Mac with 16 GB of RAM, GNU `dif
 | 10 GiB | `rift` (full diff) | 26.16 s | 136.5 MiB |
 | 10 GiB | `diff` | did not run: needs more than 16 GB of RAM | |
 
-Apple M1, 16 GB RAM, internal SSD, macOS, warm page cache. Source: the Benchmarks section of `README.md`.
+Apple M1, 16 GB RAM, internal SSD, macOS, warm page cache. Source: the Benchmarks section of `README.md` at the `v0.1.0` tag.
 
 ## When the limit is too small
 
