@@ -27,6 +27,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: node editors/vscode/test/check-mock.js
 
+  vscode:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run compile
+      - run: npm run test:unit
+      # The extension tests run inside a VS Code window; xvfb gives it a display.
+      - run: xvfb-run -a npm run test:vscode
+
   check:
     strategy:
       fail-fast: false
