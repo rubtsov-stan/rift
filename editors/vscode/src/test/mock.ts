@@ -15,3 +15,8 @@ export async function until(f: () => boolean, ms = 5000): Promise<void> {
   for (let t = 0; t < ms && !f(); t += 10) await new Promise((r) => setTimeout(r, 10));
   if (!f()) throw new Error('condition not reached');
 }
+
+// Set to the `rift` binary to run the suite against the real server instead of
+// the mock. The two files of the pair come from RIFT_PAIR_A and RIFT_PAIR_B
+// (src/test/run.ts generates them when they are not set).
+export const REAL = process.env.RIFT_BIN;

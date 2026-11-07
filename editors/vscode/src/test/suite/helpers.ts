@@ -1,18 +1,25 @@
 import * as vscode from 'vscode';
 import { Api } from '../../extension';
 import { Node } from '../../tree';
-import { mockBinary, until } from '../mock';
+import { REAL, mockBinary, until } from '../mock';
 
 export const ID = 'rift-placeholder.rift-vscode';
 
 export async function api(): Promise<Api> {
   const ext = vscode.extensions.getExtension<Api>(ID)!;
   const a = await ext.activate();
-  await vscode.workspace.getConfiguration('rift').update('path', mockBinary(), vscode.ConfigurationTarget.Global);
+  await vscode.workspace.getConfiguration('rift').update('path', REAL ?? mockBinary(), vscode.ConfigurationTarget.Global);
   return a;
 }
 
-export const uri = (name: string) => vscode.Uri.file(`/x/${name}`);
+// Scenarios name the mock fixture's files; against the real server a.sql and
+// b.sql are the generated pair and any other name does not exist.
+export const describeMock = REAL ? describe.skip : describe;
+export const itMock = REAL ? it.skip : it;
+export const describeReal = REAL ? describe : describe.skip;
+
+export const uri = (name: string) =>
+  vscode.Uri.file(!REAL ? `/x/${name}` : name === 'a.sql' ? process.env.RIFT_PAIR_A! : name === 'b.sql' ? process.env.RIFT_PAIR_B! : `/nonexistent/${name}`);
 
 export async function compare(a: string, b: string): Promise<void> {
   await vscode.commands.executeCommand('rift.compareFiles', uri(a), uri(b));

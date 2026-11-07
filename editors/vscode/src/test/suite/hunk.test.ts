@@ -2,9 +2,9 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { Api } from '../../extension';
 import { until } from '../mock';
-import { api, closeAll, compare, diffTab, labels, ready, text } from './helpers';
+import { api, closeAll, compare, describeMock, diffTab, labels, ready, text } from './helpers';
 
-describe('hunk diff', () => {
+describeMock('hunk diff', () => {
   let x: Api;
   before(async () => (x = await api()));
   beforeEach(async () => {

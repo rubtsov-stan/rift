@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import { Api } from '../../extension';
-import { api, closeAll, compare, labels, ready } from './helpers';
+import { api, closeAll, compare, describeMock, labels, ready } from './helpers';
 
-describe('tree', () => {
+describeMock('tree', () => {
   let x: Api;
   before(async () => (x = await api()));
   afterEach(() => closeAll(x));

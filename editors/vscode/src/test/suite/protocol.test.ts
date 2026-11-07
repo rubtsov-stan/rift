@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { Api } from '../../extension';
 import { until } from '../mock';
-import { api, captureMessages, closeAll, compare, labels, ready, uri } from './helpers';
+import { api, captureMessages, closeAll, compare, itMock, labels, ready, uri } from './helpers';
 
 describe('protocol handling', () => {
   let x: Api;
@@ -15,7 +15,7 @@ describe('protocol handling', () => {
     await closeAll(x);
   });
 
-  it('shows scanning, then ready, and no error for requests made too early', async () => {
+  itMock('shows scanning, then ready, and no error for requests made too early', async () => {
     await compare('slow-a.sql', 'b.sql');
     assert.strictEqual(x.comparison()!.state, 'scanning');
     await until(() => labels(x)[0]?.startsWith('Scanning… ') === true);
@@ -27,7 +27,7 @@ describe('protocol handling', () => {
     assert.strictEqual(labels(x).length, 3);
   });
 
-  it('offers a rerun after a scan fails on the budget, and replaces the session', async () => {
+  itMock('offers a rerun after a scan fails on the budget, and replaces the session', async () => {
     await vscode.workspace.getConfiguration('rift').update('mem', '512K', vscode.ConfigurationTarget.Global);
     await compare('a.sql', 'b.sql');
     await until(() => x.comparison()?.state === 'failed');
@@ -41,13 +41,13 @@ describe('protocol handling', () => {
     assert.strictEqual(x.comparison()!.mem, '2560K');
   });
 
-  it('retries busy and shows no error', async () => {
+  itMock('retries busy and shows no error', async () => {
     await compare('busy-a.sql', 'b.sql');
     await ready(x);
     assert.deepStrictEqual(msg.error, []);
   });
 
-  it('shows an error once the busy retries run out, and keeps the old comparison', async () => {
+  itMock('shows an error once the busy retries run out, and keeps the old comparison', async () => {
     await compare('a.sql', 'b.sql');
     await ready(x);
     const before = x.comparison();
@@ -59,7 +59,7 @@ describe('protocol handling', () => {
 
   it('shows the server error for a missing file', async () => {
     await compare('missing.sql', 'b.sql');
-    assert.match(msg.error[0], /No such file/);
+    assert.match(msg.error[0], /No such file|not found|does not exist/i);
     assert.strictEqual(x.comparison(), undefined);
   });
 
@@ -71,7 +71,7 @@ describe('protocol handling', () => {
   });
 
   it('takes both files as one object, as a keybinding passes them', async () => {
-    await vscode.commands.executeCommand('rift.compareFiles', { a: '/x/a.sql', b: '/x/b.sql' });
+    await vscode.commands.executeCommand('rift.compareFiles', { a: uri('a.sql').fsPath, b: uri('b.sql').fsPath });
     await ready(x);
   });
 

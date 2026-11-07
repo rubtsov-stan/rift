@@ -209,7 +209,8 @@
     "check-mock": "node test/check-mock.js",
     "package": "vsce package --no-dependencies",
     "test:unit": "npm run build && mocha --exit out/test/unit/*.test.js",
-    "test:vscode": "npm run build && node out/test/run.js"
+    "test:vscode": "npm run build && node out/test/run.js",
+    "test:real": "npm run build && RIFT_BIN=${RIFT_BIN:-../../target/release/rift} node out/test/run.js"
   },
   "bugs": {
     "url": "https://github.com/rubtsov-stan/rift/issues"
