@@ -8,9 +8,10 @@
 bench/linux-safe.sh --dry-run     # print the plan, change nothing
 bench/linux-safe.sh               # 10 s to cancel, then the run; 20 to 60 minutes
 bench/linux-safe.sh --yes         # no wait
+bench/linux-safe.sh --disk-dir DIR --dry-run   # plan with the 50 GiB on-disk pair
 ```
 
-Options: `--ref REF` (tag, branch or commit; default `v0.1.0`), `--repo URL`, `--read-only-pair DIR`.
+Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`.
 
 The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 2) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
@@ -21,7 +22,7 @@ Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to c
 - Writes one directory in tmpfs, `/dev/shm/rift-bench-<pid>` (or under `$XDG_RUNTIME_DIR`). It checks that the filesystem is tmpfs and has 3 GiB free, and refuses otherwise.
 - The clone, the build, `CARGO_HOME`, `CARGO_TARGET_DIR`, the generated files and all logs are in that directory. After the build the binaries are copied out and the target directory, crate cache and clone are deleted.
 - A trap on exit, error, Ctrl-C and termination removes the directory. A power loss does the same, since it is RAM.
-- The only disk write is the result archive. Outside that, `systemd-run` leaves a few lines in the journal, and cargo is pointed away from `~/.cargo`.
+- The only disk write is the result archive, unless `--disk-dir` is given (below). Outside that, `systemd-run` leaves a few lines in the journal, and cargo is pointed away from `~/.cargo`.
 - Does not run as root, call `sudo`, drop caches or change kernel settings. It never installs rustup or a toolchain (`RUSTUP_AUTO_INSTALL=0`); if a ref pins a toolchain you do not have, the build stops. Settings in `~/.cargo/config.toml` do not apply, because `CARGO_HOME` moves.
 - Each measured command runs as `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0 nice -n 10 ionice -c3 /usr/bin/time -v ...`. Without a systemd user session it falls back to `prlimit --as=<cap>` (an address-space limit, stricter than RSS) and says so in the report. With neither, `diff` and `git diff` are skipped.
 - Caps: 1 GiB for rift, 1.5 GiB for the `--mem 1G` run (its heap alone is 1 GiB; the extra half GiB comes out of the margin below), 3 times the pair for `diff` and `git diff`. `rift-gen` runs under a cap of the pair it writes plus 1 GiB, because files written to tmpfs count against the memory cap of the process that writes them.
@@ -41,12 +42,26 @@ The host section has the CPU model, threads, governor if readable, RAM, kernel, 
 
 `--read-only-pair DIR` adds `cat`, `rift --summary` and `rift --stats` runs over `DIR/a` and `DIR/b`. The files are only read and nothing is written beside them, so the run gives a disk number if `DIR` is on disk. Pairs on a network file system or a slow disk make `cat` take as long as they take.
 
+### On-disk 50 GiB pair (`--disk-dir DIR`)
+
+Off by default; without the flag nothing below applies. With it, after the usual suite, `rift-gen` writes a 50 GiB A and a 50 GiB B (profile `sql`, seed 7, 0.1% changes) into `DIR/rift-bench-disk-<pid>/` and the script runs `cat a b | wc -c`, `rift --summary --mem 256M` and `rift --stats --mem 256M` once each, with the usual 1 GiB cap, `nice` and `ionice`. Results are in the group `disk`, in the same tables and in `results.json` (same fields, so `schema_version` stays 2). The pair is deleted when the runs end and by the exit trap on error, Ctrl-C or termination.
+
+Refused unless `DIR` exists, is writable, is not tmpfs or ramfs, and has free space for both files plus 10 GiB, 110 GiB in all. `--dry-run` prints the paths, the disk use and a time estimate. Roughly: 110 GiB of disk, and 15 minutes to 1.5 hours on top of the usual 20 to 60, depending on whether the disk reads at 500 or 100 MB/s. Needs no root.
+
+`diff` and `git diff` are skipped at this size: they hold several times the pair in memory and would only be killed by their cap. The report records the file system type and, when `/sys` shows it without root, the device and its model and whether it is rotational; otherwise `unreadable`.
+
+The script cannot drop the page cache without root and does not try. Read passes are neither cold nor warm by construction: the pair is written just before the first read, so the tail of B may be cached. When A and B together exceed `MemTotal`, most reads hit the disk; the report states which case applies, from `MemTotal`.
+
+```sh
+bench/linux-safe.sh --disk-dir /path/on/real/disk
+```
+
 ### What it does not do
 
-- It does not measure the disk, except through `--read-only-pair`.
+- It does not measure the disk, except through `--read-only-pair` and `--disk-dir`.
 - It does not control CPU frequency, other load or turbo; read the governor and load lines before trusting a number.
 - It does not compare against other diff tools beyond GNU `diff` and `git diff` on 1 GiB.
-- A build of a ref newer than `v0.1.0` uses the toolchain that ref pins; a `v0.1.0` build uses the stable `cargo` of the host, and the report records the rustc.
+- A build of a ref newer than `v0.1.0` (the default `v0.2.0` is) uses the toolchain that ref pins; a `v0.1.0` build uses the stable `cargo` of the host, and the report records the rustc.
 
 ### Testing the script off Linux
 
@@ -59,3 +74,4 @@ These knobs turn safety checks off. They exist so the plan, sizing, report and c
 | `RIFT_BENCH_SHM=DIR` | use `DIR` instead of `/dev/shm` |
 | `RIFT_BENCH_TIME=PATH` | use `PATH` instead of `/usr/bin/time` |
 | `RIFT_BENCH_LIMITER=systemd` | show the plan as if systemd scopes were available |
+| `RIFT_BENCH_DISK_SIZE=BYTES` | size of each file of the `--disk-dir` pair instead of 50 GiB; free space is still checked |
