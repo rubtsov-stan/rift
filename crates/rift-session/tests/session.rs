@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use rift_core::{BudgetExceeded, Bytes, DiffView, HunkState, LineNo, SegmentStatus};
 use rift_session::file::Reason;
 use rift_session::{
-    At, Eol, Error, ExcerptRequest, Limits, MovesState, Session, Sessions, Side, code,
+    At, Eol, Error, ExcerptRequest, Limits, MovesState, Session, SessionId, SessionState, Sessions,
+    Side, code,
 };
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> String {
@@ -40,8 +41,19 @@ fn sessions() -> Sessions {
 
 const MEM: Option<Bytes> = Some(Bytes::mib(16));
 
+/// Opens `a` and `b` and waits for the scan to end.
 fn open(s: &Sessions, a: &str, b: &str) -> Arc<Session> {
-    s.open(a, b, MEM).unwrap()
+    let session = s.open(a, b, MEM).unwrap().session;
+    assert_eq!(session.wait(), SessionState::Ready);
+    session
+}
+
+/// A pair whose scan takes seconds: A is one line of 1 GiB, sparse on
+/// disk, so it costs nothing to make.
+fn slow_pair(dir: &Path) -> (String, String) {
+    let a = dir.join("huge");
+    std::fs::File::create(&a).unwrap().set_len(1 << 30).unwrap();
+    (a.to_str().unwrap().to_owned(), write(dir, "small", b"x\n"))
 }
 
 fn texts(lines: &[rift_session::Line]) -> Vec<&str> {
@@ -68,6 +80,8 @@ fn a_pair_opened_twice_is_one_session() {
     let s = sessions();
     let first = open(&s, &a, &b);
     let again = s.open(&a, &b, Some(Bytes::mib(32))).unwrap();
+    assert!(again.reused);
+    let again = again.session;
     assert_eq!(first.id(), again.id());
     assert_eq!(
         again.mem(),
@@ -117,7 +131,9 @@ fn a_budget_refusal_suggests_the_mem_the_cli_would() {
     b.extend_from_slice(b"one more\n");
     let (a, b) = (write(dir.path(), "a", &a), write(dir.path(), "b", &b));
     let mem = Bytes(64 << 10);
-    let err = sessions().open(&a, &b, Some(mem)).unwrap_err();
+    let session = sessions().open(&a, &b, Some(mem)).unwrap().session;
+    assert_eq!(session.wait(), SessionState::Failed);
+    let err = session.error().unwrap();
     assert_eq!(err.code(), code::BUDGET_EXCEEDED, "{err}");
     let (held, refusal) = err.budget().unwrap();
     assert_eq!(held, mem);
@@ -160,7 +176,7 @@ fn the_summary_counts_segments_and_moves() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = pair(dir.path());
     let s = sessions();
-    let sum = open(&s, &a, &b).summary();
+    let sum = open(&s, &a, &b).summary().unwrap();
     assert_eq!((sum.a_lines, sum.b_lines), (40, 40));
     assert_eq!(sum.a_bytes, Bytes(std::fs::metadata(&a).unwrap().len()));
     assert!(!sum.identical);
@@ -180,7 +196,7 @@ fn an_excerpt_shows_both_sides_of_a_change_with_context() {
     let mut req = ExcerptRequest::new(At::LineA(LineNo(9)));
     req.context = 2;
     let e = session.excerpt(&req).unwrap();
-    let seg = session.diff().segments()[e.segment].clone();
+    let seg = session.diff().unwrap().segments()[e.segment].clone();
     assert!(seg.a.contains(&LineNo(9)), "{seg:?}");
     assert_eq!(e.range, seg);
     assert_eq!(e.a.start, LineNo(seg.a.start.0 - 2));
@@ -282,7 +298,7 @@ fn moved_lines_are_flagged_on_both_sides() {
     b.extend(&block);
     let (a, b) = (write(dir.path(), "a", &a), write(dir.path(), "b", &b));
     let session = open(&sessions(), &a, &b);
-    let blocks = session.diff().moved_blocks();
+    let blocks = session.diff().unwrap().moved_blocks();
     assert_eq!(blocks.len(), 1, "{blocks:?}");
     let e = session
         .excerpt(&ExcerptRequest::new(At::LineA(LineNo(0))))
@@ -295,7 +311,7 @@ fn moved_lines_are_flagged_on_both_sides() {
             .collect::<Vec<_>>()
     };
     assert_eq!(moved(&e.a.lines).len(), 5);
-    let last = session.diff().segments().len() - 1;
+    let last = session.diff().unwrap().segments().len() - 1;
     let e = session
         .excerpt(&ExcerptRequest::new(At::Segment(last)))
         .unwrap();
@@ -308,7 +324,7 @@ fn positions_past_the_end_are_invalid_params() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = pair(dir.path());
     let session = open(&sessions(), &a, &b);
-    let n = session.diff().segments().len();
+    let n = session.diff().unwrap().segments().len();
     let err = session
         .excerpt(&ExcerptRequest::new(At::Segment(n)))
         .unwrap_err();
@@ -337,7 +353,9 @@ fn excerpts_share_the_response_pool_and_return_it() {
     let b = write(dir.path(), "b", &side("new"));
     let session = Sessions::new(Limits::default())
         .open(&a, &b, Some(Bytes::mib(32)))
-        .unwrap();
+        .unwrap()
+        .session;
+    session.wait();
     let mut req = ExcerptRequest::new(At::LineA(LineNo(0)));
     req.max_lines = 5000;
     let first = session.excerpt(&req).unwrap();
@@ -385,13 +403,144 @@ fn core_errors_map_to_their_codes() {
 #[test]
 fn a_session_that_is_not_ready_has_its_own_code() {
     let err = Error::NotReady {
-        session: rift_session::SessionId(4),
-        state: rift_session::SessionState::Scanning,
+        session: SessionId(4),
+        state: SessionState::Scanning,
     };
     assert_eq!(err.code(), code::NOT_READY);
     assert_eq!(
         err.to_string(),
         "session 4 is scanning; wait for it to be ready"
     );
-    assert_eq!(rift_session::SessionState::Failed.name(), "failed");
+    assert_eq!(SessionState::Failed.name(), "failed");
+}
+
+#[test]
+fn open_answers_before_the_scan_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = slow_pair(dir.path());
+    let s = sessions();
+    let began = Instant::now();
+    let opened = s.open(&a, &b, MEM).unwrap();
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert!(!opened.reused);
+    let session = opened.session;
+    assert_eq!(session.state(), SessionState::Scanning);
+    let (done, total) = session.scan_progress();
+    assert!(done <= total);
+    assert_eq!(total, Bytes(2 * ((1 << 30) + 2)));
+    assert!(s.close(session.id()));
+}
+
+#[test]
+fn a_scanning_session_is_not_ready_and_reopens_as_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = slow_pair(dir.path());
+    let s = sessions();
+    let session = s.open(&a, &b, MEM).unwrap().session;
+    let not_ready = |err: Error| match err {
+        Error::NotReady { session: id, state } => (id, state),
+        e => panic!("{e:?}"),
+    };
+    let err = session
+        .excerpt(&ExcerptRequest::new(At::Segment(0)))
+        .unwrap_err();
+    assert_eq!(err.code(), code::NOT_READY);
+    assert_eq!(not_ready(err), (session.id(), SessionState::Scanning));
+    assert!(session.summary().is_err());
+    assert!(session.diff().is_err());
+    let again = s.open(&a, &b, Some(Bytes::mib(32))).unwrap();
+    assert!(again.reused);
+    assert_eq!(again.session.id(), session.id());
+    assert_eq!(again.session.mem(), Bytes::mib(16));
+    s.close(session.id());
+}
+
+#[test]
+fn close_stops_a_scan_and_releases_its_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = slow_pair(dir.path());
+    let s = sessions();
+    let session = s.open(&a, &b, MEM).unwrap().session;
+    assert_eq!(s.mem(), Bytes::mib(16));
+    let began = Instant::now();
+    assert!(s.close(session.id()));
+    assert_eq!(
+        s.session(session.id()).unwrap_err().code(),
+        code::UNKNOWN_SESSION
+    );
+    assert_eq!(session.wait(), SessionState::Failed);
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(matches!(
+        session.error().and_then(Error::core),
+        Some(rift_core::Error::Cancelled)
+    ));
+    assert_eq!(s.mem(), Bytes(0));
+}
+
+#[test]
+fn a_failed_session_is_replaced_by_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = numbered(1..=20_000);
+    let (a, b) = (write(dir.path(), "a", &a), write(dir.path(), "b", b"x\n"));
+    let s = sessions();
+    let failed = s.open(&a, &b, Some(Bytes(64 << 10))).unwrap().session;
+    assert_eq!(failed.wait(), SessionState::Failed);
+    assert_eq!(s.mem(), Bytes(0), "a failed session holds no budget");
+    let err = failed
+        .excerpt(&ExcerptRequest::new(At::Segment(0)))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::NotReady {
+            state: SessionState::Failed,
+            ..
+        }
+    ));
+    let mem = failed.error().unwrap().suggested_mem();
+    let again = s.open(&a, &b, mem).unwrap();
+    assert!(!again.reused);
+    assert_ne!(again.session.id(), failed.id());
+    assert_eq!(
+        s.session(failed.id()).unwrap_err().code(),
+        code::UNKNOWN_SESSION
+    );
+}
+
+#[test]
+fn room_is_made_from_failed_sessions_first_and_never_from_scanning_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = write(dir.path(), "c", b"other\n");
+    let big = write(dir.path(), "big", &numbered(1..=20_000));
+    let set = Sessions::new(Limits {
+        sessions: 2,
+        idle: Duration::from_secs(3600),
+        ..Limits::default()
+    });
+    let failed = set.open(&big, &c, Some(Bytes(64 << 10))).unwrap().session;
+    assert_eq!(failed.wait(), SessionState::Failed);
+    let ready = open(&set, &a, &b).id();
+    let third = open(&set, &a, &c).id();
+    let unknown =
+        |id: SessionId| matches!(set.session(id), Err(e) if e.code() == code::UNKNOWN_SESSION);
+    // Looking a session up marks it used, so only the failed one is
+    // looked at before the next eviction.
+    assert!(unknown(failed.id()), "the failed session went first");
+    assert_eq!(set.len(), 2);
+    drop(failed);
+    // A scanning session is never dropped for room; the ready ones are.
+    let (slow_a, slow_b) = slow_pair(dir.path());
+    let slow = set.open(&slow_a, &slow_b, MEM).unwrap().session;
+    assert!(unknown(ready), "the least recently used ready one went");
+    assert!(!unknown(third));
+    let in_use = set.session(third).unwrap();
+    let err = set.open(&b, &c, MEM).map(|_| ()).unwrap_err();
+    assert_eq!(err.code(), code::BUSY);
+    assert!(!unknown(third) && !unknown(slow.id()));
+    drop(in_use);
+    set.close(slow.id());
 }

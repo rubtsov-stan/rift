@@ -14,6 +14,7 @@ rift-core = { path = "../rift-core" }
 thiserror.workspace = true
 
 [dev-dependencies]
+rift-core = { path = "../rift-core", features = ["counting-alloc"] }
 tempfile.workspace = true
 
 [lints]

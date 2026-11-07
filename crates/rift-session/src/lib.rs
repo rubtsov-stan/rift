@@ -4,16 +4,20 @@
 //! A [`Sessions`] keeps one [`Session`] per pair of files, opened by path
 //! with the checks in [`mod@file`], bounded in count and memory by
 //! [`Limits`], and dropped when idle or when a new pair needs room. A
-//! session answers what the protocol in `docs/protocol.md` asks:
-//! [`Session::summary`], [`Session::differing`], [`Session::hunk_state`]
-//! and [`Session::excerpt`]; the rest (`set_visible`, progress, moved
-//! blocks) goes straight to [`Session::diff`]. Errors are typed, and
+//! session opened with [`Sessions::open`] scans on a thread of its own and
+//! reports its [`SessionState`] and [`Session::scan_progress`] meanwhile;
+//! [`Sessions::close`] stops that scan. A ready session answers what the
+//! protocol in `docs/protocol.md` asks: [`Session::summary`],
+//! [`Session::differing`], [`Session::hunk_state`] and
+//! [`Session::excerpt`]; the rest (`set_visible`, progress, moved blocks)
+//! goes straight to [`Session::diff`]. Errors are typed, and
 //! [`Error::code`] gives each its protocol code. Wire formats are not
 //! here: the server and `rift-mcp` own their JSON.
 //!
 //! # Synchronous
 //!
-//! Every call blocks the calling thread and is safe to make from many
+//! Every call blocks the calling thread, except that [`Sessions::open`]
+//! leaves the scan to a thread it starts, and is safe to make from many
 //! threads at once; there is no async runtime. The core works with threads
 //! and `pread`, and has nothing to await: a scan is two passes over the
 //! disk, a refinement is CPU work on the scheduler's own threads, and
@@ -39,8 +43,10 @@
 //!   [`Sessions::get`]), held until the excerpt is dropped;
 //! - [`Summary`] and pages of [`Session::differing`] and moved blocks: no
 //!   heap; they borrow from the map and the block list;
-//! - the session table: a few hundred bytes per live session, outside
-//!   any budget, bounded by [`Limits::sessions`].
+//! - the session table and each session's scan thread: a few hundred
+//!   bytes per session, outside any budget, bounded by
+//!   [`Limits::sessions`] plus the closed sessions whose scan has not yet
+//!   reached its next read.
 #![forbid(unsafe_code)]
 
 mod error;
@@ -56,5 +62,5 @@ pub use session::{
 };
 pub use sessions::{
     DEFAULT_MEM, IDLE_TIMEOUT, Limits, MAX_RESPONSE_POOL, MAX_SESSION_MEM, MAX_SESSIONS,
-    MAX_TOTAL_MEM, RESPONSE_SHARE, Session, SessionId, SessionState, Sessions,
+    MAX_TOTAL_MEM, Opened, RESPONSE_SHARE, Session, SessionId, SessionState, Sessions,
 };

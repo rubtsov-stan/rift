@@ -263,7 +263,7 @@ impl Server {
         let this = self.clone();
         blocking(move || {
             let s = this.session(&pair)?;
-            let sum = s.summary();
+            let sum = s.summary().map_err(|e| e.to_string())?;
             let tally = |t: rift_session::Tally| Tally {
                 segments: t.segments,
                 a_lines: t.a_lines,
@@ -281,6 +281,7 @@ impl Server {
                 approx: tally(sum.approx),
                 first_differences: s
                     .differing()
+                    .map_err(|e| e.to_string())?
                     .take(SUMMARY_RANGES)
                     .map(|(_, x)| range(x))
                     .collect(),
@@ -314,7 +315,7 @@ impl Server {
             let line = args.line;
             // The first segment whose lines, widened by the context, hold the
             // line. A pure insertion holds the line after which it sits.
-            let hit = s.differing().find(|(_, x)| {
+            let hit = s.differing().map_err(|e| e.to_string())?.find(|(_, x)| {
                 x.a.start.0.saturating_sub(ctx) < line.max(1)
                     && line <= x.a.end.0.max(x.a.start.0) + ctx
             });
@@ -328,7 +329,7 @@ impl Server {
                     truncated: false,
                 });
             };
-            let r = render::hunk_text(s.diff(), i, ctx, max)?;
+            let r = render::hunk_text(s.diff().map_err(|e| e.to_string())?, i, ctx, max)?;
             let lines = |(start, count)| Lines {
                 start: start + 1,
                 count,
@@ -362,6 +363,7 @@ impl Server {
             let s = this.session(&args.pair)?;
             let next = s
                 .differing()
+                .map_err(|e| e.to_string())?
                 .find(|(_, x)| x.a.start.0 + 1 > args.after_line);
             Ok(Next {
                 found: next.is_some(),

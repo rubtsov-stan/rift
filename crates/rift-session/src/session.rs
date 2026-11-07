@@ -216,9 +216,12 @@ impl Session {
 
     /// The diff, for what this type does not wrap: `set_visible`,
     /// `progress`, `moved_blocks`, the segment map.
-    #[must_use]
-    pub fn diff(&self) -> &Diff<FileSource, FileSource> {
-        &self.diff
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotReady`] while the session scans or after its scan failed.
+    pub fn diff(&self) -> Result<&Diff<FileSource, FileSource>, Error> {
+        Ok(&self.built()?.diff)
     }
 
     /// The session's budget.
@@ -233,26 +236,31 @@ impl Session {
         self.bytes
     }
 
-    /// Bytes reserved from both halves of the session's budget.
-    #[must_use]
-    pub fn reserved(&self) -> Bytes {
-        Bytes(self.budget.used(Half::Skeleton).0 + self.budget.used(Half::Refine).0)
-    }
-
     /// The differing segments with their indices, in file order. Borrows
     /// the map: a page of them needs no memory of its own.
-    pub fn differing(&self) -> impl Iterator<Item = (usize, &Segment)> {
-        self.diff
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotReady`] while the session scans or after its scan failed.
+    pub fn differing(&self) -> Result<impl Iterator<Item = (usize, &Segment)>, Error> {
+        Ok(self
+            .built()?
+            .diff
             .segments()
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.status != SegmentStatus::Equal)
+            .filter(|(_, s)| s.status != SegmentStatus::Equal))
     }
 
     /// Sizes and counts. `O(segments)` time, no heap.
-    #[must_use]
-    pub fn summary(&self) -> Summary {
-        let segs = self.diff.segments();
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotReady`] while the session scans or after its scan failed.
+    pub fn summary(&self) -> Result<Summary, Error> {
+        let built = self.built()?;
+        let diff = &built.diff;
+        let segs = diff.segments();
         let tally = |st: SegmentStatus| {
             segs.iter()
                 .filter(|x| x.status == st)
@@ -263,10 +271,11 @@ impl Session {
                 })
         };
         let (differs, approx) = (tally(SegmentStatus::Differs), tally(SegmentStatus::Approx));
-        let moves = self.diff.moves();
-        Summary {
-            a_lines: self.diff.len_a(),
-            b_lines: self.diff.len_b(),
+        let moves = diff.moves();
+        let used = |h| built.budget.used(h).0;
+        Ok(Summary {
+            a_lines: diff.len_a(),
+            b_lines: diff.len_b(),
             a_bytes: self.bytes[0],
             b_bytes: self.bytes[1],
             identical: differs.segments + approx.segments == 0,
@@ -283,9 +292,9 @@ impl Session {
             },
             moved_blocks: moves.blocks().len() as u64,
             mem: self.mem,
-            reserved: self.reserved(),
-            progress: self.diff.progress(),
-        }
+            reserved: Bytes(used(Half::Skeleton) + used(Half::Refine)),
+            progress: diff.progress(),
+        })
     }
 
     /// The refinement state of segment `i`, queueing it if it has not
@@ -293,19 +302,23 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// [`Error::SegmentOutOfRange`], or [`Error::Segment`] with the error
-    /// the refinement failed with.
+    /// [`Error::NotReady`] while the session scans or after its scan
+    /// failed, [`Error::SegmentOutOfRange`], or [`Error::Segment`] with the
+    /// error the refinement failed with.
     pub fn hunk_state(&self, i: usize) -> Result<HunkState, Error> {
         self.check_segment(i)?;
-        self.diff.try_hunk(i).map_err(|error| Error::Segment {
-            segment: i,
-            mem: self.mem,
-            error,
-        })
+        self.built()?
+            .diff
+            .try_hunk(i)
+            .map_err(|error| Error::Segment {
+                segment: i,
+                mem: self.mem,
+                error,
+            })
     }
 
     fn check_segment(&self, index: usize) -> Result<(), Error> {
-        let count = self.diff.segments().len();
+        let count = self.built()?.diff.segments().len();
         if index < count {
             Ok(())
         } else {
@@ -331,16 +344,19 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// [`Error::SegmentOutOfRange`] or [`Error::LineOutOfRange`] for a
-    /// position past the end, [`Error::ResponsesBusy`] when other excerpts
+    /// [`Error::NotReady`] while the session scans or after its scan
+    /// failed, [`Error::SegmentOutOfRange`] or [`Error::LineOutOfRange`]
+    /// for a position past the end, [`Error::ResponsesBusy`] when other excerpts
     /// hold the pool, [`Error::Segment`] when a read or the segment's
     /// refinement failed.
     pub fn excerpt(&self, req: &ExcerptRequest) -> Result<Excerpt, Error> {
-        let segs = self.diff.segments();
+        let built = self.built()?;
+        let diff = &built.diff;
+        let segs = diff.segments();
         let (i, from) = match req.at {
             At::Segment(i) => (i, None),
             At::LineA(line) => {
-                let count = self.diff.len_a();
+                let count = diff.len_a();
                 if line.0 >= count {
                     return Err(Error::LineOutOfRange { line, count });
                 }
@@ -370,12 +386,12 @@ impl Session {
         let (first_a, first_b) = (seg.a.start.0 + skip, seg.b.start.0 + skip);
         let pre = ctx.min(first_a).min(first_b);
         let post = ctx
-            .min(self.diff.len_a() - seg.a.end.0)
-            .min(self.diff.len_b() - seg.b.end.0);
+            .min(diff.len_a() - seg.a.end.0)
+            .min(diff.len_b() - seg.b.end.0);
         let window_a = first_a - pre..seg.a.end.0 + post;
         let window_b = first_b - pre..seg.b.end.0 + post;
 
-        let pool = self.pool.as_ref().map_or(&self.budget, |p| &p.budget);
+        let pool = built.pool.as_ref().map_or(&built.budget, |p| &p.budget);
         let cap = pool.capacity(Half::Refine).0;
         // One line on each side and the line buffer must fit an empty
         // pool, so a small budget narrows lines instead of refusing them.
@@ -402,14 +418,14 @@ impl Session {
         let mut buf = LineBuf::new();
         let mut room = (grant - scratch) / 2;
         let opts = (max_lines, line_bytes);
-        let mut a = column(self.diff.lines_a(), window_a, opts, room, &mut buf).map_err(fail)?;
+        let mut a = column(diff.lines_a(), window_a, opts, room, &mut buf).map_err(fail)?;
         room = room * 2 - a.1;
-        let mut b = column(self.diff.lines_b(), window_b, opts, room, &mut buf).map_err(fail)?;
+        let mut b = column(diff.lines_b(), window_b, opts, room, &mut buf).map_err(fail)?;
         let used = a.1 + b.1 + scratch;
         drop(buf);
         held.shrink(Bytes(grant - used.min(grant)));
 
-        for block in self.diff.moved_blocks() {
+        for block in diff.moved_blocks() {
             mark(&mut a.0, &block.a);
             mark(&mut b.0, &block.b);
         }

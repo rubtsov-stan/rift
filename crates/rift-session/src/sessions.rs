@@ -3,18 +3,22 @@
 //! Policy:
 //! - a session holds the skeleton and the refinement workers of one
 //!   `(a, b)` pair, so later calls on the pair skip the scan;
-//! - at most [`Limits::sessions`] sessions exist, and the `--mem` budgets of
-//!   all of them (and of the ones being built) sum to at most
+//! - at most [`Limits::sessions`] sessions are live, and the `--mem`
+//!   budgets of every session that still holds memory (live, being built,
+//!   or closed while its scan winds down) sum to at most
 //!   [`Limits::total_mem`], so the server's accounted heap stays below that
-//!   figure plus one bounded response;
-//! - a new session first evicts idle ones, then the least recently used
-//!   ones, but never a session a call is using; when that is not enough the
-//!   call fails with [`Error::Busy`].
+//!   figure plus its responses; a failed session holds no budget;
+//! - a new session first evicts idle ones, then, while it does not fit,
+//!   failed ones, then the least recently used ready ones that no call is
+//!   using; a scanning session is never evicted. When that is not enough
+//!   the call fails with [`Error::Busy`].
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use rift_core::diff::Diff;
+use rift_core::diff::{Config, Diff};
+use rift_core::scan::Watch;
 use rift_core::{Budget, Bytes, Half, Reservation, Source};
 
 use crate::error::{Error, Side};
@@ -75,10 +79,9 @@ impl std::fmt::Display for SessionId {
 
 /// Where a session is in its life, as the protocol reports it.
 ///
-/// A session from [`Sessions::open`] or [`Sessions::get`] is built before
-/// the call returns, so it is always `Ready`. `rift serve` answers `open`
-/// before the scan ends and keeps the other two states for its sessions
-/// until then, as `docs/protocol.md` describes.
+/// A session from [`Sessions::open`] starts `Scanning` and turns `Ready` or
+/// `Failed` when its scan ends; one from [`Sessions::get`] is built before
+/// the call returns, so it is always `Ready`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
     /// The scan is building the segment map.
@@ -112,15 +115,137 @@ pub(crate) struct Pool {
     _held: Reservation,
 }
 
-/// The diff of one pair and the memory it was given.
+/// What a finished scan leaves: the diff and the memory it was given.
+#[derive(Debug)]
+pub(crate) struct Built {
+    pub(crate) diff: Diff<FileSource, FileSource>,
+    pub(crate) budget: Budget,
+    pub(crate) pool: Option<Pool>,
+}
+
+/// A session's share of [`Limits::total_mem`], given back once: when the
+/// scan fails or when the session is dropped.
+#[derive(Debug)]
+struct Held {
+    total: Arc<AtomicU64>,
+    mem: AtomicU64,
+}
+
+impl Held {
+    fn release(&self) {
+        // Relaxed: a counter that only bounds admission, read under the
+        // state lock; a late decrement only makes room later.
+        let mem = self.mem.swap(0, Ordering::Relaxed);
+        self.total.fetch_sub(mem, Ordering::Relaxed);
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// The diff of one pair, or the scan building it, and the memory it was
+/// given.
 #[derive(Debug)]
 pub struct Session {
     pub(crate) id: SessionId,
-    pub(crate) diff: Diff<FileSource, FileSource>,
-    pub(crate) budget: Budget,
     pub(crate) mem: Bytes,
     pub(crate) bytes: [Bytes; 2],
-    pub(crate) pool: Option<Pool>,
+    watch: Watch,
+    built: OnceLock<Result<Built, Error>>,
+    held: Held,
+}
+
+impl Session {
+    /// Where the session is in its life.
+    #[must_use]
+    pub fn state(&self) -> SessionState {
+        match self.built.get() {
+            None => SessionState::Scanning,
+            Some(Ok(_)) => SessionState::Ready,
+            Some(Err(_)) => SessionState::Failed,
+        }
+    }
+
+    /// Blocks until the scan ends and returns the state it left.
+    pub fn wait(&self) -> SessionState {
+        self.built.wait();
+        self.state()
+    }
+
+    /// The error the scan failed with, once it has.
+    #[must_use]
+    pub fn error(&self) -> Option<&Error> {
+        self.built.get().and_then(|b| b.as_ref().err())
+    }
+
+    /// Bytes the scan has covered, and of how many: twice the size of both
+    /// files, for its two passes. The first only grows, and equals the
+    /// second once the scan has succeeded.
+    #[must_use]
+    pub fn scan_progress(&self) -> (Bytes, Bytes) {
+        let total = Bytes(2 * (self.bytes[0].0 + self.bytes[1].0));
+        (self.watch.done().min(total), total)
+    }
+
+    /// The finished diff.
+    pub(crate) fn built(&self) -> Result<&Built, Error> {
+        match self.built.get() {
+            Some(Ok(b)) => Ok(b),
+            _ => Err(Error::NotReady {
+                session: self.id,
+                state: self.state(),
+            }),
+        }
+    }
+
+    /// Scans `a` and `b` and builds the diff within the session's budget,
+    /// with a response pool when `pool` is set.
+    fn build(&self, a: FileSource, b: FileSource, pool: bool) -> Result<Built, Error> {
+        let mem = self.mem;
+        let budget = Budget::new(mem);
+        let build = |error| Error::Build { mem, error };
+        // Taken before the diff, which sizes its workers and cache from
+        // what the Refine half has left.
+        let pool = if pool {
+            let share =
+                Bytes((budget.capacity(Half::Refine).0 / RESPONSE_SHARE).min(MAX_RESPONSE_POOL.0));
+            let held = budget
+                .try_reserve(Half::Refine, share)
+                .map_err(|e| build(e.into()))?;
+            Some(Pool {
+                budget: Budget::new(Bytes(2 * share.0)),
+                _held: held,
+            })
+        } else {
+            None
+        };
+        let threads = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(4);
+        let diff = Diff::with_watch(
+            Arc::new(a),
+            Arc::new(b),
+            &budget,
+            threads,
+            Config::default(),
+            &self.watch,
+        )
+        .map_err(build)?;
+        Ok(Built { diff, budget, pool })
+    }
+}
+
+/// What [`Sessions::open`] returns.
+#[derive(Debug)]
+pub struct Opened {
+    /// The session of the pair.
+    pub session: Arc<Session>,
+    /// It was live before the call, scanning or ready, and keeps the budget
+    /// it was opened with.
+    pub reused: bool,
 }
 
 #[derive(Debug)]
@@ -133,41 +258,29 @@ struct Entry {
 #[derive(Debug, Default)]
 struct State {
     live: Vec<Entry>,
-    /// Sessions being built, which hold budget but are not in `live` yet.
+    /// Sessions being built by [`Sessions::get`], which are not in `live`
+    /// yet.
     building: usize,
-    building_mem: u64,
     last_id: u64,
-}
-
-impl State {
-    fn mem(&self) -> u64 {
-        self.building_mem + self.live.iter().map(|e| e.session.mem.0).sum::<u64>()
-    }
-
-    fn fits(&self, mem: Bytes, limits: &Limits) -> bool {
-        self.live.len() + self.building < limits.sessions
-            && self.mem().saturating_add(mem.0) <= limits.total_mem.0
-    }
 }
 
 /// The sessions of a server.
 #[derive(Debug)]
 pub struct Sessions {
     state: Mutex<State>,
+    /// Budgets of every session that holds memory; see the module docs.
+    held: Arc<AtomicU64>,
     limits: Limits,
 }
 
-/// Held while a session is being built; returns its share on drop.
+/// Counts a session [`Sessions::get`] is building; uncounts it on drop.
 struct Building<'s> {
     sessions: &'s Sessions,
-    mem: Bytes,
 }
 
 impl Drop for Building<'_> {
     fn drop(&mut self) {
-        let mut s = self.sessions.lock();
-        s.building -= 1;
-        s.building_mem -= self.mem.0;
+        self.sessions.lock().building -= 1;
     }
 }
 
@@ -177,6 +290,7 @@ impl Sessions {
     pub fn new(limits: Limits) -> Self {
         Self {
             state: Mutex::default(),
+            held: Arc::default(),
             limits,
         }
     }
@@ -207,10 +321,21 @@ impl Sessions {
         self.len() == 0
     }
 
-    /// Sum of the memory budgets of the live sessions.
+    /// Sum of the memory budgets of the sessions that hold memory: the
+    /// live ones that have not failed, and the ones still winding down.
     #[must_use]
     pub fn mem(&self) -> Bytes {
-        Bytes(self.lock().mem())
+        Bytes(self.held.load(Ordering::Relaxed))
+    }
+
+    /// The live sessions, for a caller that reports on each of them.
+    #[must_use]
+    pub fn live(&self) -> Vec<Arc<Session>> {
+        self.lock()
+            .live
+            .iter()
+            .map(|e| Arc::clone(&e.session))
+            .collect()
     }
 
     /// Drops sessions that have been idle for the idle timeout and are not in
@@ -225,11 +350,14 @@ impl Sessions {
     }
 
     /// The session for `(a, b)`, built with `mem` (the default when `None`)
-    /// if none is live. `mem` is ignored for an existing session.
+    /// if none is live. `mem` is ignored for an existing session. Blocks
+    /// for the scan, its own or that of a session [`open`](Self::open)
+    /// started for the pair.
     ///
     /// A session built here has no response pool: an
     /// [`excerpt`](Session::excerpt) of it is paid from whatever its Refine
-    /// half has free. `rift-mcp` renders its answers itself and uses this.
+    /// half has free. A scan that fails leaves no session behind.
+    /// `rift-mcp` renders its answers itself and uses this.
     ///
     /// # Errors
     ///
@@ -237,27 +365,114 @@ impl Sessions {
     /// the core's error while scanning.
     pub fn get(
         &self,
-        a: (FileSource, FileId),
-        b: (FileSource, FileId),
+        (a, id_a): (FileSource, FileId),
+        (b, id_b): (FileSource, FileId),
         mem: Option<Bytes>,
     ) -> Result<Arc<Session>, Error> {
-        self.find_or_build(a, b, mem, false)
+        let key = (id_a, id_b);
+        let mem = self.check_mem(mem)?;
+        let (session, _building) = loop {
+            let mut s = self.lock();
+            if let Some(i) = s.live.iter().position(|e| e.key == key) {
+                let e = &mut s.live[i];
+                if e.session.state() == SessionState::Failed {
+                    // Replaced, as `open` would.
+                    s.live.swap_remove(i);
+                } else {
+                    e.used = Instant::now();
+                    let session = Arc::clone(&e.session);
+                    drop(s);
+                    if session.wait() == SessionState::Ready {
+                        return Ok(session);
+                    }
+                    continue;
+                }
+            }
+            self.make_room(&mut s, mem)?;
+            s.building += 1;
+            let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
+            break (session, Building { sessions: self });
+        };
+        let built = session.build(a, b, false)?;
+        // Never set before: the session was made by this call and is not
+        // in the table yet.
+        let _ = session.built.set(Ok(built));
+        // Two first calls on the same new pair both scan it and the later
+        // insert wins. That costs one extra scan and its budget while both
+        // run. A per-key build latch would fix it if concurrent first calls
+        // on one pair turn out to matter.
+        let mut s = self.lock();
+        s.live.retain(|e| e.key != key);
+        s.live.push(Entry {
+            key,
+            session: Arc::clone(&session),
+            used: Instant::now(),
+        });
+        Ok(session)
     }
 
-    /// Opens the files at `a` and `b` and returns their session, built
-    /// with `mem` (the default when `None`) if none is live, with a
+    /// Opens the files at `a` and `b` and returns their session, with a
     /// response pool for [`excerpt`](Session::excerpt).
     ///
-    /// Blocks for the scan: two passes over both files.
+    /// A live session of the pair is returned as it is, scanning or ready;
+    /// a failed one is replaced. A new one is built with `mem` (the default
+    /// when `None`) on a thread of its own: the call returns at once, with
+    /// the session [`Scanning`](SessionState::Scanning).
     ///
     /// # Errors
     ///
-    /// [`Error::File`] naming the side, then as for [`get`](Self::get).
-    pub fn open(&self, a: &str, b: &str, mem: Option<Bytes>) -> Result<Arc<Session>, Error> {
+    /// [`Error::File`] naming the side, [`Error::MemOverLimit`],
+    /// [`Error::Busy`], or [`Error::Build`] when no thread can be started
+    /// for the scan.
+    pub fn open(&self, a: &str, b: &str, mem: Option<Bytes>) -> Result<Opened, Error> {
         let file = |side, path| FileSource::open(path).map_err(|error| Error::File { side, error });
-        let a = file(Side::A, a)?;
-        let b = file(Side::B, b)?;
-        self.find_or_build(a, b, mem, true)
+        let (a, id_a) = file(Side::A, a)?;
+        let (b, id_b) = file(Side::B, b)?;
+        let key = (id_a, id_b);
+        let mem = self.check_mem(mem)?;
+        let session = {
+            let mut s = self.lock();
+            if let Some(e) = s.live.iter_mut().find(|e| e.key == key)
+                && e.session.state() != SessionState::Failed
+            {
+                e.used = Instant::now();
+                return Ok(Opened {
+                    session: Arc::clone(&e.session),
+                    reused: true,
+                });
+            }
+            s.live.retain(|e| e.key != key);
+            self.make_room(&mut s, mem)?;
+            let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
+            s.live.push(Entry {
+                key,
+                session: Arc::clone(&session),
+                used: Instant::now(),
+            });
+            session
+        };
+        let scan = Arc::clone(&session);
+        let spawned = std::thread::Builder::new()
+            .name("rift-scan".into())
+            .spawn(move || {
+                let result = scan.build(a, b, true);
+                if result.is_err() {
+                    scan.held.release();
+                }
+                // Only this thread sets the result.
+                let _ = scan.built.set(result);
+            });
+        if let Err(error) = spawned {
+            self.close(session.id);
+            return Err(Error::Build {
+                mem,
+                error: error.into(),
+            });
+        }
+        Ok(Opened {
+            session,
+            reused: false,
+        })
     }
 
     /// The live session `id`, marked as used now.
@@ -276,24 +491,29 @@ impl Sessions {
         Ok(Arc::clone(&e.session))
     }
 
-    /// Drops session `id` from the set. Calls holding it finish first; its
-    /// memory is released when the last of them does. Returns whether it
-    /// was live.
+    /// Drops session `id` from the set and stops its scan if it is still
+    /// scanning. Calls holding it finish first; its memory is released
+    /// when the last of them does, or when the scan stops at its next
+    /// read. Returns whether it was live.
     pub fn close(&self, id: SessionId) -> bool {
         let mut s = self.lock();
-        let before = s.live.len();
-        s.live.retain(|e| e.session.id != id);
-        s.live.len() < before
+        let Some(i) = s.live.iter().position(|e| e.session.id == id) else {
+            return false;
+        };
+        s.live.swap_remove(i).session.watch.cancel();
+        true
     }
 
-    fn find_or_build(
-        &self,
-        (a, id_a): (FileSource, FileId),
-        (b, id_b): (FileSource, FileId),
-        mem: Option<Bytes>,
-        pool: bool,
-    ) -> Result<Arc<Session>, Error> {
-        let key = (id_a, id_b);
+    /// Closes every session.
+    pub fn close_all(&self) {
+        for e in self.lock().live.drain(..) {
+            e.session.watch.cancel();
+        }
+    }
+
+    /// `mem`, or the default when `None`, if it is within the limit for one
+    /// session.
+    fn check_mem(&self, mem: Option<Bytes>) -> Result<Bytes, Error> {
         let mem = mem.unwrap_or(DEFAULT_MEM.min(self.limits.session_mem));
         if mem > self.limits.session_mem {
             return Err(Error::MemOverLimit {
@@ -301,80 +521,59 @@ impl Sessions {
                 limit: self.limits.session_mem,
             });
         }
-        let (_building, id) = {
-            let mut s = self.lock();
-            if let Some(e) = s.live.iter_mut().find(|e| e.key == key) {
-                e.used = Instant::now();
-                return Ok(Arc::clone(&e.session));
+        Ok(mem)
+    }
+
+    /// Evicts until a session of `mem` fits, as the module docs describe.
+    fn make_room(&self, s: &mut State, mem: Bytes) -> Result<(), Error> {
+        let idle = self.limits.idle;
+        s.live
+            .retain(|e| Arc::strong_count(&e.session) > 1 || e.used.elapsed() < idle);
+        loop {
+            let held = self.held.load(Ordering::Relaxed);
+            if s.live.len() + s.building < self.limits.sessions
+                && held.saturating_add(mem.0) <= self.limits.total_mem.0
+            {
+                return Ok(());
             }
-            let idle = self.limits.idle;
-            s.live
-                .retain(|e| Arc::strong_count(&e.session) > 1 || e.used.elapsed() < idle);
-            while !s.fits(mem, &self.limits) {
-                let lru = s
-                    .live
+            let failed = s
+                .live
+                .iter()
+                .position(|e| e.session.state() == SessionState::Failed);
+            let lru = || {
+                s.live
                     .iter()
                     .enumerate()
-                    .filter(|(_, e)| Arc::strong_count(&e.session) == 1)
+                    .filter(|(_, e)| {
+                        Arc::strong_count(&e.session) == 1
+                            && e.session.state() == SessionState::Ready
+                    })
                     .min_by_key(|(_, e)| e.used)
-                    .map(|(i, _)| i);
-                let Some(i) = lru else {
-                    return Err(Error::Busy);
-                };
-                s.live.swap_remove(i);
-            }
-            s.building += 1;
-            s.building_mem += mem.0;
-            s.last_id += 1;
-            let building = Building {
-                sessions: self,
-                mem,
+                    .map(|(i, _)| i)
             };
-            (building, SessionId(s.last_id))
-        };
-        let bytes = [a.len(), b.len()];
-        let budget = Budget::new(mem);
-        let build = |error| Error::Build { mem, error };
-        // Taken before the diff, which sizes its workers and cache from
-        // what the Refine half has left.
-        let pool = if pool {
-            let share =
-                Bytes((budget.capacity(Half::Refine).0 / RESPONSE_SHARE).min(MAX_RESPONSE_POOL.0));
-            let held = budget
-                .try_reserve(Half::Refine, share)
-                .map_err(|e| build(e.into()))?;
-            Some(Pool {
-                budget: Budget::new(Bytes(2 * share.0)),
-                _held: held,
-            })
-        } else {
-            None
-        };
-        let threads = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZero::get)
-            .min(4);
-        let diff = Diff::new(Arc::new(a), Arc::new(b), &budget, threads).map_err(build)?;
-        let session = Arc::new(Session {
-            id,
-            diff,
-            budget,
+            let Some(i) = failed.or_else(lru) else {
+                return Err(Error::Busy);
+            };
+            s.live.swap_remove(i);
+        }
+    }
+
+    /// A new session of `mem` for files of `bytes`, counted in the held
+    /// memory; the caller has made room for it.
+    fn new_session(&self, s: &mut State, mem: Bytes, bytes: [Bytes; 2]) -> Arc<Session> {
+        self.held.fetch_add(mem.0, Ordering::Relaxed);
+        s.last_id += 1;
+        Arc::new(Session {
+            id: SessionId(s.last_id),
             mem,
             bytes,
-            pool,
-        });
-        // Two first calls on the same new pair both scan it and the later
-        // insert wins. That costs one extra scan and its budget while both
-        // run. A per-key build latch would fix it if concurrent first calls
-        // on one pair turn out to matter.
-        let mut s = self.lock();
-        s.live.retain(|e| e.key != key);
-        s.live.push(Entry {
-            key,
-            session: Arc::clone(&session),
-            used: Instant::now(),
-        });
-        drop(s);
-        Ok(session)
+            watch: Watch::new(),
+            built: OnceLock::new(),
+            held: Held {
+                total: Arc::clone(&self.held),
+                mem: AtomicU64::new(mem.0),
+            },
+        })
     }
 }
 
@@ -382,6 +581,6 @@ impl Sessions {
 #[doc(hidden)]
 impl Session {
     pub fn fuzz_diff(&self) -> &Diff<FileSource, FileSource> {
-        &self.diff
+        &self.built().expect("a session from get is ready").diff
     }
 }
