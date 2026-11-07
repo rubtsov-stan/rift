@@ -84,9 +84,12 @@ The test knobs at the top of `run-linux.sh` (`RIFT_FUZZ_TESTING`, `RIFT_FUZZ_MEM
 
 ```sh
 gh workflow run fuzz.yml
+gh workflow run fuzz.yml -f target=keyed_reader -f seconds=3600
 gh run list --workflow fuzz.yml
 ```
 
-Each target gets its own runner and 10 minutes of fuzzing (`-max_total_time=600`). The corpus of each target is restored from and saved to the Actions cache, starting from the seeds in `corpus/<target>/`, so it grows from run to run. GitHub evicts caches that go unused for 7 days.
+A manual run takes two optional inputs: `target`, one target name (empty means all), and `seconds`, the fuzzing time per target (default 600, 1 to 3600). A first job checks both and stops the run before any build if either is wrong. The nightly run always uses all targets and 600 s.
+
+Each target gets its own runner and, by default, 10 minutes of fuzzing (`-max_total_time=600`). Jobs time out after 90 minutes, enough for a cold build and a 3600 s run. The corpus of each target is restored from and saved to the Actions cache, starting from the seeds in `corpus/<target>/`, so it grows from run to run. GitHub evicts caches that go unused for 7 days.
 
 A crash, timeout or out-of-memory input fails that job, and only that job: the other targets keep running. The run shows red in the Actions tab, and the failing job uploads an artifact `fuzz-<target>` with the input (`crash-*`, `timeout-*` or `oom-*`) and the libFuzzer log. Download it with `gh run download <run-id> -n fuzz-<target>` and continue as in "Turning a crash into a regression test".

@@ -1,6 +1,7 @@
 name: Fuzz
 
-# One runner per target, 10 minutes of fuzzing each. A crash, timeout or
+# One runner per target, 10 minutes of fuzzing each by default. A manual run
+# can pick one target and up to an hour (see fuzz/README.md). A crash, timeout or
 # out-of-memory input fails the job and is uploaded as an artifact. The
 # corpus of each target is kept between runs in the Actions cache, so
 # coverage builds up from night to night.
@@ -8,6 +9,15 @@ on:
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
+    inputs:
+      target:
+        description: One target to fuzz; empty fuzzes all of them
+        type: string
+        default: ""
+      seconds:
+        description: Fuzzing time per target in seconds, 1 to 3600
+        type: string
+        default: "600"
 
 permissions:
   contents: read
@@ -19,33 +29,58 @@ env:
   RUSTFLAGS: --cfg fuzzing
 
 jobs:
-  fuzz:
+  # Checks the inputs before any runner builds anything, and builds the
+  # matrix. A scheduled run has no inputs: all targets, 600 s.
+  plan:
     runs-on: ubuntu-latest
-    # A cold build takes up to about 15 minutes, then 10 minutes of fuzzing.
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      seconds: ${{ steps.plan.outputs.seconds }}
+    steps:
+      - id: plan
+        env:
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_SECONDS: ${{ inputs.seconds }}
+        run: |
+          all="scan keyed_csv keyed_ndjson keyed_copy keyed_reader pipeline unified tui_render sanitize mcp_request mcp_tools"
+          seconds=${INPUT_SECONDS:-600}
+          case $seconds in
+            ''|*[!0-9]*) echo "::error::seconds must be a whole number, got '$seconds'"; exit 1 ;;
+          esac
+          if [ "${#seconds}" -gt 4 ] || [ "$seconds" -lt 1 ] || [ "$seconds" -gt 3600 ]; then
+            echo "::error::seconds must be between 1 and 3600, got '$seconds'"
+            exit 1
+          fi
+          targets=${INPUT_TARGET:-$all}
+          for t in $targets; do
+            case " $all " in
+              *" $t "*) ;;
+              *) echo "::error::unknown target '$t'; one of: $all"; exit 1 ;;
+            esac
+          done
+          json=$(echo "$targets" | xargs -n1 | jq -R . | jq -sc .)
+          echo "targets=$json" >> "$GITHUB_OUTPUT"
+          echo "seconds=$seconds" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    needs: plan
+    runs-on: ubuntu-latest
+    # A cold build takes up to about 15 minutes, then up to 60 minutes of
+    # fuzzing.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - scan
-          - keyed_csv
-          - keyed_ndjson
-          - keyed_copy
-          - keyed_reader
-          - pipeline
-          - unified
-          - tui_render
-          - sanitize
-          - mcp_request
-          - mcp_tools
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: fuzz
-          # The eleven jobs build the same thing; one of them saves it.
-          save-if: ${{ matrix.target == 'scan' }}
+          # The jobs build the same thing; the first one saves it.
+          save-if: ${{ matrix.target == fromJSON(needs.plan.outputs.targets)[0] }}
       - name: Restore cargo-fuzz
         id: cargo-fuzz
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -70,7 +105,7 @@ jobs:
         shell: bash
         run: >
           cargo +nightly fuzz run ${{ matrix.target }} --
-          -max_total_time=600 -timeout=10 -rss_limit_mb=2048 -detect_leaks=0
+          -max_total_time=${{ needs.plan.outputs.seconds }} -timeout=10 -rss_limit_mb=2048 -detect_leaks=0
           2>&1 | tee fuzz.log
       # Saved even after a crash: the inputs found so far are worth keeping.
       - name: Save corpus
