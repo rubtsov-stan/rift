@@ -10,6 +10,8 @@
 //   open, a path containing "missing"   -> file error (not_found) for that side
 //   open, a path containing "slow"      -> the scan steps are 500 ms apart, time to see
 //                                          not_ready or to close the session mid-scan
+//   open, a path containing "busy"     -> busy (what: sessions) for that pair's first two opens, then it opens
+//   open, a path containing "stuck"    -> busy every time
 //   open, mem below 1M                  -> the scan fails: session_state failed with
 //                                          budget_exceeded and suggested_mem
 //   open, mem above limits.max_session_mem -> too_large
@@ -36,6 +38,7 @@ const CODE = {
   file: -32001,
   budget_exceeded: -32003,
   too_large: -32004,
+  busy: -32005,
   unknown_session: -32006,
   not_ready: -32008,
 };
@@ -88,6 +91,7 @@ let lastId = 0;
 // id -> { key, state, mem, scanned, timer, error, done, refined }, where
 // refined maps a segment index to its status once segment_ready was sent.
 const sessions = new Map();
+const busyTries = new Map();
 const scanTotal = 2 * (fixture.summary.a.bytes + fixture.summary.b.bytes);
 const refineTotal = fixture.summary.progress.total;
 
@@ -142,6 +146,12 @@ const METHODS = {
           reason: 'not_found',
         });
       }
+    }
+    const pair = `${p.a}\0${p.b}`;
+    const tries = (busyTries.get(pair) ?? 0) + 1;
+    busyTries.set(pair, tries);
+    if (pair.includes('stuck') || (pair.includes('busy') && tries <= 2)) {
+      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'sessions' });
     }
     const mem = p.mem === undefined ? limits.default_mem : parseMem(p.mem);
     if (mem > limits.max_session_mem) {

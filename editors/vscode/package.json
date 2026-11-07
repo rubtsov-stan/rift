@@ -205,9 +205,10 @@
     "compile": "tsc -p . --noEmit",
     "build": "tsc -p .",
     "lint": "eslint .",
-    "test": "npm run build && node out/test/run.js",
+    "test": "npm run test:unit",
     "check-mock": "node test/check-mock.js",
-    "package": "vsce package"
+    "package": "vsce package",
+    "test:unit": "npm run build && mocha out/test/unit/*.test.js"
   },
   "bugs": {
     "url": "https://github.com/rubtsov-stan/rift/issues"
