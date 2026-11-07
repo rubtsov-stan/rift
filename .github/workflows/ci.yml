@@ -66,3 +66,29 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo build --no-default-features -p rift-diff
       - run: cargo test --no-default-features -p rift-diff
+
+  # Miri runs nightly (miri.yml). A branch or pull request that adds or
+  # changes a line with `unsafe` in Rust code runs it here too.
+  unsafe-diff:
+    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      touched: ${{ steps.diff.outputs.touched }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: |
+          base=$(git merge-base "$BASE" HEAD)
+          if git diff -U0 "$base" HEAD -- '*.rs' | grep '^+' | grep -v '^+++' | grep -q unsafe; then
+            echo touched=true >> "$GITHUB_OUTPUT"
+          fi
+
+  miri:
+    needs: unsafe-diff
+    if: needs.unsafe-diff.outputs.touched == 'true'
+    uses: ./.github/workflows/miri-run.yml
