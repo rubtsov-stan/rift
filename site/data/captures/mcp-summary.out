@@ -1,0 +1,14 @@
+-> {"method":"tools/call","params":{"name":"summary","arguments":{"a":"a.sql","b":"b.sql"}}}
+<- {
+  "a_lines": 843633,
+  "b_lines": 845034,
+  "differs": {"a_lines":10936,"b_lines":12337,"segments":435},
+  "equal": {"a_lines":832697,"b_lines":832697,"segments":435},
+  "first_differences": [
+    {"a":{"count":9,"start":378},"b":{"count":8,"start":378},"status":"differs"},
+    {"a":{"count":21,"start":1006},"b":{"count":21,"start":1005},"status":"differs"},
+    ...
+  ],
+  "mem_budget_bytes": 67108864,
+  "more_differences": 415
+}

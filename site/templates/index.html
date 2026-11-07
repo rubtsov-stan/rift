@@ -53,17 +53,36 @@
 {{ m::cmdbox(code="curl --proto '=https' --tlsv1.2 -LsSf " ~ config.extra.repo_url ~ "/releases/latest/download/rift-diff-installer.sh | sh") }}
 {{ m::cmdbox(code="cargo install --git " ~ config.extra.repo_url ~ " rift-diff") }}
 <p class="note">Binaries for macOS and Linux on x86_64 and arm64, a <code>.deb</code> for Debian and Ubuntu, or from source with Rust 1.97 or later.</p>
-<p class="links"><a href="{{ get_url(path='guide/') | safe }}">Guide</a> <a href="{{ get_url(path='use-cases/') | safe }}">Use cases</a> <a href="{{ get_url(path='how-it-works/') | safe }}">How it works</a></p>
+<p class="links"><a href="{{ get_url(path='guide/') | safe }}">Guide</a> <a href="{{ get_url(path='use-cases/') | safe }}">Use cases</a> <a href="{{ get_url(path='design/') | safe }}">Design</a></p>
 </div></aside>
 <main class="plates">
 <section>{{ m::term(name="hero", kind="summary", title="a.sql, b.sql: a 64 MiB pair", typed=true, caption="Real output on a generated pair: <code>rift-gen --seed 7 --size 64M --profile sql</code>. The page shows 12 selected lines of the full summary. " ~ meta[1] ~ ", " ~ meta[2] ~ ".") }}</section>
+{%- set hunks = load_data(path="data/captures/sql-hunks.txt", format="plain") | trim -%}
+{%- set nsum = load_data(path="data/captures/sql-summary.out", format="plain") | trim | split(pat="\n") | length -%}
+<section id="what-it-does"><h2 class="cap-h">What it does</h2>
+<p class="prose-lite">Four ways to run Rift. Every output on this page ran on files made by <code>rift-gen --seed 7</code>, and each box says where it shows selected lines of a longer output.</p>
+<h3 class="cap">Plain diff and --summary <span>unified diff, then the counts</span></h3>
+<p class="prose-lite"><code>rift a b</code> writes a unified diff that <code>patch</code> applies to the first file to get the second. <code>--summary</code> counts first, so you know how much differs before you write a diff.</p>
+{{ m::term(name="land-diff", kind="diff", title="the first hunk of " ~ hunks, caption="One hunk of the full diff. Timestamps dropped, lines cut at 70 columns.") }}
+{{ m::term(name="land-summary", kind="summary", title="the counts of --summary", caption="Six of the summary's " ~ nsum ~ " lines.") }}
+<p class="note">Guide: <a href="{{ get_url(path='guide/plain-diff/') | safe }}">plain diff</a>, <a href="{{ get_url(path='guide/summary/') | safe }}">--summary</a>.</p></section>
+<section><h3 class="cap">Key mode <span>rows compared by key, not by position</span></h3>
+<p class="prose-lite">An export written in a different row order diffs by content, not by position. <code>--key</code> takes a CSV column, an NDJSON field or a <code>pg_dump</code> COPY column, and lists the keys that were added (<code>+</code>), removed (<code>-</code>) or changed (<code>~</code>), with the line of the record in each file.</p>
+{{ m::term(name="land-key", kind="keys", title="rift --key csv:id", caption="Two lines of each kind, then the number of keys of each kind in all. A 32 MiB CSV pair, same keys, shuffled rows.") }}
+<p class="note">Guide: <a href="{{ get_url(path='guide/key-mode/') | safe }}">key mode</a>. Use case: <a href="{{ get_url(path='use-cases/compare-csv-by-key/') | safe }}">compare CSV files by key</a>.</p></section>
+<section><h3 class="cap">Git <span>rift as the diff driver</span></h3>
+<p class="prose-lite">Git calls any file over 512 MiB binary and prints no diff. Name the large files in <code>.gitattributes</code> and git runs <code>rift git-diff</code> for them, with git's own headers.</p>
+{{ m::term(name="git-driver", kind="diff", title="git diff on a 640 MiB dump", caption="A scratch repository with the dump committed and then changed. The first 10 lines of the output, cut at 90 columns.") }}
+<p class="note">Guide: <a href="{{ get_url(path='guide/git/') | safe }}">git integration</a>. Use case: <a href="{{ get_url(path='use-cases/git-binary-files-differ/') | safe }}">git says &quot;Binary files differ&quot;</a>.</p></section>
+<section><h3 class="cap">MCP <span>a diff an MCP client can query</span></h3>
+<p class="prose-lite"><code>rift-mcp</code> lets an MCP client, such as an editor or a chat app, ask about the diff of two huge files without loading them. It has three tools, <code>summary</code>, <code>hunks_at</code> and <code>next_difference</code>, and every answer has a size limit.</p>
+{{ m::term(name="mcp-summary", title="rift-mcp, one tools/call", caption="Captured over standard input and output after the initialize handshake. The call is shown without its jsonrpc and id fields. The answer is cut: its text copy, the byte counts and all but two of the first 20 ranges are left out. rift-mcp builds its diff with a 64 MiB budget unless the call sets <code>mem</code>, so the counts differ from the CLI's.") }}
+<p class="note">Guide: <a href="{{ get_url(path='guide/mcp/') | safe }}">MCP server</a>.</p></section>
 <section class="plate band" id="scale"><h2>The file grows. The heap does not.</h2>
 <div class="ledhead"><span>Input size, to scale up to 2 GiB</span><span>Peak heap against the 256 MiB limit</span></div>
 {{ m::ledger() }}
 {%- set lin = load_data(path="data/bench-linux.json") %}
 <p class="src">Rift at <code>--mem 256M</code> on generated SQL pairs, full diff, {{ lin.host.cpu }}, {{ lin.host.ram_gb }} GB RAM, {{ lin.host.os }}, files in {{ lin.host.scratch }}, median of three runs, {{ lin.host.date }}. The gauge is the 256 MiB limit; the bar is Rift's own peak heap count. Source: <code>{{ lin.report }}</code>. The largest pair measured so far is 10 GiB, on a Mac (see the table below).</p></section>
-<section><p class="cap">The unified diff <span>{{ load_data(path="data/captures/sql-hunks.txt", format="plain") | trim }} hunks in all</span></p>
-{{ m::term(name="sql-diff-excerpt", kind="diff", title="the first and the third hunk", caption="Lines cut at 70 columns, timestamps dropped.") }}</section>
 <section><p class="cap">What a demo looks like <span>summary, then the terminal view</span></p>
 {{ m::media(ready=true, mp4="demo.mp4", gif="demo.gif", poster="demo-poster.jpg", width=960, height=540, alt="rift --summary on a 64 MiB pair, then the terminal view jumping between differences") }}</section>
 <section id="benchmarks"><p class="cap">1 GiB pair, full diff <span>Apple M1</span></p>{{ m::chart() }}

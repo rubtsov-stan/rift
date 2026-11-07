@@ -1,0 +1,10 @@
+diff --git a/dump.sql b/dump.sql
+index 86d4681..0000000 100644
+--- a/dump.sql
++++ b/dump.sql
+@@ -380,7 +380,6 @@
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (380, 514366, 's
+ 381	178722	cancelled	2930.54	wmojdqnzik
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (382, 679322, 'c
+-383	668107	shipped	5325.74	zu
+ INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (384, 442363, 'n
