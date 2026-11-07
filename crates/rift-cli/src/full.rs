@@ -31,7 +31,7 @@ fn threads() -> usize {
     thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
-fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
+pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
     let budget = Budget::new(mem);
     Ok(Diff::with_config(
         Arc::clone(&files.a),

@@ -2,7 +2,9 @@
 #![deny(unsafe_code)]
 
 mod full;
+mod gitdiff;
 mod keyed;
+mod lfs;
 mod source;
 mod summary;
 
@@ -53,6 +55,9 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
 }
 
 fn main() -> ExitCode {
+    if let Some(code) = gitdiff::dispatch(&std::env::args_os().collect::<Vec<_>>()) {
+        return code;
+    }
     let args = Args::parse_from(tui_alias(std::env::args_os().collect()));
     match run(&args) {
         Ok(code) => code,
