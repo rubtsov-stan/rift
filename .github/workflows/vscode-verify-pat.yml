@@ -1,9 +1,16 @@
 name: VS Code token check
 
-# Checks that the VSCE_PAT secret can publish for the extension's publisher.
-# Manual only; it packages and publishes nothing.
+# Checks that the VSCE_PAT and OVSX_PAT secrets can publish for the
+# extension's publisher on the Marketplace and its namespace on Open VSX.
+# Manual only; it packages and publishes nothing. The create_namespace input
+# creates the Open VSX namespace once, before the first publish.
 on:
   workflow_dispatch:
+    inputs:
+      create_namespace:
+        description: Create the Open VSX namespace first
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,8 +28,19 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      # The pinned vsce from package-lock.json; install scripts are not needed.
+      # The pinned vsce and ovsx from package-lock.json; install scripts are not needed.
       - run: npm ci --ignore-scripts
-      - env:
+      - run: echo "PUBLISHER=$(node -p 'require("./package.json").publisher')" >> "$GITHUB_ENV"
+      - name: Marketplace
+        env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx vsce verify-pat "$(node -p 'require("./package.json").publisher')"
+        run: npx vsce verify-pat "$PUBLISHER"
+      - name: Create the Open VSX namespace
+        if: inputs.create_namespace
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx create-namespace "$PUBLISHER"
+      - name: Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx verify-pat "$PUBLISHER"
