@@ -316,9 +316,10 @@ async function main() {
 
   assert.strictEqual(await ok('set_visible', { session: s, a: { start: 8, count: 5 } }), null);
   await until(() => notes.some((n) => n.method === 'segment_ready' && n.params.index === 1), 'segment_ready 1');
-  const last = notes.filter((n) => n.method === 'progress' && n.params.session === s).pop().params;
-  assert.strictEqual(last.phase, 'refine');
-  assert.strictEqual(last.done, last.total);
+  // The progress that follows a segment_ready can arrive in a later read.
+  const lastProgress = () => notes.filter((n) => n.method === 'progress' && n.params.session === s).pop().params;
+  await until(() => lastProgress().done === lastProgress().total, 'refinement progress at its total');
+  assert.strictEqual(lastProgress().phase, 'refine');
 
   // Malformed input gets an error, not a crash.
   write('{not json');
