@@ -55,11 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In key mode, an error after some changes were printed now says on
   standard error that the output above is incomplete and must be
   discarded. Check the exit status before using key output.
-- A budget error ends with the `--mem` these files need at least, in
-  every mode: `refine budget exceeded: requested 5290144 bytes, 5242880
-  available; these files need --mem of at least 10333K`. A run at that
-  limit can stop at a later stage and name a higher one. A diff whose
-  refine half cannot hold one worker reports the whole amount at once.
+- A budget error ends with a `--mem` to rerun with, in every mode:
+  `refine budget exceeded: requested 5290144 bytes, 5242880 available;
+  rerun with --mem 10333K`. It is not a lower bound: a smaller limit can
+  take another path and succeed. A run at that limit can stop at a later
+  stage and name a higher one. A diff whose refine half cannot hold one
+  worker reports the whole amount at once.
 - There is no fixed minimum `--mem`. The 0.1.0 notes said a budget below
   about 12 MiB is refused; the smallest budget that works depends on the
   files.

@@ -35,7 +35,7 @@ fn text(changed: bool) -> String {
 /// The `--mem` a refusal advises, if it is one.
 fn advice(out: &Output) -> Option<String> {
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let (_, mem) = stderr.split_once("; these files need --mem of at least ")?;
+    let (_, mem) = stderr.split_once("; rerun with --mem ")?;
     Some(mem.trim_end().to_owned())
 }
 

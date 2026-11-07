@@ -145,10 +145,10 @@ combined with \fB\-\-key\fR.
 \fB\-\-mem\fR \fISIZE\fR
 Sets the heap limit. The default is 256M. The smallest limit that works
 depends on the files. Below it, Rift exits with status 2 and a budget
-error that ends with a lower bound for these files, such as
-\fBthese files need \-\-mem of at least 10333K\fR. A run at that limit
-can still stop at a later stage and name a higher one. In key mode a
-larger limit means fewer passes over the files.
+error that ends with a limit to rerun with, such as
+\fBrerun with \-\-mem 10333K\fR. It is not a lower bound, and a run at
+that limit can still stop at a later stage and name a higher one. In key
+mode a larger limit means fewer passes over the files.
 .SH EXIT STATUS
 Exit status follows \fBdiff\fR(1).
 .TP

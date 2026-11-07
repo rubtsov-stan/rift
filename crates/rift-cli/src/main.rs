@@ -66,9 +66,11 @@ fn main() -> ExitCode {
     }
 }
 
-/// For a budget refusal, the `--mem` it proves necessary: the half held
-/// its capacity minus what was free, and needs that plus the request.
-/// Only a lower bound, since a later stage may need more.
+/// For a budget refusal, a `--mem` to rerun with: the half held its
+/// capacity minus what was free, and needs that plus the request. Not a
+/// lower bound, since what a half holds depends on --mem and a smaller
+/// limit can take another path, nor always enough, since a later stage
+/// may need more.
 fn mem_advice(err: &anyhow::Error, mem: Bytes) -> Option<String> {
     let refusal = err.chain().find_map(|e| match e.downcast_ref() {
         Some(rift_core::Error::Budget(b)) => Some(*b),
@@ -78,7 +80,7 @@ fn mem_advice(err: &anyhow::Error, mem: Bytes) -> Option<String> {
     let held = cap.saturating_sub(refusal.available.0);
     let need = held.checked_add(refusal.requested.0)?.checked_mul(2)?;
     // A refusal that does not exceed its half proves nothing about --mem.
-    (need > mem.0).then(|| format!("these files need --mem of at least {}", size(need)))
+    (need > mem.0).then(|| format!("rerun with --mem {}", size(need)))
 }
 
 /// `bytes` rounded up to the largest unit that keeps the rounding under
@@ -113,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn a_budget_refusal_names_the_mem_it_needs() {
+    fn a_budget_refusal_names_a_mem_to_rerun_with() {
         let refusal = |half, requested, available| {
             anyhow::Error::from(rift_core::Error::Budget(BudgetExceeded {
                 half,
@@ -126,7 +128,7 @@ mod tests {
         let err = refusal(rift_core::Half::Refine, 2 << 20, 512 << 10);
         assert_eq!(
             mem_advice(&err, mem).as_deref(),
-            Some("these files need --mem of at least 10240K")
+            Some("rerun with --mem 10240K")
         );
         let err = err.context("the changes printed above are incomplete");
         assert!(mem_advice(&err, mem).is_some(), "found under a context");
