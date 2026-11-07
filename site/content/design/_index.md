@@ -50,9 +50,9 @@ The budget also changes the result, within limits. A larger `--mem` buys a finer
 <figcaption>Stages 1 to 3 build the map in two passes over the disk and are paid from one half of the budget. Stage 4 runs only where an output needs a line-level diff, from the other half.</figcaption>
 </figure>
 
-**Scan.** Rift reads each file through `pread` into fixed buffers, finds line ends with `memchr` and hashes every line with xxh3. It keeps a sample: the lines whose hash has its low `L` bits at zero, plus a sparse index of line starts. Both files pick the same lines, because the choice depends on the line's bytes alone. Scanning covers the details and how `L` follows from the budget.
+**Scan.** Rift reads each file through `pread` into fixed buffers, finds line ends with `memchr` and hashes every line with xxh3. It keeps a sample: the lines whose hash has its low `L` bits at zero, plus a sparse index of line starts. Both files pick the same lines, because the choice depends on the line's bytes alone. [Scanning](@/design/scanning/index.md) covers the details and how `L` follows from the budget.
 
-**Anchors.** A sampled line that occurs once in each file is a candidate anchor. The longest chain of candidates in the same order on both sides cuts the pair into gaps, as patience diff does. Where no line is unique, windows of three samples serve as anchors instead. See Anchors and the skeleton.
+**Anchors.** A sampled line that occurs once in each file is a candidate anchor. The longest chain of candidates in the same order on both sides cuts the pair into gaps, as patience diff does. Where no line is unique, windows of three samples serve as anchors instead. See [Anchors and the skeleton](@/design/anchors.md).
 
 **Compare gaps.** A gap with the same line count and byte length on both sides is streamed and compared byte by byte. A run of such gaps that match becomes one `Equal` segment; anything else is `Differs`. This is the second pass over the disk, and it confirms the anchors as a side effect.
 
