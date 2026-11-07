@@ -28,6 +28,10 @@ impl std::fmt::Display for Half {
 }
 
 /// A reservation did not fit.
+///
+/// `available` is what the half had free when it refused, so the half held
+/// its capacity minus `available`, and a half of at least that plus
+/// `requested` is needed to get past this point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("{half} budget exceeded: requested {requested} bytes, {available} available")]
 pub struct BudgetExceeded {
@@ -35,7 +39,8 @@ pub struct BudgetExceeded {
     pub half: Half,
     /// Bytes requested.
     pub requested: Bytes,
-    /// Bytes free in that half at the time.
+    /// Bytes free in that half at the time, counting bytes the caller
+    /// could have released first.
     pub available: Bytes,
 }
 

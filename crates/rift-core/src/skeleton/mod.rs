@@ -243,7 +243,7 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
         return Err(BudgetExceeded {
             half: Half::Skeleton,
             requested: Bytes(COARSEST_MAP_BYTES),
-            available: Bytes(available),
+            available: Bytes(available + releasable),
         }
         .into());
     }
