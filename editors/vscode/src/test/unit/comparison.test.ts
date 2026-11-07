@@ -46,7 +46,8 @@ describe('Comparison', () => {
   it('marks a segment approx when its refinement ends so', async () => {
     const { server, cmp } = setup();
     await cmp.open();
-    await until(() => cmp.state === 'ready');
+    // `ready` is set before the first page of segments has arrived.
+    await until(() => cmp.state === 'ready' && cmp.segments.length > 0);
     await cmp.hunk({ segment: 1 }, 3);
     await until(() => cmp.segments[0].status === 'approx');
     server.dispose();
