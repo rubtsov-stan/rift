@@ -17,7 +17,7 @@ The core never opens a file. It reads through a `Source` trait with one method t
 
 Sources: `crates/rift-core/src/source.rs`, trait `Source`; `crates/rift-cli/src/source.rs`, `FileSource::open` and `FileSource::read_at`.
 
-Rift does not map the files into memory. A mapped page that the program has read counts in its resident set until the kernel reclaims it, so the resident set would grow with the file while the heap limit stayed put. To see the size of the effect, count the lines of a 256 MiB file both ways in Python on an Apple M1: through `mmap` the process peaked at 270 MiB resident (283,328,512 bytes), and through `os.preadv` with one 1 MiB buffer at 15.3 MiB (16,007,168 bytes). Alternatives has the full argument.
+Rift does not map the files into memory. A mapped page that the program has read counts in its resident set until the kernel reclaims it, so the resident set would grow with the file while the heap limit stayed put. To see the size of the effect, count the lines of a 256 MiB file both ways in Python on an Apple M1: through `mmap` the process peaked at 270 MiB resident (283,328,512 bytes), and through `os.preadv` with one 1 MiB buffer at 15.3 MiB (16,007,168 bytes). [Alternatives](@/design/alternatives.md) has the full argument.
 
 Measured 2026-11-07, Apple M1, 16 GiB, macOS 27.0.1, warm page cache: `/usr/bin/time -l python3 -I mm.py a mmap|pread` on `a` from `rift-gen --seed 7 --size 256M --profile shuffled --rows csv`. The script walks the file with `mmap.find(b"\n")`, or reads it with `os.preadv` into a 1 MiB `bytearray` and counts newlines.
 

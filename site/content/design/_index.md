@@ -64,7 +64,7 @@ Sources: `crates/rift-core/src/diff/mod.rs`, `Diff::with_watch`; `skeleton/mod.r
 
 ## What you can rely on
 
-The output is a correct edit script: applied to A, it yields B. A line is reported equal only after Rift compared its bytes; a matching hash is never enough. Regions that Rift could not diff line by line within the budget carry an `approx` mark in the unified diff, the terminal view and the statistics. Correctness lists the tests and fuzz targets behind each of these claims.
+The output is a correct edit script: applied to A, it yields B. A line is reported equal only after Rift compared its bytes; a matching hash is never enough. Regions that Rift could not diff line by line within the budget carry an `approx` mark in the unified diff, the terminal view and the statistics. [Correctness](@/design/correctness.md) lists the tests and fuzz targets behind each of these claims.
 
 You give up two things. The diff is not minimal, as with patience diff in git, and it can change with `--mem`: on a 256 MiB pair of the generator's `shuffled` profile, the diff at `--mem 64M` has 604,516 lines and the one at `--mem 256M` 603,585, and each patches A into B (checked with `gpatch` on 2026-11-07, Apple M1). A moved block shows as a deletion and an insertion in the unified diff; Rift lists moved blocks separately, and finds most of them, as [Moved blocks](@/design/moves.md) measures.
 
