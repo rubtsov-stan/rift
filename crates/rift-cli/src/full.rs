@@ -81,6 +81,12 @@ pub fn interactive(_: &Files<'_>, _: Bytes) -> anyhow::Result<ExitCode> {
 /// Opens the terminal interface on the diff. Exit code as for the diff.
 #[cfg(feature = "tui")]
 pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
+    use std::io::IsTerminal;
+    // Before the scan, which can take minutes on a large pair.
+    anyhow::ensure!(
+        io::stdin().is_terminal() && io::stdout().is_terminal(),
+        "-i needs a terminal"
+    );
     let diff = build(files, mem)?;
     let identical = rift_core::DiffView::segments(&diff)
         .iter()

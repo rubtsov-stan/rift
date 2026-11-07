@@ -87,7 +87,8 @@ Quit.
 .RE
 .IP
 \fBrift tui\fR is \fBrift \-i\fR. With fewer than two arguments after
-\fBtui\fR, it is a file name.
+\fBtui\fR, it is a file name. When standard input or output is not a
+terminal, it exits with status 2 before it reads the files.
 .TP
 \fB\-\-key\fR \fISPEC\fR
 Compares records by key and ignores their order. Prints one line per

@@ -74,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Header timestamps at the ends of the time range no longer overflow.
+- `-i` and `rift tui` exit with status 2 and `-i needs a terminal` when
+  standard input or output is not a terminal, instead of panicking.
 
 ## [0.1.0] - 2026-11-05
 

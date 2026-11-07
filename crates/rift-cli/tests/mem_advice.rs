@@ -90,22 +90,6 @@ fn a_full_diff_short_of_one_worker_needs_one_rerun() {
     assert_eq!(last.status.code(), Some(1));
 }
 
-/// The terminal view builds the diff as the unified diff does, and is
-/// refused before it touches the terminal.
-#[cfg(feature = "tui")]
-#[test]
-fn the_terminal_view_is_refused_like_the_diff() {
-    let dir = tempfile::tempdir().unwrap();
-    let (a, b) = pair(dir.path(), &text(false), &text(true));
-    for mem in ["16K", "8M"] {
-        let view = rift(&["-i"], mem, &a, &b);
-        assert_eq!(view.status.code(), Some(2));
-        let diff = rift(&[], mem, &a, &b);
-        assert!(advice(&view).is_some(), "{mem}");
-        assert_eq!(view.stderr, diff.stderr, "{mem}");
-    }
-}
-
 #[test]
 fn key_mode_advises_a_mem_that_works() {
     let dir = tempfile::tempdir().unwrap();
