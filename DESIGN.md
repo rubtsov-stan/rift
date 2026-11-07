@@ -1,15 +1,17 @@
 # Rift design
 
-Rift compares text files of tens to hundreds of gigabytes under a hard,
-user-set heap limit (`--mem`, default 256 MiB), with instant navigation
-through the differences in a terminal interface. This document is the
+Rift compares large text files under a hard, user-set heap limit
+(`--mem`, default 256 MiB), with instant navigation through the
+differences in a terminal interface. The largest pair measured so far is
+10 GiB. This document is the
 reference for the algorithm, the memory invariant and the guarantees.
 If code and this document disagree, the document wins until it is amended.
 
 ## Problem
 
-Classic diff holds both files in memory. GNU diff on two 40 GB files needs
-on the order of 100 GB of RAM, so a laptop or a CI runner cannot run it.
+Classic diff holds both files in memory. GNU diff did not run on a 10 GiB
+pair on a machine with 16 GB of RAM, so a laptop or a CI runner cannot
+run it.
 Existing workarounds either split the files into fixed chunks and diff each
 chunk, which breaks as soon as an insertion shifts a chunk boundary, or
 compare files as sets of lines, which loses order and repeats and is no
@@ -131,16 +133,19 @@ number of anchors `m`. Detailed work happens only where the user looks.
 
 - The diff is not minimal, as with patience diff in git.
 - Whole-file row reordering (a dump with a different row order) is outside a
-  line-based diff. A key-based comparison mode is a candidate for later.
+  line-based diff. Key mode (0.2) compares such files by record; the line
+  diff still shows a moved block as a deletion and an insertion.
 - Windows is out of scope. The only system call required is `pread`;
   sequential-read hints (`posix_fadvise` on Linux, `F_RDAHEAD` on macOS)
   are optional.
 
 ## Blind spots
 
-- Regions without unique lines (identical lines, repeated CSV values). In the
-  MVP these fall back to Myers with a cutoff and an Approx mark. After the
-  MVP: shingle anchors, hashes of a window of `w` lines.
+- Regions without unique lines (identical lines, repeated CSV values). In
+  0.1 these fell back to Myers with a cutoff and an Approx mark. Since 0.2,
+  shingle anchors, hashes of a window of `w` samples, cover most of them
+  (see "Shingle anchors"); a region too large for the budget is still
+  marked Approx.
 - Lines longer than the read buffer are hashed in streaming mode and shown
   truncated.
 - Hash collisions cause a false match only if the byte check is skipped;
@@ -157,7 +162,7 @@ before the main work.
 | H2. Scanning is bound by the disk, not the CPU | scanner throughput against `cat file > /dev/null` on the same machine | profile, batch the hashing |
 | H3. Lazy refinement of the visible hunk fits in 100 ms | key-to-frame latency in the terminal interface | show a coarse hunk first, then refine |
 
-## MVP criteria
+## MVP criteria (0.1)
 
 The MVP is done when every item below is confirmed reproducibly by a
 script in the repository. The numbers are targets; they were set before the
@@ -165,7 +170,8 @@ spike and may be revised against its results.
 
 - **Memory.** Two synthetic 50 GB files with 0.1% of lines changed: peak
   heap stays at or below `--mem` (default 256 MiB), confirmed by the
-  allocator counter and by peak RSS.
+  allocator counter and by peak RSS. The largest pair run so far is
+  10 GiB; no 50 GB pair has been run.
 - **Correctness.** At least 10 000 proptest cases in which the edit script
   applied to A yields exactly B, plus differential tests against
   `git diff --no-index --patience` on a corpus of small files.
@@ -194,8 +200,8 @@ it uses established crates: `memchr`, `xxhash-rust`, `rayon`, `clap`,
 interface; `proptest`, `imara-diff`, `divan` and `tempfile` for tests and
 benchmarks.
 
-`unsafe` is not needed for the MVP. It is allowed only where a profile proves
-the gain, with a `// SAFETY:` comment.
+`unsafe` is allowed only where a profile proves the gain or std has no safe
+call, with a `// SAFETY:` comment. SECURITY.md lists every block.
 
 ## Module contracts
 
@@ -331,7 +337,7 @@ with room for the line index. `L = 7` gives 49 MiB.
 
 H1 holds on these data sets. The caveat: every set has a unique id per row,
 so this says nothing about dumps without one. The blind spot stays as
-described above, and shingle anchors stay after the MVP.
+described above; shingle anchors, added in 0.2, address it.
 
 ### H2: scan throughput
 
@@ -368,13 +374,13 @@ planned.
 
 ## 0.2
 
-0.2 adds four features to the MVP: shingle anchors, key mode, moved blocks
+0.2 added four features to the MVP: shingle anchors, key mode, moved blocks
 and an MCP server. The contracts they share went in first, so each feature
 stays inside its own module and none of them edits a shared file. A
-performance pass over the skeleton follows shingle anchors, and the
-Homebrew installer comes back once the tap exists. The persistent index and
-the GUI wait for 0.3: the index writes files next to user data and needs
-its own design for safety and invalidation.
+performance pass over the skeleton followed shingle anchors, and the
+Homebrew installer comes back once the tap exists. The persistent index
+and a GUI were left out of 0.2: the index writes files next to user data
+and needs its own design for safety and invalidation.
 
 ### Contracts
 
@@ -383,8 +389,8 @@ samples of both files and the budget, and returns `Anchors`: pairs of
 sample indices, strictly increasing in A, with no B index used twice, and a
 skeleton-half reservation that covers them. Candidates are hash matches;
 the skeleton confirms the ones it keeps. `anchors::select` alone decides
-which sources run, and both the skeleton and the resampler call it. Today
-it runs `UniqueLines`, the MVP's selection unchanged.
+which sources run, and both the skeleton and the resampler call it. It
+runs `UniqueLines`, then adds shingle anchors in the gaps they leave.
 
 **`OffChain`** (`skeleton`). The candidates the chain search leaves out,
 as `[line in A, line in B]` pairs in A order, from `Skeleton::off_chain`,
@@ -583,7 +589,10 @@ bound by the disk: `--summary` takes 2.2 times `cat` and the full diff
 spends 93% of its samples in `pread`, mostly the reads of differing
 regions.
 
-## Clients
+## Clients (0.3)
+
+`rift-mcp` ships in 0.2. The protocol, `rift serve`, `rift-session` and the
+VS Code extension are on `main` and unreleased.
 
 One protocol serves every client that is not the terminal interface:
 `rift serve`, JSON-RPC 2.0 over standard input and output with LSP's
