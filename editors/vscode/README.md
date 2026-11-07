@@ -1,10 +1,9 @@
 # Rift for VS Code
 
-Compare two text files of tens to hundreds of gigabytes without opening
-them in an editor. The Rift side panel lists the differing segments and the
-moved blocks. Selecting one opens VS Code's own diff editor on just that
-excerpt, so the native diff UI works on files far beyond what VS Code can
-load.
+Compare two large text files without opening them in an editor. The Rift
+side panel lists the differing segments and the moved blocks. Selecting one
+opens VS Code's own diff editor on just that excerpt, so the native diff UI
+works on files far beyond what VS Code can load.
 
 ![The Rift panel on a 1 GiB pair: a list of differences, then a two-pane diff of one of them](media/rift-demo.gif)
 

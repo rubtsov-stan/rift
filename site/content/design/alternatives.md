@@ -5,7 +5,7 @@ weight = 8
 [extra]
 nav = "Alternatives"
 h1 = "Alternatives considered"
-lead = "Each of these approaches works well somewhere. This page says where, and which of Rift's constraints rules it out for files of tens of gigabytes."
+lead = "Each of these approaches works well somewhere. This page says where, and which of Rift's constraints rules it out for large files."
 summary = "Whole-file Myers, sort-based diffs, mmap, fixed chunks and external-memory approaches, against Rift's constraints."
 +++
 

@@ -1,7 +1,7 @@
 {
   "name": "rift-vscode",
   "displayName": "Rift",
-  "description": "Compare text files of tens to hundreds of GB with Rift, one difference at a time.",
+  "description": "Compare large text files with Rift, one difference at a time.",
   "version": "0.3.0",
   "publisher": "rubtsov-stan",
   "license": "MIT OR Apache-2.0",
