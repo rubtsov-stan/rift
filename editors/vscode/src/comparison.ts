@@ -43,7 +43,16 @@ export class Comparison {
   // Opens the pair, or replaces a failed session of it. Throws what `open` throws.
   async open(mem = this.mem): Promise<void> {
     this.reset();
-    const r = await this.server.request<OpenResult>('open', { a: this.a, b: this.b, mem });
+    let r: OpenResult;
+    try {
+      r = await this.server.request<OpenResult>('open', { a: this.a, b: this.b, mem });
+    } catch (e) {
+      // The pair has no session now; show why instead of a spinner.
+      this.state = 'failed';
+      this.error = e instanceof RpcError ? { code: e.code, message: e.message, data: e.data } : { code: -32603, message: String(e) };
+      this.events.change();
+      throw e;
+    }
     if (this.closed) return;
     this.mem = mem;
     this.session = r.session;
@@ -108,6 +117,7 @@ export class Comparison {
 
   private async ready(): Promise<void> {
     this.state = 'ready';
+    this.progress = undefined;
     try {
       await this.refreshSummary();
       await this.loadSegments();
@@ -125,6 +135,7 @@ export class Comparison {
     const s = await this.call<Summary>('summary', {});
     if (s && session === this.session) {
       this.summary = s;
+      if (s.progress) this.progress = s.progress;
       this.events.change();
     }
   }
@@ -177,4 +188,17 @@ export class Comparison {
       throw e;
     }
   }
+}
+
+export type RerunOffer = { mem: string } | { mem: string; limit: number };
+
+// What to offer after a scan failed on the budget: the server's suggested
+// budget, or the same with the server's limit when that is over it.
+export function rerunOffer(error: RpcErrorObject | undefined, maxSessionMem: number | undefined): RerunOffer | undefined {
+  if (error?.code !== Code.budgetExceeded) return undefined;
+  const mem = error.data?.suggested_mem;
+  const bytes = error.data?.suggested_mem_bytes;
+  if (typeof mem !== 'string') return undefined;
+  if (maxSessionMem !== undefined && typeof bytes === 'number' && bytes > maxSessionMem) return { mem, limit: maxSessionMem };
+  return { mem };
 }
