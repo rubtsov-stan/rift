@@ -52,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         # diff does not finish within the timeout under Miri.
-        filter: [scan::, skeleton::, moves::, keyed::, anchors::tests::many_samples]
+        filter: ["scan::", "skeleton::", "moves::", "keyed::", "anchors::tests::many_samples"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal --component miri
