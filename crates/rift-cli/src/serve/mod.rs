@@ -80,7 +80,6 @@ pub struct Flight {
 pub struct Server {
     sessions: Sessions,
     max_session_mem: Bytes,
-    max_total_mem: Bytes,
     default_mem: Bytes,
     out: SyncSender<Box<dyn Body>>,
     flights: Mutex<Vec<Arc<Flight>>>,
@@ -176,7 +175,7 @@ impl Server {
             "limits": {
                 "max_sessions": MAX_SESSIONS,
                 "max_session_mem": self.max_session_mem.0,
-                "max_total_mem": self.max_total_mem.0,
+                "max_total_mem": self.sessions.limits().total_mem.0,
                 "default_mem": self.default_mem.0,
                 "idle_timeout_secs": null,
                 "max_page": MAX_PAGE,
@@ -296,7 +295,6 @@ fn run(cli: &ServeArgs) -> anyhow::Result<()> {
             idle: Duration::MAX,
         }),
         max_session_mem: cli.max_session_mem,
-        max_total_mem: cli.max_total_mem,
         default_mem: DEFAULT_MEM.min(cli.max_session_mem),
         out: tx,
         flights: Mutex::default(),

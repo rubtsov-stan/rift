@@ -135,7 +135,7 @@ fn initialize_comes_first_and_reports_the_limits() {
         json!({
             "max_sessions": 4,
             "max_session_mem": 512u64 << 20,
-            "max_total_mem": 1u64 << 30,
+            "max_total_mem": (1u64 << 30) - (8 << 20),
             "default_mem": 256u64 << 20,
             "idle_timeout_secs": null,
             "max_page": 1000,
@@ -153,7 +153,11 @@ fn the_defaults_are_one_and_two_gibibytes() {
     let mut c = Client::start(&[]);
     let limits = c.initialize()["limits"].clone();
     assert_eq!(limits["max_session_mem"], 1u64 << 30);
-    assert_eq!(limits["max_total_mem"], 2u64 << 30);
+    assert_eq!(
+        limits["max_total_mem"],
+        (2u64 << 30) - (8 << 20),
+        "less the reserve"
+    );
     clean_exit(c);
 }
 

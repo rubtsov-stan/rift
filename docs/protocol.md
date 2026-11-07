@@ -83,7 +83,7 @@ Result:
   "limits": {
     "max_sessions": 4,
     "max_session_mem": 1073741824,
-    "max_total_mem": 2147483648,
+    "max_total_mem": 2139095040,
     "default_mem": 268435456,
     "idle_timeout_secs": null,
     "max_page": 1000,
@@ -106,12 +106,16 @@ these numbers; it does not assume them.
 | `--max-session-mem SIZE` | `max_session_mem` | `1G` |
 | `--max-total-mem SIZE` | `max_total_mem` | `2G` |
 
+`max_total_mem` is what sessions may use in total: the flag less the
+8 MiB the server keeps for its own buffers, which lie outside it.
+
 `SIZE` is written as for `--mem`. The other numbers are fixed:
-`max_sessions` 4, `default_mem` 256 MiB (as `--mem`), `max_page` 1000,
-`max_lines` 5000, `max_line_bytes` 65536, `max_context` 100, and
-`idle_timeout_secs` `null`: `rift serve` drops a session only when the
-client closes it or a new one needs its room. `rift-mcp` keeps its own
-limits (256 MiB per diff, 512 MiB in all, five minutes idle).
+`max_sessions` 4, `default_mem` 256 MiB (as `--mem`, at most
+`max_session_mem`), `max_page` 1000, `max_lines` 5000, `max_line_bytes`
+65536, `max_context` 100, and `idle_timeout_secs` `null`: `rift serve`
+drops a session only when the client closes it or a new one needs its
+room. `rift-mcp` keeps its own limits (256 MiB per diff, 512 MiB in
+all, five minutes idle).
 
 ### `open`
 
@@ -383,8 +387,8 @@ session finish; its memory is released when the last one does.
 
 - `progress`, phase `scan`: bytes the scan has read, of `total`, which
   is twice the size of both files (two passes). `done` only grows and
-  reaches `total` when the scan ends. Phase `refine`: segments refined
-  so far, of `total`. Sent while the work advances, at most 20 per
+  reaches `total` when the scan succeeds; a failed scan stops short.
+  Phase `refine`: segments refined so far, of `total`. Sent while the work advances, at most 20 per
   second per session, and once more when `done` reaches `total`.
 - `session_state`: the scan ended. Sent once per session, after the last
   scan `progress`; `error` is the error object described under
