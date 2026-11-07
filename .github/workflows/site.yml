@@ -1,0 +1,113 @@
+name: Site
+
+# Every push builds the site. Pushes to main also deploy it, and a nightly
+# run rebuilds main so the GitHub numbers on the page stay current. Other
+# branches build, check links and run Lighthouse, and never deploy.
+on:
+  push:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Zola 0.23 replaced shortcodes and macros, which the templates use.
+  ZOLA_VERSION: 0.22.1
+  ZOLA_SHA256: 0ca09aa40376aaa9ddfb512ff9ad963262ef95edb0d0f2d5ec6961b6f5cf22ef
+  LYCHEE_VERSION: 0.24.2
+  LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+  LHCI_VERSION: 0.16.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Zola
+        run: |
+          curl -fsSLo zola.tar.gz "https://github.com/getzola/zola/releases/download/v${ZOLA_VERSION}/zola-v${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZOLA_SHA256}  zola.tar.gz" | sha256sum -c -
+          tar -xzf zola.tar.gz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: site/scripts/build.sh
+      - name: Check internal links
+        run: cd site && zola check --skip-external-links
+      - name: Check titles, descriptions and headings
+        run: python3 site/scripts/check-seo.py
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: site/public
+
+  links:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Zola
+        run: |
+          curl -fsSLo zola.tar.gz "https://github.com/getzola/zola/releases/download/v${ZOLA_VERSION}/zola-v${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZOLA_SHA256}  zola.tar.gz" | sha256sum -c -
+          tar -xzf zola.tar.gz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install lychee
+        run: |
+          curl -fsSLo lychee.tar.gz "https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${LYCHEE_SHA256}  lychee.tar.gz" | sha256sum -c -
+          tar -xzf lychee.tar.gz -C "$RUNNER_TEMP" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # Root-relative links let lychee resolve internal pages from the build directory.
+      - name: Build with root-relative links
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: site/scripts/build.sh --base-url / --output-dir public-links
+      - name: Check links
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: lychee --no-progress --include-fragments --max-retries 2 --exclude-path site/public-links/fonts --root-dir "$PWD/site/public-links" site/public-links
+
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install Zola
+        run: |
+          curl -fsSLo zola.tar.gz "https://github.com/getzola/zola/releases/download/v${ZOLA_VERSION}/zola-v${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZOLA_SHA256}  zola.tar.gz" | sha256sum -c -
+          tar -xzf zola.tar.gz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build for the local server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: site/scripts/build.sh --base-url http://localhost:8080 --output-dir public-lighthouse
+      # The landing page and one guide page, at least 95 in every category.
+      - name: Lighthouse
+        run: npx --yes "@lhci/cli@${LHCI_VERSION}" autorun --config=site/lighthouserc.json
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
