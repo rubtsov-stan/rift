@@ -70,6 +70,11 @@ describe('protocol handling', () => {
     await ready(x);
   });
 
+  it('takes both files as one object, as a keybinding passes them', async () => {
+    await vscode.commands.executeCommand('rift.compareFiles', { a: '/x/a.sql', b: '/x/b.sql' });
+    await ready(x);
+  });
+
   it('closes the session with the comparison', async () => {
     await compare('a.sql', 'b.sql');
     await ready(x);

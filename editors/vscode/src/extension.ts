@@ -166,10 +166,16 @@ export function activate(ctx: vscode.ExtensionContext): Api {
 
   const reg = (id: string, f: (...args: never[]) => unknown) => ctx.subscriptions.push(vscode.commands.registerCommand(id, f));
 
-  reg('rift.compareFiles', async (a?: vscode.Uri, b?: vscode.Uri) => {
-    const pa = a?.fsPath ?? (await pick('Rift: file A', vscode.window.activeTextEditor?.document.uri));
+  // Both files can be passed as paths or URIs, or as one `{ a, b }` object, which is
+  // all a keybinding's `args` can carry.
+  const fsPath = (f?: vscode.Uri | string) => (typeof f === 'string' ? f : f?.fsPath);
+  reg('rift.compareFiles', async (first?: vscode.Uri | string | { a: string; b: string }, second?: vscode.Uri | string) => {
+    const pair = first && typeof first === 'object' && 'a' in first && typeof first.a === 'string' ? first : undefined;
+    const a = pair ? pair.a : (first as vscode.Uri | string | undefined);
+    const b = pair ? pair.b : second;
+    const pa = fsPath(a) ?? (await pick('Rift: file A', vscode.window.activeTextEditor?.document.uri));
     if (!pa) return;
-    const pb = b?.fsPath ?? (await pick('Rift: file B'));
+    const pb = fsPath(b) ?? (await pick('Rift: file B'));
     if (pb) await compare(pa, pb);
   });
   reg('rift.compareSelected', async (clicked?: vscode.Uri, selected?: vscode.Uri[]) => {
