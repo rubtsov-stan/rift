@@ -21,6 +21,7 @@ Rift 0.2.0 is the current release. This page lists work that is not in it.
 
 - **Directory diff.** `rift A/ B/` walks both trees in sorted order in bounded memory and diffs each pair of files under the same `--mem`, with a summary of added, removed and changed files.
 - **Field-level key diff.** In [key mode](@/guide/key-mode.md), name the fields that changed for a changed key: CSV columns, top-level NDJSON keys, COPY columns.
+- **Homebrew tap.** `brew install` from a tap repository, added to the release installers once the tap and its token exist.
 
 ## Not planned
 

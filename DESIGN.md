@@ -390,9 +390,8 @@ planned.
 0.2 added four features to the MVP: shingle anchors, key mode, moved blocks
 and an MCP server. The contracts they share went in first, so each feature
 stays inside its own module and none of them edits a shared file. A
-performance pass over the skeleton followed shingle anchors, and the
-Homebrew installer comes back once the tap exists. The persistent index
-and a GUI were left out of 0.2: the index writes files next to user data
+performance pass over the skeleton followed shingle anchors. The
+persistent index was left out of 0.2: it writes files next to user data
 and needs its own design for safety and invalidation.
 
 ### Contracts
@@ -581,13 +580,11 @@ text. It reads a segment's script through `DiffView` and renders it
 itself; the ranges it reports come from segments, so they can be a few
 lines wider than the change.
 
-### Performance and packaging
+### Performance
 
 The performance pass profiles the full diff and `--summary` on a 10 GiB
 pair and targets the second pass over differing regions. It starts after
 shingle anchors, since both change the skeleton's comparison path.
-Homebrew returns to the release installers once the tap repository and
-its token exist.
 
 What the pass changed, measured on an Apple M1 with warm cache unless
 stated. The serial part of the skeleton shrank: the chain search reads
@@ -618,7 +615,7 @@ One protocol serves every client that is not the terminal interface:
 `rift serve`, JSON-RPC 2.0 over standard input and output with LSP's
 `Content-Length` framing, specified in `docs/protocol.md` with a JSON
 schema per message under `docs/protocol/`. It is a subcommand of the
-`rift` binary, so a client ships or finds one executable. Three clients
+`rift` binary, so a client ships or finds one executable. Two clients
 use it or are planned on it:
 
 - **The VS Code extension** (`editors/vscode/`) never opens the big
@@ -629,7 +626,6 @@ use it or are planned on it:
 - **`rift-mcp`** answers MCP clients with the same sessions. It keeps
   its MCP transport and renders its own unified text, and moves onto
   the protocol once that covers what its tools return.
-- **A GUI**, later, on the same methods.
 
 The session logic lives once, in `rift-session`: one diff per pair of
 files, opened read-only after the path checks of the MCP server, cached
