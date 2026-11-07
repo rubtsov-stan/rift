@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hunk.params.json",
+  "title": "hunk params",
+  "description": "exactly one of segment and line_a",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "defs.json#/$defs/session"
+        },
+        "segment": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "line_a": {
+          "$ref": "defs.json#/$defs/line"
+        },
+        "context": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_line_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "session",
+        "segment"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "defs.json#/$defs/session"
+        },
+        "segment": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "line_a": {
+          "$ref": "defs.json#/$defs/line"
+        },
+        "context": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_line_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "session",
+        "line_a"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

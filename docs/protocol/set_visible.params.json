@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "set_visible.params.json",
+  "title": "set_visible params",
+  "type": "object",
+  "properties": {
+    "session": {
+      "$ref": "defs.json#/$defs/session"
+    },
+    "a": {
+      "$ref": "defs.json#/$defs/range"
+    }
+  },
+  "required": [
+    "session",
+    "a"
+  ],
+  "additionalProperties": false
+}

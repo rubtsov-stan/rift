@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "initialize.params.json",
+  "title": "initialize params",
+  "type": "object",
+  "properties": {
+    "protocol": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "client": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocol"
+  ],
+  "additionalProperties": false
+}

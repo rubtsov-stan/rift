@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "segments.params.json",
+  "title": "segments params",
+  "$ref": "defs.json#/$defs/page_params"
+}

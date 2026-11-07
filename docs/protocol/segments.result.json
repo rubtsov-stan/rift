@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "segments.result.json",
+  "title": "segments result",
+  "type": "object",
+  "properties": {
+    "total": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "offset": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "$ref": "defs.json#/$defs/count"
+          },
+          "a": {
+            "$ref": "defs.json#/$defs/range"
+          },
+          "b": {
+            "$ref": "defs.json#/$defs/range"
+          },
+          "status": {
+            "$ref": "defs.json#/$defs/differing_status"
+          }
+        },
+        "required": [
+          "index",
+          "a",
+          "b",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "total",
+    "offset",
+    "segments"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "open.params.json",
+  "title": "open params",
+  "type": "object",
+  "properties": {
+    "a": {
+      "type": "string",
+      "minLength": 1
+    },
+    "b": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mem": {
+      "type": "string",
+      "description": "a size as --mem takes it: 256M, 1G, 4096"
+    }
+  },
+  "required": [
+    "a",
+    "b"
+  ],
+  "additionalProperties": false
+}

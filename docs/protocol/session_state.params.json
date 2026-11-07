@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "session_state.params.json",
+  "title": "session_state notification params",
+  "oneOf": [
+    {
+      "description": "ready",
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "defs.json#/$defs/session"
+        },
+        "state": {
+          "const": "ready"
+        }
+      },
+      "required": [
+        "session",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "failed",
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "defs.json#/$defs/session"
+        },
+        "state": {
+          "const": "failed"
+        },
+        "error": {
+          "$ref": "error.json"
+        }
+      },
+      "required": [
+        "session",
+        "state",
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

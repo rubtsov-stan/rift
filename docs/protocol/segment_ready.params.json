@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "segment_ready.params.json",
+  "title": "segment_ready notification params",
+  "type": "object",
+  "properties": {
+    "session": {
+      "$ref": "defs.json#/$defs/session"
+    },
+    "index": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "status": {
+      "$ref": "defs.json#/$defs/differing_status"
+    }
+  },
+  "required": [
+    "session",
+    "index",
+    "status"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "summary.result.json",
+  "title": "summary result",
+  "oneOf": [
+    {
+      "description": "ready",
+      "type": "object",
+      "properties": {
+        "state": {
+          "const": "ready"
+        },
+        "a": {
+          "$ref": "defs.json#/$defs/file_size"
+        },
+        "b": {
+          "$ref": "defs.json#/$defs/file_size"
+        },
+        "identical": {
+          "type": "boolean"
+        },
+        "equal": {
+          "$ref": "defs.json#/$defs/tally"
+        },
+        "differs": {
+          "$ref": "defs.json#/$defs/tally"
+        },
+        "approx": {
+          "$ref": "defs.json#/$defs/tally"
+        },
+        "differing_segments": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "moves": {
+          "$ref": "defs.json#/$defs/moves_state"
+        },
+        "moved_blocks": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "mem_bytes": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "mem_reserved_bytes": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "progress": {
+          "$ref": "defs.json#/$defs/progress"
+        }
+      },
+      "required": [
+        "state",
+        "a",
+        "b",
+        "identical",
+        "equal",
+        "differs",
+        "approx",
+        "differing_segments",
+        "moves",
+        "moved_blocks",
+        "mem_bytes",
+        "mem_reserved_bytes",
+        "progress"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "scanning",
+      "type": "object",
+      "properties": {
+        "state": {
+          "const": "scanning"
+        },
+        "a": {
+          "type": "object",
+          "properties": {
+            "bytes": {
+              "$ref": "defs.json#/$defs/count"
+            }
+          },
+          "required": [
+            "bytes"
+          ],
+          "additionalProperties": false
+        },
+        "b": {
+          "type": "object",
+          "properties": {
+            "bytes": {
+              "$ref": "defs.json#/$defs/count"
+            }
+          },
+          "required": [
+            "bytes"
+          ],
+          "additionalProperties": false
+        },
+        "mem_bytes": {
+          "$ref": "defs.json#/$defs/count"
+        },
+        "progress": {
+          "$ref": "defs.json#/$defs/progress"
+        }
+      },
+      "required": [
+        "state",
+        "a",
+        "b",
+        "mem_bytes",
+        "progress"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "failed",
+      "type": "object",
+      "properties": {
+        "state": {
+          "const": "failed"
+        },
+        "error": {
+          "$ref": "error.json"
+        }
+      },
+      "required": [
+        "state",
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

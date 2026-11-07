@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "open.result.json",
+  "title": "open result",
+  "type": "object",
+  "properties": {
+    "session": {
+      "$ref": "defs.json#/$defs/session"
+    },
+    "reused": {
+      "type": "boolean"
+    },
+    "mem_bytes": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "state": {
+      "enum": [
+        "scanning",
+        "ready"
+      ]
+    }
+  },
+  "required": [
+    "session",
+    "reused",
+    "mem_bytes",
+    "state"
+  ],
+  "additionalProperties": false
+}

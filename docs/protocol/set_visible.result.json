@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "set_visible.result.json",
+  "title": "set_visible result",
+  "type": "null"
+}

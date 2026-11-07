@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hunk.result.json",
+  "title": "hunk result",
+  "type": "object",
+  "properties": {
+    "segment": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "status": {
+      "enum": [
+        "equal",
+        "differs",
+        "approx"
+      ]
+    },
+    "pending": {
+      "type": "boolean"
+    },
+    "range": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "defs.json#/$defs/range"
+        },
+        "b": {
+          "$ref": "defs.json#/$defs/range"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "additionalProperties": false
+    },
+    "a": {
+      "$ref": "defs.json#/$defs/column"
+    },
+    "b": {
+      "$ref": "defs.json#/$defs/column"
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "segment",
+    "status",
+    "pending",
+    "range",
+    "a",
+    "b",
+    "truncated"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "initialize.result.json",
+  "title": "initialize result",
+  "type": "object",
+  "properties": {
+    "protocol": {
+      "const": 1
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notifications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "methods",
+        "notifications"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_sessions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_session_mem": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_total_mem": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "default_mem": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "idle_timeout_secs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "max_page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_line_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_context": {
+          "$ref": "defs.json#/$defs/count"
+        }
+      },
+      "required": [
+        "max_sessions",
+        "max_session_mem",
+        "max_total_mem",
+        "default_mem",
+        "idle_timeout_secs",
+        "max_page",
+        "max_lines",
+        "max_line_bytes",
+        "max_context"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocol",
+    "server",
+    "capabilities",
+    "limits"
+  ],
+  "additionalProperties": false
+}

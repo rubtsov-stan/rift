@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "close.result.json",
+  "title": "close result",
+  "type": "object",
+  "properties": {
+    "closed": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "closed"
+  ],
+  "additionalProperties": false
+}

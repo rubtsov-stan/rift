@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "progress.params.json",
+  "title": "progress notification params",
+  "type": "object",
+  "properties": {
+    "session": {
+      "$ref": "defs.json#/$defs/session"
+    },
+    "phase": {
+      "enum": [
+        "scan",
+        "refine"
+      ]
+    },
+    "done": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "total": {
+      "$ref": "defs.json#/$defs/count"
+    }
+  },
+  "required": [
+    "session",
+    "phase",
+    "done",
+    "total"
+  ],
+  "additionalProperties": false
+}

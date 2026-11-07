@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "error.json",
+  "title": "error object",
+  "oneOf": [
+    {
+      "description": "parse_error",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32700
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "invalid_request",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32600
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "method_not_found",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32601
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "invalid_params",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32602
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "param": {
+              "type": "string"
+            },
+            "value": {},
+            "limit": {
+              "$ref": "defs.json#/$defs/count"
+            },
+            "supported": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "internal_error",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32603
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "not_initialized",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32002
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "cancelled",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32800
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "file",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32001
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "side": {
+              "enum": [
+                "a",
+                "b"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "not_found",
+                "permission_denied",
+                "not_regular",
+                "symlink",
+                "changed",
+                "io"
+              ]
+            }
+          },
+          "required": [
+            "side",
+            "path",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "budget_exceeded",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32003
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "mem_bytes": {
+              "$ref": "defs.json#/$defs/count"
+            },
+            "half": {
+              "enum": [
+                "skeleton",
+                "refine"
+              ]
+            },
+            "requested_bytes": {
+              "$ref": "defs.json#/$defs/count"
+            },
+            "available_bytes": {
+              "$ref": "defs.json#/$defs/count"
+            },
+            "suggested_mem_bytes": {
+              "$ref": "defs.json#/$defs/count"
+            },
+            "suggested_mem": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mem_bytes",
+            "half",
+            "requested_bytes",
+            "available_bytes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "too_large",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32004
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "mem_bytes": {
+              "$ref": "defs.json#/$defs/count"
+            },
+            "max_mem_bytes": {
+              "$ref": "defs.json#/$defs/count"
+            }
+          },
+          "required": [
+            "mem_bytes",
+            "max_mem_bytes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "busy",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32005
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "what": {
+              "enum": [
+                "sessions",
+                "responses"
+              ]
+            }
+          },
+          "required": [
+            "what"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "unknown_session",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32006
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "defs.json#/$defs/session"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "io",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32007
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "description": "not_ready",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32008
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "defs.json#/$defs/session"
+            },
+            "state": {
+              "enum": [
+                "scanning",
+                "failed"
+              ]
+            },
+            "progress": {
+              "$ref": "defs.json#/$defs/progress"
+            },
+            "error": {
+              "$ref": "error.json"
+            }
+          },
+          "required": [
+            "session",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

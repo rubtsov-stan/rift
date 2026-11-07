@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "moves.result.json",
+  "title": "moves result",
+  "type": "object",
+  "properties": {
+    "total": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "offset": {
+      "$ref": "defs.json#/$defs/count"
+    },
+    "moves": {
+      "$ref": "defs.json#/$defs/moves_state"
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "defs.json#/$defs/block"
+      }
+    }
+  },
+  "required": [
+    "total",
+    "offset",
+    "moves",
+    "blocks"
+  ],
+  "additionalProperties": false
+}

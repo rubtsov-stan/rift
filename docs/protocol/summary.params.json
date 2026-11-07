@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "summary.params.json",
+  "title": "summary params",
+  "$ref": "defs.json#/$defs/session_params"
+}

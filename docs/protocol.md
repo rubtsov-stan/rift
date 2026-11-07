@@ -5,6 +5,9 @@ extension, a future GUI and, later, `rift-mcp` are clients of it; the
 session logic behind it lives in the `rift-session` crate. This document
 is the contract: the server and its clients follow it, and the JSON
 schemas under [`protocol/`](protocol/) describe every message in it.
+`editors/vscode/test/mock-server.js` answers it from a fixed fixture,
+and `node editors/vscode/test/check-mock.js` checks the schemas, the
+fixture and the mock against each other.
 
 Protocol version: **1**.
 
