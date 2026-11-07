@@ -5,9 +5,11 @@
   "version": "0.3.0",
   "publisher": "rift-placeholder",
   "license": "MIT OR Apache-2.0",
+  "icon": "media/icon.png",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rubtsov-stan/rift.git"
+    "url": "git+https://github.com/rubtsov-stan/rift.git",
+    "directory": "editors/vscode"
   },
   "engines": {
     "vscode": "^1.100.0"
@@ -207,7 +209,7 @@
     "lint": "eslint .",
     "test": "npm run test:unit && npm run test:vscode",
     "check-mock": "node test/check-mock.js",
-    "package": "vsce package --no-dependencies",
+    "package": "vsce package --no-dependencies --baseContentUrl https://github.com/rubtsov-stan/rift/blob/main/editors/vscode --baseImagesUrl https://github.com/rubtsov-stan/rift/raw/main/editors/vscode",
     "test:unit": "npm run build && mocha --exit out/test/unit/*.test.js",
     "test:vscode": "npm run build && node out/test/run.js",
     "test:real": "npm run build && RIFT_BIN=${RIFT_BIN:-../../target/release/rift} node out/test/run.js"

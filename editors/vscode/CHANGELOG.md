@@ -1,0 +1,17 @@
+# Changelog
+
+## [0.3.0] - Unreleased
+
+First release.
+
+- Rift view with a summary row, the differing segments and the moved blocks.
+- Hunk diffs in VS Code's diff editor on read-only `rift:` documents, with
+  the original line ranges in the tab title.
+- Commands: Compare Files, Compare with Rift, Next and Previous Difference,
+  Go to Line in File A, Close Comparison.
+- Status bar progress for the scan and the refinement.
+- A rerun offer when a scan does not fit its memory budget.
+- One `rift serve` process per window, restarted when it crashes.
+- Settings `rift.path`, `rift.mem` and `rift.contextLines`.
+- Platform packages for darwin-arm64, darwin-x64, linux-x64 and linux-arm64,
+  each with the `rift` binary.
