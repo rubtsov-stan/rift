@@ -1,8 +1,6 @@
 **
-!out/extension.js
 !out/*.js
-!out/**/*.js
-out/test/**
 !media/**
+!bin/**
 !package.json
 !README.md
