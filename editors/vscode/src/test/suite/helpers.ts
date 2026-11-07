@@ -3,7 +3,7 @@ import { Api } from '../../extension';
 import { Node } from '../../tree';
 import { REAL, mockBinary, until } from '../mock';
 
-export const ID = 'rift-placeholder.rift-vscode';
+export const ID = 'rubtsov-stan.rift-vscode';
 
 export async function api(): Promise<Api> {
   const ext = vscode.extensions.getExtension<Api>(ID)!;

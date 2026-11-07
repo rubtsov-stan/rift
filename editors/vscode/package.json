@@ -3,7 +3,7 @@
   "displayName": "Rift",
   "description": "Compare text files of tens to hundreds of GB with Rift, one difference at a time.",
   "version": "0.3.0",
-  "publisher": "rift-placeholder",
+  "publisher": "rubtsov-stan",
   "license": "MIT OR Apache-2.0",
   "icon": "media/icon.png",
   "repository": {
