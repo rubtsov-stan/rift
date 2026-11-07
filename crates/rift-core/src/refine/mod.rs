@@ -9,8 +9,10 @@
 //! [`LineAccess`], since a hash match is not equality.
 //!
 //! Time is `O((N+M)·min(D, cutoff))` per gap plus `O((N+M) log (N+M))` per
-//! patience level; memory is [`work_estimate`], about 17 bytes per line of
-//! A plus B, reserved by the caller from the refine half of the budget.
+//! patience level; memory is [`work_estimate`], 17 bytes per line of A plus
+//! B and 16 per line of the shorter side, so at most about 25 bytes per
+//! line of A plus B, reserved by the caller from the refine half of the
+//! budget.
 
 mod myers;
 #[cfg(test)]
