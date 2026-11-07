@@ -1,16 +1,19 @@
 #!/bin/sh
 # Benchmark for a Linux host: no root, nothing written to disk except the
-# result archive in the current directory.
+# result archive in the current directory, unless --disk-dir is given.
 #
 #   bench/linux-safe.sh [--dry-run] [--yes] [--ref REF] [--repo URL]
-#                       [--read-only-pair DIR]
+#                       [--read-only-pair DIR] [--disk-dir DIR]
 #
 #   --dry-run            print the plan and exit
 #   --yes                skip the 10 second wait before the run starts
-#   --ref REF            tag, branch or commit to build (default v0.1.0)
+#   --ref REF            tag, branch or commit to build (default v0.2.0)
 #   --repo URL           where to clone from (default the public repository)
 #   --read-only-pair DIR also run rift and cat over DIR/a and DIR/b, which are
 #                        only read (a real-disk number if DIR is on disk)
+#   --disk-dir DIR       also run a 50 GiB pair (A and B 50 GiB each) generated
+#                        into DIR, which must be on a real disk with 110 GiB
+#                        free; the pair is deleted afterwards
 #
 # Test knobs, for running the script on a host that is not Linux. They turn
 # safety checks off; never set them for a real run:
@@ -19,13 +22,18 @@
 #   RIFT_BENCH_SHM=DIR     use DIR instead of /dev/shm
 #   RIFT_BENCH_TIME=PATH   use PATH instead of /usr/bin/time
 #   RIFT_BENCH_LIMITER=L   force systemd, prlimit or none (plan output only)
+#   RIFT_BENCH_DISK_SIZE=N size in bytes of each file of the --disk-dir pair
+#                          (default 50 GiB); the disk size and tmpfs checks are
+#                          the only ones it relaxes: free space is still checked
 #
 # See bench/README.md.
 set -eu
 
 GIB=1073741824
 schema=2
-repo=https://github.com/rubtsov-stan/rift ref=v0.1.0 yes=0 dry=0 ropair=
+repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 ropair=
+diskdir=
+diskroot=
 testing=${RIFT_BENCH_TESTING:-0}
 meminfo=${RIFT_BENCH_MEMINFO:-/proc/meminfo}
 timebin=${RIFT_BENCH_TIME:-/usr/bin/time}
@@ -41,6 +49,7 @@ while [ $# -gt 0 ]; do
     --ref) [ $# -ge 2 ] || usage; ref=$2; shift 2 ;;
     --repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
     --read-only-pair) [ $# -ge 2 ] || usage; ropair=$2; shift 2 ;;
+    --disk-dir) [ $# -ge 2 ] || usage; diskdir=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -59,8 +68,42 @@ if [ -n "$ropair" ]; then
   [ -f "$ropair/a" ] && [ -f "$ropair/b" ] || die "$ropair must hold files a and b"
 fi
 
+disksize=$((50 * GIB))
+[ "$testing" != 1 ] || disksize=${RIFT_BENCH_DISK_SIZE:-$disksize}
+diskmargin=$((10 * GIB))
+diskneed=$((2 * disksize + diskmargin))
+
 is_tmpfs() { [ "$testing" = 1 ] || [ "$(stat -f -c %T "$1" 2>/dev/null)" = tmpfs ]; }
 free_bytes() { df -Pk "$1" | awk 'NR==2 {print $4 * 1024}'; }
+
+# ---- --disk-dir checks: a real disk with room for both files ---------------
+
+if [ -n "$diskdir" ]; then
+  [ -d "$diskdir" ] || die "--disk-dir $diskdir is not a directory"
+  [ -w "$diskdir" ] || die "--disk-dir $diskdir is not writable"
+  disk_fstype=$(stat -f -c %T "$diskdir" 2>/dev/null || echo unknown)
+  [ "$testing" != 1 ] || [ "$(uname -s)" = Linux ] || disk_fstype=unknown
+  case $disk_fstype in
+    tmpfs|ramfs) die "--disk-dir $diskdir is on $disk_fstype (RAM); the point is a real disk" ;;
+    unknown) [ "$testing" = 1 ] || die "cannot read the file system type of $diskdir" ;;
+  esac
+  disk_free=$(df -Pk "$diskdir" | awk 'NR==2 {print $4 * 1024}')
+  [ "$disk_free" -ge "$diskneed" ] ||
+    die "--disk-dir $diskdir has $((disk_free / 1048576)) MiB free, needs $((diskneed / 1048576)) MiB (two files of $((disksize / 1048576)) MiB plus a $((diskmargin / 1048576)) MiB margin)"
+  diskroot=$(cd "$diskdir" && pwd)
+  # Block device and model, when /sys shows them without root. LVM, btrfs
+  # multi-device and network mounts have no single model; the report says so.
+  disk_dev=$(df -P "$diskroot" | awk 'NR==2 {print $1}')
+  disk_model=unreadable disk_rot=unreadable
+  sysp=$(readlink -f "/sys/class/block/${disk_dev##*/}" 2>/dev/null || true)
+  if [ -n "$sysp" ]; then
+    [ ! -e "$sysp/partition" ] || sysp=$(dirname "$sysp")
+    disk_model=$(tr -s ' ' < "$sysp/device/model" 2>/dev/null | sed 's/ $//' || true)
+    disk_rot=$(cat "$sysp/queue/rotational" 2>/dev/null || true)
+    case $disk_rot in 0) disk_rot=ssd ;; 1) disk_rot=rotational ;; *) disk_rot=unreadable ;; esac
+    [ -n "$disk_model" ] || disk_model=unreadable
+  fi
+fi
 
 # ---- scratch location: tmpfs only ------------------------------------------
 
@@ -157,6 +200,12 @@ plan() {
     echo "  thread scaling    skipped: taskset not found"
   fi
   [ -z "$ropair" ] || echo "  read-only pair    $ropair (only read)"
+  if [ -n "$diskdir" ]; then
+    echo "  on-disk pair      $(gib "$disksize") each of A and B (profile sql, seed 7, 0.1% changes) in $diskroot ($disk_fstype on $disk_dev, $disk_model, $disk_rot)"
+    echo "  disk use          $(gib $((2 * disksize))) written, $(gib "$disk_free") free, $(gib "$diskneed") required (pair plus $(gib "$diskmargin") margin); deleted afterwards"
+    echo "  disk runs         cat a b | wc -c, rift --summary, rift --stats, all --mem 256M, one run each, cap 1 GiB; diff and git diff skipped: they need several times the pair in memory"
+    echo "  disk time         about $(awk -v b="$((2 * disksize))" 'BEGIN { printf "%d to %d minutes", b * 4 / 500e6 / 60, b * 4 / 100e6 / 60 }') (four passes over the pair at 500 to 100 MB/s, plus the build and the other runs)"
+  fi
   echo "  output            rift-bench-$label.tar.gz in the current directory"
 }
 
@@ -171,9 +220,13 @@ fi
 # ---- scratch directory and cleanup -----------------------------------------
 
 scratch=$base/rift-bench-$$
+diskwork=
 cleanup() {
   case $scratch in
     */rift-bench-*) rm -rf "$scratch" ;;
+  esac
+  case $diskwork in
+    */rift-bench-disk-*) rm -rf "$diskwork" ;;
   esac
 }
 # Arm the cleanup only once the directory is ours: if it already exists,
@@ -236,6 +289,12 @@ fact rift_ref "$ref"
 fact rift_commit "$commit"
 fact scratch_fs "tmpfs, $(gib "$tmpfs_free") free of the mount at start"
 fact limiter "$limiter"
+if [ -n "$diskdir" ]; then
+  fact disk_pair_fs "$disk_fstype"
+  fact disk_pair_device "$disk_dev"
+  fact disk_pair_model "$disk_model ($disk_rot)"
+  fact disk_pair_size_bytes "$disksize"
+fi
 fact load_before "$(loadavg)"
 
 # ---- measured runs ---------------------------------------------------------
@@ -416,6 +475,38 @@ if [ -n "$ropair" ]; then
   core_runs read-only-pair existing "$rsz" "$ropair/a" "$ropair/b"
 fi
 
+# ---- on-disk pair (--disk-dir) ---------------------------------------------
+
+if [ -n "$diskdir" ]; then
+  # Set only after mkdir succeeds, so the trap never removes a directory it
+  # did not create. Interrupt, error or exit removes the pair.
+  mkdir -m 700 "$diskroot/rift-bench-disk-$$" || die "cannot create a directory in $diskroot"
+  diskwork=$diskroot/rift-bench-disk-$$
+  dpair=$diskwork/pair
+  echo "Generating sql $(gib "$disksize") into $diskwork" >&2
+  dlog=$raw/gen-disk-sql-$disksize.log
+  # shellcheck disable=SC2086
+  if [ "$limiter" = systemd ]; then
+    # Written pages are reclaimable page cache; 2 GiB leaves rift-gen room.
+    dgen="systemd-run --user --scope -q -p MemoryMax=$((2 * GIB)) -p MemorySwapMax=0 $niceio"
+  else
+    dgen=$niceio
+  fi
+  # shellcheck disable=SC2086
+  if $dgen "$gen" --seed 7 --size "$disksize" --profile sql --change-ratio 0.001 --out "$dpair" > "$dlog" 2>&1; then
+    cp "$dpair/manifest.tsv" "$raw/manifest-disk-sql-$disksize.tsv" 2>/dev/null || true
+    # One run per tool: at this size a repetition costs minutes to hours.
+    run_one disk sql "$disksize" "cat a b | wc -c" all "$GIB" 1 count cat "$dpair/a" "$dpair/b"
+    run_one disk sql "$disksize" "rift --summary --mem 256M" all "$GIB" 1 file "$rift" --summary --mem 256M "$dpair/a" "$dpair/b"
+    run_one disk sql "$disksize" "rift --stats --mem 256M" all "$GIB" 1 count "$rift" --stats --mem 256M "$dpair/a" "$dpair/b"
+  else
+    tail -n 20 "$dlog" >&2
+    note "on-disk pair not run: rift-gen failed in $diskroot (log in raw/)"
+  fi
+  rm -rf "$diskwork"; diskwork=
+  note "on-disk pair: $disk_fstype on $disk_dev, $disk_model ($disk_rot). The script cannot drop the page cache without root, so the cache state is whatever the host had: the pair was written just before the first read, so the last pages of B may be cached. A and B together are $(gib $((2 * disksize))) against $(gib "$mem_total") of RAM; $(if [ $((2 * disksize)) -gt "$mem_total" ]; then echo "that exceeds RAM, so most reads come from the disk"; else echo "that fits in RAM, so repeated reads may come from the page cache and these are not cold-disk numbers"; fi). Reads run at idle I/O priority (ionice -c3), which can lengthen them on a busy disk. diff and git diff were not run: GNU diff holds far more than the 1 GiB rift cap for files this size."
+fi
+
 fact load_after "$(loadavg)"
 [ "$limiter" != prlimit ] || note "no systemd user scope: caps are prlimit --as address-space limits, which are stricter than RSS caps"
 
@@ -444,6 +535,7 @@ END {
 
 {
   echo "Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
+  [ -z "$diskdir" ] || echo "Exception: the group \`disk\` ran on a pair stored on disk ($disk_fstype); see the notes."
   echo
   echo "## Host"
   echo
