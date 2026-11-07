@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use rift_core::alloc::CountingAlloc;
-use rift_core::{Budget, BudgetExceeded, Bytes};
+use rift_core::{BudgetExceeded, Bytes};
 use rift_diff::Args;
 
 use crate::source::FileSource;
@@ -66,32 +66,15 @@ fn main() -> ExitCode {
     }
 }
 
-/// For a budget refusal, a `--mem` to rerun with: the half held its
-/// capacity minus what was free, and needs that plus the request. Not a
-/// lower bound, since what a half holds depends on --mem and a smaller
-/// limit can take another path, nor always enough, since a later stage
-/// may need more.
+/// For a budget refusal, a `--mem` to rerun with; see
+/// [`BudgetExceeded::mem_advice`].
 fn mem_advice(err: &anyhow::Error, mem: Bytes) -> Option<String> {
     let refusal = err.chain().find_map(|e| match e.downcast_ref() {
         Some(rift_core::Error::Budget(b)) => Some(*b),
         _ => e.downcast_ref::<BudgetExceeded>().copied(),
     })?;
-    let cap = Budget::new(mem).capacity(refusal.half).0;
-    let held = cap.saturating_sub(refusal.available.0);
-    let need = held.checked_add(refusal.requested.0)?.checked_mul(2)?;
-    // A refusal that does not exceed its half proves nothing about --mem.
-    (need > mem.0).then(|| format!("rerun with --mem {}", size(need)))
-}
-
-/// `bytes` rounded up to the largest unit that keeps the rounding under
-/// 1/64 of the value, so it stays usable as a --mem argument.
-fn size(bytes: u64) -> String {
-    let (unit, suffix) = [(40, 'T'), (30, 'G'), (20, 'M')]
-        .into_iter()
-        .map(|(shift, suffix)| (1u64 << shift, suffix))
-        .find(|&(unit, _)| bytes >= 64 * unit)
-        .unwrap_or((1 << 10, 'K'));
-    format!("{}{suffix}", bytes.div_ceil(unit))
+    let need = refusal.mem_advice(mem)?;
+    Some(format!("rerun with --mem {}", need.to_mem_arg()))
 }
 
 #[cfg(test)]
@@ -135,15 +118,5 @@ mod tests {
         let fits = refusal(rift_core::Half::Skeleton, 10, 20);
         assert_eq!(mem_advice(&fits, mem), None);
         assert_eq!(mem_advice(&anyhow::anyhow!("other"), mem), None);
-    }
-
-    #[test]
-    fn sizes_round_up_by_less_than_a_64th() {
-        assert_eq!(size(1), "1K");
-        assert_eq!(size(4145), "5K");
-        assert_eq!(size(64 << 20), "64M");
-        assert_eq!(size((64 << 20) + 1), "65M");
-        assert_eq!(size((64 << 20) - 1), "65536K");
-        assert_eq!(size(100 << 30), "100G");
     }
 }

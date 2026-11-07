@@ -1,0 +1,20 @@
+[package]
+name = "rift-session"
+description = "Live Rift diffs of file pairs, shared by rift serve and rift-mcp"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rift-core = { path = "../rift-core" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -662,6 +662,41 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
 }
 
 #[test]
+fn try_hunk_reports_a_failed_job_where_hunk_would_panic() {
+    struct Refused;
+    impl Job for Refused {
+        fn estimate(&self, _: &Segment) -> Bytes {
+            Bytes(8)
+        }
+        fn run(&self, _: usize, _: &Segment, _: &mut Reservation, _: &Cancel) -> Result<Hunk> {
+            Err(REFUSAL.into())
+        }
+        fn too_large(
+            &self,
+            _: usize,
+            s: &Segment,
+            _: &mut Reservation,
+            _: &Cancel,
+        ) -> Result<Hunk> {
+            Ok(script(s, true))
+        }
+    }
+    const REFUSAL: BudgetExceeded = BudgetExceeded {
+        half: Half::Refine,
+        requested: Bytes(100),
+        available: Bytes(10),
+    };
+    let s = Scheduler::new(Refused, segments(2, |i| i == 0), &budget(2, 4), 1).unwrap();
+    assert!(matches!(s.try_hunk(0), Ok(HunkState::Ready(_))));
+    assert!(s.wait_hunk(1).is_err());
+    let err = s.try_hunk(1).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::Budget(b) if b == REFUSAL),
+        "{err}"
+    );
+}
+
+#[test]
 fn without_background_only_the_window_and_requests_are_refined() {
     let n = 12;
     let (started, starts) = channel();

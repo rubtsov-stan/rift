@@ -301,6 +301,21 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         self.threads
     }
 
+    /// [`DiffView::hunk`] that returns a failed refinement as its error,
+    /// typed as the job returned it, instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// The refinement's error: [`Error::Budget`] when the segment could
+    /// not be refined within the budget, [`Error::Io`] from either source.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `segment` is out of range.
+    pub fn try_hunk(&self, segment: usize) -> Result<HunkState> {
+        self.sched.try_hunk(segment)
+    }
+
     /// Writes the diff as `diff -u` would, walking segments in order
     /// through the scheduler. Background refinement is switched off and the
     /// visible window moved ahead of the writer instead, so the workers

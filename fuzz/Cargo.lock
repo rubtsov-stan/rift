@@ -1456,10 +1456,19 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "rift-core",
+ "rift-session",
  "rmcp",
  "schemars",
  "serde",
  "tokio",
+]
+
+[[package]]
+name = "rift-session"
+version = "0.2.0"
+dependencies = [
+ "rift-core",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -9,16 +9,19 @@
 //!
 //! Bounds on one answer: [`render::MAX_TEXT_BYTES`] bytes of diff text,
 //! [`render::MAX_LINES`] diff lines, [`render::MAX_LINE_BYTES`] bytes per line
-//! and [`SUMMARY_RANGES`] ranges. Memory bounds are in [`sessions`].
+//! and [`SUMMARY_RANGES`] ranges. Memory bounds are in [`sessions`], which
+//! is the `rift-session` crate the server keeps its diffs in.
 #![forbid(unsafe_code)]
 
-pub mod file;
 pub mod render;
-pub mod sessions;
+
+pub use rift_session as sessions;
+pub use rift_session::file;
 
 use std::sync::Arc;
 
-use rift_core::{Bytes, DiffView, Segment, SegmentStatus};
+use rift_core::{Bytes, Segment, SegmentStatus};
+use rift_session::Session;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
@@ -27,7 +30,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use file::FileSource;
-use sessions::{Limits, Session, Sessions};
+use sessions::{Limits, Sessions};
 
 /// Differing ranges listed by `summary`; the rest are only counted.
 pub const SUMMARY_RANGES: usize = 20;
@@ -194,7 +197,7 @@ impl Server {
             .map_err(|e| format!("mem: {e}"))?;
         let a = FileSource::open(&p.a).map_err(|e| format!("a: {e}"))?;
         let b = FileSource::open(&p.b).map_err(|e| format!("b: {e}"))?;
-        self.sessions.get(a, b, mem)
+        self.sessions.get(a, b, mem).map_err(|e| e.to_string())
     }
 }
 
@@ -224,12 +227,6 @@ fn range(s: &Segment) -> Range {
 
 fn seg_status(approx: bool) -> String {
     if approx { "approx" } else { "differs" }.into()
-}
-
-fn differing(segs: &[Segment]) -> impl Iterator<Item = (usize, &Segment)> {
-    segs.iter()
-        .enumerate()
-        .filter(|(_, s)| s.status != SegmentStatus::Equal)
 }
 
 /// Entry points the fuzz targets drive without a client: session lookup,
@@ -266,34 +263,30 @@ impl Server {
         let this = self.clone();
         blocking(move || {
             let s = this.session(&pair)?;
-            let d = &s.diff;
-            let segs = d.segments();
-            let tally = |st: SegmentStatus| {
-                segs.iter()
-                    .filter(|x| x.status == st)
-                    .fold(Tally::default(), |t, x| Tally {
-                        segments: t.segments + 1,
-                        a_lines: t.a_lines + x.len_a(),
-                        b_lines: t.b_lines + x.len_b(),
-                    })
+            let sum = s.summary();
+            let tally = |t: rift_session::Tally| Tally {
+                segments: t.segments,
+                a_lines: t.a_lines,
+                b_lines: t.b_lines,
             };
-            let all = differing(segs).count();
+            let all = usize::try_from(sum.differing).unwrap_or(usize::MAX);
             Ok(Summary {
-                a_lines: d.len_a(),
-                b_lines: d.len_b(),
-                a_bytes: s.bytes[0].0,
-                b_bytes: s.bytes[1].0,
-                identical: all == 0,
-                equal: tally(SegmentStatus::Equal),
-                differs: tally(SegmentStatus::Differs),
-                approx: tally(SegmentStatus::Approx),
-                first_differences: differing(segs)
+                a_lines: sum.a_lines,
+                b_lines: sum.b_lines,
+                a_bytes: sum.a_bytes.0,
+                b_bytes: sum.b_bytes.0,
+                identical: sum.identical,
+                equal: tally(sum.equal),
+                differs: tally(sum.differs),
+                approx: tally(sum.approx),
+                first_differences: s
+                    .differing()
                     .take(SUMMARY_RANGES)
                     .map(|(_, x)| range(x))
                     .collect(),
                 more_differences: all.saturating_sub(SUMMARY_RANGES) as u64,
-                mem_budget_bytes: s.mem.0,
-                mem_reserved_bytes: s.reserved().0,
+                mem_budget_bytes: sum.mem.0,
+                mem_reserved_bytes: sum.reserved.0,
             })
         })
         .await
@@ -321,7 +314,7 @@ impl Server {
             let line = args.line;
             // The first segment whose lines, widened by the context, hold the
             // line. A pure insertion holds the line after which it sits.
-            let hit = differing(s.diff.segments()).find(|(_, x)| {
+            let hit = s.differing().find(|(_, x)| {
                 x.a.start.0.saturating_sub(ctx) < line.max(1)
                     && line <= x.a.end.0.max(x.a.start.0) + ctx
             });
@@ -335,7 +328,7 @@ impl Server {
                     truncated: false,
                 });
             };
-            let r = render::hunk_text(&s.diff, i, ctx, max)?;
+            let r = render::hunk_text(s.diff(), i, ctx, max)?;
             let lines = |(start, count)| Lines {
                 start: start + 1,
                 count,
@@ -367,8 +360,9 @@ impl Server {
         let this = self.clone();
         blocking(move || {
             let s = this.session(&args.pair)?;
-            let next =
-                differing(s.diff.segments()).find(|(_, x)| x.a.start.0 + 1 > args.after_line);
+            let next = s
+                .differing()
+                .find(|(_, x)| x.a.start.0 + 1 > args.after_line);
             Ok(Next {
                 found: next.is_some(),
                 range: next.map(|(_, x)| range(x)),

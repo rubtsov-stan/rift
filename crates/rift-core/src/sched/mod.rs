@@ -282,6 +282,29 @@ impl<J: Job> Scheduler<J> {
         self.shared.work.notify_one();
     }
 
+    /// [`DiffView::hunk`] that reports a failed job as its error instead of
+    /// panicking. Never blocks; a segment not refined yet is queued.
+    ///
+    /// # Errors
+    ///
+    /// As for [`wait_hunk`](Self::wait_hunk).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `segment` is out of range.
+    pub fn try_hunk(&self, segment: usize) -> Result<HunkState> {
+        if let Some(hunk) = self.shared.equal_hunk(segment) {
+            return Ok(HunkState::Ready(hunk));
+        }
+        Ok(
+            match self.shared.lookup(&mut self.shared.lock(), segment)? {
+                Some(hunk) if hunk.approx => HunkState::Approx(hunk),
+                Some(hunk) => HunkState::Ready(hunk),
+                None => HunkState::Pending,
+            },
+        )
+    }
+
     /// The hunk for `segment`, computing it first if needed. Blocks; for the
     /// unified writer and tests, not for a frame loop.
     ///
@@ -339,17 +362,9 @@ impl<J: Job> DiffView for Scheduler<J> {
     }
 
     fn hunk(&self, segment: usize) -> HunkState {
-        if let Some(hunk) = self.shared.equal_hunk(segment) {
-            return HunkState::Ready(hunk);
-        }
         // A frame loop has no error channel; a failed segment is a read
         // error or a bug, and the front end stops with its message.
-        let found = self.shared.lookup(&mut self.shared.lock(), segment);
-        match found.unwrap_or_else(|e| panic!("{e}")) {
-            Some(hunk) if hunk.approx => HunkState::Approx(hunk),
-            Some(hunk) => HunkState::Ready(hunk),
-            None => HunkState::Pending,
-        }
+        self.try_hunk(segment).unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn progress(&self) -> Progress {

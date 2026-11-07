@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 rift-core = { path = "../rift-core" }
+rift-session = { path = "../rift-session" }
 rmcp.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

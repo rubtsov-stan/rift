@@ -37,6 +37,56 @@ impl FileId {
     }
 }
 
+/// Why a path was refused.
+#[derive(Debug)]
+pub enum Reason {
+    /// `lstat`, `open` or `fstat` failed.
+    Io(io::Error),
+    /// The last component is a symbolic link.
+    Symlink,
+    /// A directory, device, FIFO or socket.
+    NotRegular,
+    /// The path named another file after the open than before it.
+    Changed,
+}
+
+impl Reason {
+    /// The protocol's name for the reason: `not_found`,
+    /// `permission_denied`, `symlink`, `not_regular`, `changed` or `io`.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Io(e) if e.kind() == io::ErrorKind::NotFound => "not_found",
+            Self::Io(e) if e.kind() == io::ErrorKind::PermissionDenied => "permission_denied",
+            Self::Io(_) => "io",
+            Self::Symlink => "symlink",
+            Self::NotRegular => "not_regular",
+            Self::Changed => "changed",
+        }
+    }
+}
+
+impl std::fmt::Display for Reason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => e.fmt(f),
+            Self::Symlink => f.write_str("is a symbolic link, which is not followed"),
+            Self::NotRegular => f.write_str("is not a regular file"),
+            Self::Changed => f.write_str("changed while it was being opened"),
+        }
+    }
+}
+
+/// A path that cannot be opened for a diff.
+#[derive(Debug, thiserror::Error)]
+#[error("{path}: {reason}")]
+pub struct FileError {
+    /// The path as given.
+    pub path: String,
+    /// Why.
+    pub reason: Reason,
+}
+
 impl FileSource {
     /// Opens `path` after checking that it names a regular file.
     ///
@@ -48,22 +98,25 @@ impl FileSource {
     ///
     /// # Errors
     ///
-    /// A message for the client that names the path and the reason.
-    pub fn open(path: &str) -> Result<(Self, FileId), String> {
+    /// [`FileError`], which names the path and the reason.
+    pub fn open(path: &str) -> Result<(Self, FileId), FileError> {
         let p = Path::new(path);
-        let fail = |why: &dyn std::fmt::Display| format!("{path}: {why}");
-        let before = fs::symlink_metadata(p).map_err(|e| fail(&e))?;
+        let fail = |reason| FileError {
+            path: path.to_owned(),
+            reason,
+        };
+        let before = fs::symlink_metadata(p).map_err(|e| fail(Reason::Io(e)))?;
         if before.file_type().is_symlink() {
-            return Err(fail(&"is a symbolic link, which is not followed"));
+            return Err(fail(Reason::Symlink));
         }
         if !before.is_file() {
-            return Err(fail(&"is not a regular file"));
+            return Err(fail(Reason::NotRegular));
         }
         // `File::open` is read-only.
-        let file = File::open(p).map_err(|e| fail(&e))?;
-        let after = file.metadata().map_err(|e| fail(&e))?;
+        let file = File::open(p).map_err(|e| fail(Reason::Io(e)))?;
+        let after = file.metadata().map_err(|e| fail(Reason::Io(e)))?;
         if !after.is_file() || (after.dev(), after.ino()) != (before.dev(), before.ino()) {
-            return Err(fail(&"changed while it was being opened"));
+            return Err(fail(Reason::Changed));
         }
         let id = FileId::of(&after);
         Ok((
@@ -92,7 +145,11 @@ mod tests {
     use std::io::Write;
 
     fn err(path: &str) -> String {
-        FileSource::open(path).unwrap_err()
+        FileSource::open(path).unwrap_err().to_string()
+    }
+
+    fn reason(path: &str) -> &'static str {
+        FileSource::open(path).unwrap_err().reason.name()
     }
 
     #[test]
@@ -109,6 +166,7 @@ mod tests {
     #[test]
     fn a_missing_file_is_refused() {
         assert!(err("/nonexistent/rift-mcp-test").contains("No such file"));
+        assert_eq!(reason("/nonexistent/rift-mcp-test"), "not_found");
     }
 
     #[test]
@@ -120,6 +178,7 @@ mod tests {
     #[test]
     fn a_device_is_refused() {
         assert!(err("/dev/null").contains("not a regular file"));
+        assert_eq!(reason("/dev/null"), "not_regular");
     }
 
     #[test]
@@ -142,6 +201,7 @@ mod tests {
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(err(link.to_str().unwrap()).contains("symbolic link"));
+        assert_eq!(reason(link.to_str().unwrap()), "symlink");
     }
 
     #[test]

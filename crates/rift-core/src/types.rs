@@ -71,6 +71,19 @@ impl Bytes {
         usize::try_from(self.0).expect("byte count fits usize on 64-bit targets")
     }
 
+    /// The count rounded up to the largest binary unit that keeps the
+    /// rounding under 1/64 of the value, in the form `--mem` and
+    /// [`Bytes::parse_budget`] accept: `10240K`, `65M`, `100G`.
+    #[must_use]
+    pub fn to_mem_arg(self) -> String {
+        let (unit, suffix) = [(40, 'T'), (30, 'G'), (20, 'M')]
+            .into_iter()
+            .map(|(shift, suffix)| (1u64 << shift, suffix))
+            .find(|&(unit, _)| self.0 >= 64 * unit)
+            .unwrap_or((1 << 10, 'K'));
+        format!("{}{suffix}", self.0.div_ceil(unit))
+    }
+
     /// Parses a size like [`FromStr`] and also rejects zero, for values that
     /// size a budget such as `--mem`.
     ///
@@ -133,6 +146,18 @@ impl FromStr for Bytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mem_args_round_up_by_less_than_a_64th() {
+        let arg = |n| Bytes(n).to_mem_arg();
+        assert_eq!(arg(1), "1K");
+        assert_eq!(arg(4145), "5K");
+        assert_eq!(arg(64 << 20), "64M");
+        assert_eq!(arg((64 << 20) + 1), "65M");
+        assert_eq!(arg((64 << 20) - 1), "65536K");
+        assert_eq!(arg(100 << 30), "100G");
+        assert_eq!(Bytes::parse_budget(&arg(4145)), Ok(Bytes(5 << 10)));
+    }
 
     fn parse(s: &str) -> Result<Bytes, ParseBytesError> {
         s.parse()

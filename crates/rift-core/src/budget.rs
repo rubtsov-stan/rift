@@ -44,6 +44,25 @@ pub struct BudgetExceeded {
     pub available: Bytes,
 }
 
+impl BudgetExceeded {
+    /// A total budget to run again with, for a run that had `mem` and was
+    /// refused this way: twice what the half held plus the request, so
+    /// the half alone gets that much. `None` when the refusal does not
+    /// exceed what `mem` gives the half, or the figure overflows.
+    ///
+    /// Not a lower bound, since what a half holds depends on `mem` and a
+    /// smaller budget can take another path, nor always enough, since a
+    /// later stage may need more. The CLI's `rerun with --mem` and the
+    /// protocol's `suggested_mem` both come from here.
+    #[must_use]
+    pub fn mem_advice(&self, mem: Bytes) -> Option<Bytes> {
+        let cap = Budget::new(mem).capacity(self.half).0;
+        let held = cap.saturating_sub(self.available.0);
+        let need = held.checked_add(self.requested.0)?.checked_mul(2)?;
+        (need > mem.0).then_some(Bytes(need))
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
     cap: u64,
@@ -177,6 +196,22 @@ impl Drop for Reservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_advises_twice_what_its_half_needed() {
+        let refusal = |half, requested, available| BudgetExceeded {
+            half,
+            requested: Bytes(requested),
+            available: Bytes(available),
+        };
+        let mem = Bytes::mib(7);
+        // 3.5 MiB per half, 0.5 MiB of it free: 3 MiB held, 5 MiB needed.
+        let r = refusal(Half::Refine, 2 << 20, 512 << 10);
+        assert_eq!(r.mem_advice(mem), Some(Bytes(10 << 20)));
+        // A refusal that does not exceed its half proves nothing about mem.
+        assert_eq!(refusal(Half::Skeleton, 10, 20).mem_advice(mem), None);
+        assert_eq!(refusal(Half::Refine, u64::MAX, 0).mem_advice(mem), None);
+    }
 
     #[test]
     fn halves_are_independent_and_released_on_drop() {
