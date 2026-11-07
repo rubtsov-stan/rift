@@ -6,9 +6,10 @@ Writes a unified diff to standard output, as \fBdiff \-u\fR does.
 .TP
 \fBrift serve\fR [\fIoptions\fR]
 Serves Rift's protocol to an editor or another program; see SERVE.
+Added in 0.3.
 .TP
 \fBrift git\-diff\fR [\fB\-\-mem\fR \fISIZE\fR] \fIpath old\-file old\-hex old\-mode new\-file new\-hex new\-mode\fR
-The command git runs for an external diff; see GIT.
+The command git runs for an external diff; see GIT. Added in 0.3.
 .IP
 \fBserve\fR and \fBgit\-diff\fR are subcommands, so a file of either name
 is given with a path: \fBrift ./serve other\fR.
@@ -151,7 +152,7 @@ deletion and an insertion. \fB\-\-summary\fR and \fB\-\-stats\fR list the
 blocks, and the \fBm\fR key in the terminal view jumps to the other end
 of one. When the budget leaves no room for the search, the output says so.
 .SH GIT
-\fBrift git\-diff\fR is the command git runs for an external diff. Git
+Added in 0.3. \fBrift git\-diff\fR is the command git runs for an external diff. Git
 passes it \fIpath old\-file old\-hex old\-mode new\-file new\-hex
 new\-mode\fR, and for a rename or copy also the new path and git's
 rename lines. Rift prints a unified diff with git's headers
@@ -204,7 +205,7 @@ git difftool \-t rift
 .fi
 .RE
 .SH SERVE
-\fBrift serve\fR [\fB\-\-max\-session\-mem\fR \fISIZE\fR]
+Added in 0.3. \fBrift serve\fR [\fB\-\-max\-session\-mem\fR \fISIZE\fR]
 [\fB\-\-max\-total\-mem\fR \fISIZE\fR] [\fB\-\-stats\fR] speaks Rift's
 protocol, JSON\-RPC 2.0 framed as in LSP, on standard input and output,
 for editors and other programs. A client opens a pair of files as a
