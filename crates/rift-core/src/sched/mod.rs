@@ -158,8 +158,40 @@ struct Queue {
     background: bool,
     running: Vec<Running>,
     /// Segments whose job failed, with the reason; one entry each.
-    failures: Vec<(usize, String)>,
+    failures: Vec<(usize, Failure)>,
     stop: bool,
+}
+
+/// Why a job produced no hunk.
+#[derive(Debug)]
+enum Failure {
+    Panicked,
+    /// Kept whole, not as text, so a budget refusal reaches the front end
+    /// with its numbers.
+    Error(crate::Error),
+}
+
+impl Failure {
+    /// The error for one waiter; every waiter of the segment gets its own.
+    fn replay(&self, segment: usize) -> crate::Error {
+        use crate::Error;
+        let context = |what: &dyn std::fmt::Display| format!("refining segment {segment}: {what}");
+        match self {
+            Self::Panicked => io::Error::other(context(&"the job panicked")).into(),
+            Self::Error(Error::Io(e)) => io::Error::new(e.kind(), context(e)).into(),
+            Self::Error(Error::Budget(b)) => Error::Budget(*b),
+            Self::Error(Error::LineTooLong { line, cap }) => Error::LineTooLong {
+                line: *line,
+                cap: *cap,
+            },
+            Self::Error(Error::LineOutOfRange { line, count }) => Error::LineOutOfRange {
+                line: *line,
+                count: *count,
+            },
+            Self::Error(Error::InvalidScript(s)) => Error::InvalidScript(s.clone()),
+            Self::Error(Error::Keyed(k)) => Error::Keyed(k.clone()),
+        }
+    }
 }
 
 /// The smallest free Refine half [`Scheduler::new`] accepts for
@@ -369,9 +401,11 @@ impl<J: Job> Shared<J> {
     /// job is reported instead, so its waiter does not wait forever.
     fn lookup(&self, q: &mut Queue, segment: usize) -> Result<Option<Arc<Hunk>>> {
         if q.cache.state(segment) == State::Failed {
-            let why = q.failures.iter().find(|f| f.0 == segment);
-            let why = why.map_or("failed", |f| f.1.as_str());
-            return Err(io::Error::other(format!("refining segment {segment}: {why}")).into());
+            let failure = q.failures.iter().find(|f| f.0 == segment);
+            return Err(failure.map_or_else(
+                || io::Error::other(format!("refining segment {segment}: failed")).into(),
+                |f| f.1.replay(segment),
+            ));
         }
         let hunk = q.cache.get(segment);
         if hunk.is_none() && q.cache.state(segment) == State::Idle && q.wanted.insert(segment) {
@@ -433,7 +467,7 @@ impl Queue {
         cancel
     }
 
-    fn fail(&mut self, segment: usize, why: String) {
+    fn fail(&mut self, segment: usize, why: Failure) {
         let at = self.running.iter().position(|r| r.segment == segment);
         self.running
             .swap_remove(at.expect("failed job was running"));
@@ -518,8 +552,8 @@ fn worker<J: Job>(shared: &Shared<J>) {
             }
             // A cancelled job may stop with an error; nobody wants it.
             Ok(Err(_)) if cancel.is_set() => q.complete(i, Hunk::default(), true),
-            Ok(Err(e)) => q.fail(i, e.to_string()),
-            Err(_) => q.fail(i, "the job panicked".into()),
+            Ok(Err(e)) => q.fail(i, Failure::Error(e)),
+            Err(_) => q.fail(i, Failure::Panicked),
         }
         shared.ready.notify_all();
         shared.work.notify_one();

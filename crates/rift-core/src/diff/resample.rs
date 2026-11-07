@@ -53,7 +53,7 @@ pub(super) fn refine_large<A: Source + Send + ?Sized, B: Source + Send + ?Sized>
         // scheduler guarantees fits.
         return Ok(whole(seg));
     };
-    let done = split(
+    let done = match split(
         w,
         &inner,
         seg.a.clone(),
@@ -61,7 +61,13 @@ pub(super) fn refine_large<A: Source + Send + ?Sized, B: Source + Send + ?Sized>
         MAX_LEVEL + 1,
         &mut out,
         cancel,
-    )?;
+    ) {
+        // The inner budget is this job's own: running out of it makes an
+        // approximate hunk, not a refusal of --mem, whose numbers it does
+        // not share.
+        Err(Error::Budget(_)) => return Ok(whole(seg)),
+        other => other?,
+    };
     if !done && !cancel.is_set() {
         let rest = (out.at_a..seg.a.end, out.at_b..seg.b.end);
         let closed = out.replace(rest.0, rest.1, 0)?;

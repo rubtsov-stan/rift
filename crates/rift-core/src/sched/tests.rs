@@ -618,6 +618,9 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
             if id(segment) == 2 {
                 return Err(io::Error::other("disk on fire").into());
             }
+            if id(segment) == 3 {
+                return Err(REFUSAL.into());
+            }
             Ok(script(segment, false))
         }
         fn too_large(
@@ -630,7 +633,12 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
             Ok(script(s, true))
         }
     }
-    let n = 4;
+    const REFUSAL: BudgetExceeded = BudgetExceeded {
+        half: Half::Refine,
+        requested: Bytes(100),
+        available: Bytes(10),
+    };
+    let n = 5;
     let s = Arc::new(Scheduler::new(Boom, segments(n, |_| false), &budget(n, 4), 1).unwrap());
     let t = Arc::clone(&s);
     let err = finishes(move || t.wait_hunk(1)).unwrap().unwrap_err();
@@ -638,8 +646,17 @@ fn a_failing_job_fails_the_waiter_instead_of_hanging() {
     let t = Arc::clone(&s);
     let err = finishes(move || t.wait_hunk(2)).unwrap().unwrap_err();
     assert!(err.to_string().contains("disk on fire"), "{err}");
+    assert!(err.to_string().contains("segment 2"), "{err}");
+    for _ in 0..2 {
+        let t = Arc::clone(&s);
+        let err = finishes(move || t.wait_hunk(3)).unwrap().unwrap_err();
+        assert!(
+            matches!(err, crate::Error::Budget(b) if b == REFUSAL),
+            "a budget refusal keeps its type for every waiter: {err}"
+        );
+    }
     let t = Arc::clone(&s);
-    finishes(move || t.wait_hunk(3))
+    finishes(move || t.wait_hunk(4))
         .unwrap()
         .expect("the worker survived");
 }
