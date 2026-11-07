@@ -20,6 +20,10 @@
 //! per-worker buffers, at most one chunk plus a tail and never more than the
 //! file, plus one counter per chunk. Nothing is sized from the budget alone:
 //! a small file costs little whatever `--mem` says.
+//!
+//! A [`Watch`] follows the scan from another thread: before every read the
+//! workers check whether it was cancelled, and after every chunk they count
+//! the chunk's bytes in it.
 
 use std::num::NonZero;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -136,6 +140,87 @@ impl ScanConfig {
     }
 }
 
+/// Follows a scan from another thread and stops it.
+///
+/// [`build_pair_watched`](crate::skeleton::build_pair_watched) and
+/// [`Diff::with_watch`](crate::diff::Diff::with_watch) count in it the bytes
+/// their two passes over the files have covered, of twice the size of both
+/// files, and check it before every read. Once it is cancelled, the scan
+/// returns [`Error::Cancelled`] when the reads already under way end: at
+/// most one chunk per scan thread in the first pass, one comparison buffer
+/// per lane in the second. Holds no heap.
+#[derive(Debug, Default)]
+pub struct Watch {
+    cancelled: AtomicBool,
+    done: AtomicU64,
+}
+
+impl Watch {
+    /// A watch on a scan that has not started.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Asks the scan to stop at its next read.
+    pub fn cancel(&self) {
+        // Relaxed: the flag orders no other memory; the workers only need
+        // to see it eventually, and they look before every read.
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether [`cancel`](Self::cancel) was called.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
+    /// Bytes both passes have covered so far. Only grows, and reaches twice
+    /// the size of both files when the scan ends.
+    #[must_use]
+    pub fn done(&self) -> Bytes {
+        Bytes(self.done.load(Ordering::Relaxed))
+    }
+}
+
+/// The part of a [`Watch`] one stage of the scan fills: its bytes count from
+/// `base`. It only ever raises the watch's figure, so a stage run again
+/// after a budget retry does not move the progress back.
+#[derive(Debug)]
+pub(crate) struct Meter<'w> {
+    watch: &'w Watch,
+    base: u64,
+    local: AtomicU64,
+}
+
+impl<'w> Meter<'w> {
+    pub(crate) fn new(watch: &'w Watch, base: u64) -> Self {
+        Self {
+            watch,
+            base,
+            local: AtomicU64::new(0),
+        }
+    }
+
+    /// Counts `n` more bytes of this stage.
+    pub(crate) fn add(&self, n: u64) {
+        // Relaxed: a progress figure, read for display only.
+        let local = self.local.fetch_add(n, Ordering::Relaxed) + n;
+        self.watch
+            .done
+            .fetch_max(self.base + local, Ordering::Relaxed);
+    }
+
+    /// [`Error::Cancelled`] once the watch is cancelled.
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.watch.is_cancelled() {
+            Err(Error::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// What one scan produced. Dropping it releases the reservation.
 #[derive(Debug)]
 pub struct Scanned {
@@ -229,6 +314,17 @@ pub(crate) fn release_slack<T>(v: &mut Vec<T>, reservation: &mut Reservation) {
 ///
 /// Panics if `cfg.chunk` or `cfg.checkpoint_interval` is zero.
 pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -> Result<Scanned> {
+    scan_metered(source, budget, cfg, &Meter::new(&Watch::new(), 0))
+}
+
+/// [`scan`] that counts its chunks in `meter` and stops when its watch is
+/// cancelled.
+pub(crate) fn scan_metered<S: Source + ?Sized>(
+    source: &S,
+    budget: &Budget,
+    cfg: &ScanConfig,
+    meter: &Meter<'_>,
+) -> Result<Scanned> {
     assert!(cfg.chunk.0 > 0, "chunk size must be positive");
     assert!(
         cfg.checkpoint_interval > 0,
@@ -276,6 +372,7 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
         failed: AtomicBool::new(false),
         len,
         chunk,
+        meter,
     };
     thread::scope(|s| {
         let workers: Vec<_> = (0..threads)
@@ -343,7 +440,7 @@ pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -
 
 /// State the workers share. Lines in `samples` and `checkpoints` are
 /// chunk-local until the scan ends.
-struct Shared {
+struct Shared<'m> {
     samples: Mutex<Vec<Sample>>,
     /// Most samples the vector may grow to before the stratum is raised.
     sample_cap: usize,
@@ -362,9 +459,10 @@ struct Shared {
     failed: AtomicBool,
     len: u64,
     chunk: u64,
+    meter: &'m Meter<'m>,
 }
 
-impl Shared {
+impl Shared<'_> {
     /// Appends `staging`, raising the stratum as needed, and returns the
     /// stratum now in force.
     fn push_samples(&self, staging: &mut Vec<Sample>) -> Result<u32> {
@@ -456,7 +554,7 @@ fn exceeded<T>(needed: usize, out: &[T]) -> Error {
 /// One thread's view of the scan: its buffers and its copy of the
 /// stratum and interval.
 struct Worker<'a> {
-    shared: &'a Shared,
+    shared: &'a Shared<'a>,
     mask: u64,
     interval: u64,
     samples: Vec<Sample>,
@@ -466,7 +564,7 @@ struct Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
-    fn new(shared: &'a Shared) -> Self {
+    fn new(shared: &'a Shared<'a>) -> Self {
         Self {
             shared,
             mask: strata::mask(shared.level.load(Ordering::Relaxed)),
@@ -491,6 +589,9 @@ impl<'a> Worker<'a> {
             match self.scan_chunk(source, &mut buf, i) {
                 Ok(lines) => {
                     self.shared.counts[to_usize(i)].store(lines, Ordering::Relaxed);
+                    let start = i * self.shared.chunk;
+                    let end = (start + self.shared.chunk).min(self.shared.len);
+                    self.shared.meter.add(end - start);
                 }
                 Err(e) => break Err(e),
             }
@@ -566,6 +667,7 @@ impl<'a> Worker<'a> {
         let mut filled = 0usize;
         let mut lines = 0u64;
         loop {
+            self.shared.meter.check()?;
             let n = read_retrying(source, &mut buf[filled..], ByteOffset(pos + filled as u64))?;
             if n == 0 {
                 // A pending streaming hash is a line too, even with an

@@ -38,10 +38,11 @@ use crate::index::{IndexedLines, LineIndex};
 use crate::lines::{LineAccess, LineBuf};
 use crate::moves::{MovedBlock, Moves};
 use crate::refine::{Refiner, VERIFY_LINES, work_estimate};
+use crate::scan::Watch;
 use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler, least_bytes};
 use crate::script::{LINES_PER_READ, PIECE, for_each_piece};
 use crate::segment::{Segment, SegmentStatus};
-use crate::skeleton::{OffChain, build_pair};
+use crate::skeleton::{OffChain, build_pair_watched};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 use crate::unified::{Options, Verdict, write_diff};
@@ -155,7 +156,30 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         threads: usize,
         config: Config,
     ) -> Result<Self> {
-        let (scan_a, scan_b, skeleton) = build_pair(&*a, &*b, budget)?;
+        Self::with_watch(a, b, budget, threads, config, &Watch::new())
+    }
+
+    /// [`Diff::with_config`] whose scan is followed and stopped through
+    /// `watch`, as [`build_pair_watched`] describes. Once the map is built
+    /// the watch is no longer read: cancelling it does not stop
+    /// refinement.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Diff::new`], and [`Error::Cancelled`] once `watch` is
+    /// cancelled during the scan.
+    pub fn with_watch(
+        a: Arc<A>,
+        b: Arc<B>,
+        budget: &Budget,
+        threads: usize,
+        config: Config,
+        watch: &Watch,
+    ) -> Result<Self> {
+        if watch.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let (scan_a, scan_b, skeleton) = build_pair_watched(&*a, &*b, budget, watch)?;
         let (level, anchors) = (skeleton.level(), skeleton.anchors());
         let (index_a, held_a) = scan_a.into_index();
         let (index_b, held_b) = scan_b.into_index();

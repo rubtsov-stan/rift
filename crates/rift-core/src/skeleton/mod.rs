@@ -35,7 +35,7 @@ use crate::anchors::{self, Anchors, Pair};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::sample::Sample;
-use crate::scan::{ScanConfig, Scanned, release_slack, scan};
+use crate::scan::{Meter, ScanConfig, Scanned, Watch, release_slack, scan_metered};
 use crate::segment::{Segment, SegmentStatus};
 use crate::source::Source;
 use crate::strata::MAX_LEVEL;
@@ -200,16 +200,44 @@ impl Skeleton {
 ///
 /// # Errors
 ///
-/// As for [`scan`] and [`build`].
+/// As for [`scan`](crate::scan::scan) and [`build`].
 pub fn build_pair<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
     budget: &Budget,
 ) -> Result<(Scanned, Scanned, Skeleton)> {
+    build_pair_watched(src_a, src_b, budget, &Watch::new())
+}
+
+/// [`build_pair`] followed and stopped through `watch`.
+///
+/// The first pass counts in `watch` every chunk of A, then of B, as it is
+/// scanned; the second counts both sides of every stretch it compares and
+/// of every gap it does not need to read. So the count reaches twice the
+/// size of both files when the map is built.
+///
+/// # Errors
+///
+/// As for [`build_pair`], and [`Error::Cancelled`] once `watch` is
+/// cancelled.
+pub fn build_pair_watched<A: Source + ?Sized, B: Source + ?Sized>(
+    src_a: &A,
+    src_b: &B,
+    budget: &Budget,
+    watch: &Watch,
+) -> Result<(Scanned, Scanned, Skeleton)> {
+    let (len_a, len_b) = (src_a.len().0, src_b.len().0);
     let (cfg_a, cfg_b) = ScanConfig::for_pair(src_a.len(), src_b.len(), budget);
-    let mut scan_a = scan(src_a, budget, &cfg_a)?;
-    let mut scan_b = scan(src_b, budget, &cfg_b)?;
-    let skeleton = build(src_a, src_b, &mut scan_a, &mut scan_b, budget)?;
+    let mut scan_a = scan_metered(src_a, budget, &cfg_a, &Meter::new(watch, 0))?;
+    let mut scan_b = scan_metered(src_b, budget, &cfg_b, &Meter::new(watch, len_a))?;
+    let skeleton = build_watched(
+        src_a,
+        src_b,
+        (&mut scan_a, &mut scan_b),
+        budget,
+        watch,
+        len_a + len_b,
+    )?;
     Ok((scan_a, scan_b, skeleton))
 }
 
@@ -234,6 +262,18 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     scan_b: &mut Scanned,
     budget: &Budget,
 ) -> Result<Skeleton> {
+    build_watched(src_a, src_b, (scan_a, scan_b), budget, &Watch::new(), 0)
+}
+
+/// [`build`] whose comparison counts in `watch` from `base` bytes.
+fn build_watched<A: Source + ?Sized, B: Source + ?Sized>(
+    src_a: &A,
+    src_b: &B,
+    (scan_a, scan_b): (&mut Scanned, &mut Scanned),
+    budget: &Budget,
+    watch: &Watch,
+    base: u64,
+) -> Result<Skeleton> {
     // Thinning can release the samples and nothing else. If even that
     // leaves too little for the map at the coarsest stratum, say so before
     // reading anything.
@@ -251,7 +291,9 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     loop {
         scan_a.thin(level);
         scan_b.thin(level);
-        match build_at(src_a, src_b, scan_a, scan_b, budget) {
+        let meter = Meter::new(watch, base);
+        meter.check()?;
+        match build_at(src_a, src_b, scan_a, scan_b, budget, &meter) {
             Err(Error::Budget(_)) if level < MAX_LEVEL => level += 1,
             other => return other,
         }
@@ -265,6 +307,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     scan_a: &Scanned,
     scan_b: &Scanned,
     budget: &Budget,
+    meter: &Meter<'_>,
 ) -> Result<Skeleton> {
     let mut anchors = anchors::select(scan_a.samples(), scan_b.samples(), budget)?;
     let mut off_chain = OffChain::new(budget)?;
@@ -317,6 +360,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         Bytes(buf).as_usize(),
         usize::try_from(lanes).expect("lanes are at most the thread count"),
         TASK_BYTES,
+        meter,
     )?;
     work.shrink(Bytes(buffers));
 
@@ -405,6 +449,10 @@ impl Verdicts {
 /// of equal gaps costs sequential reads of the buffer size. The anchor
 /// lines of differing gaps are read where they come, cold, spread over
 /// the lanes.
+///
+/// Each task counts in `meter` both sides of every stretch it streams, as
+/// it reads them, and the rest of its gaps, both sides, when it ends; so
+/// the tasks together count both files once.
 fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     bounds: &Bounds<'_>,
     src_a: &A,
@@ -412,6 +460,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     buf: usize,
     lanes: usize,
     task_bytes: u64,
+    meter: &Meter<'_>,
 ) -> Result<Verdicts> {
     let gaps = bounds.chain.len() + 1;
     let verdicts = Verdicts {
@@ -423,7 +472,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
         if g > 0 {
             let (a, b) = bounds.at(g);
             let (a, b) = (ByteOffset(a.offset), ByteOffset(b.offset));
-            if !same_line(src_a, a, src_b, b, buf_a, buf_b)? {
+            if !same_line(src_a, a, src_b, b, buf_a, buf_b, meter)? {
                 set(&verdicts.false_anchors, g);
             }
         }
@@ -436,7 +485,11 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
         t => bounds.first_gap_from(t * task_bytes),
     };
     let run = |task: u64, buf_a: &mut [u8], buf_b: &mut [u8]| -> Result<()> {
+        meter.check()?;
         let (lo, hi) = (first_gap(task), first_gap(task + 1));
+        let (start, end) = (bounds.at(lo), bounds.at(hi));
+        let span = (end.0.offset - start.0.offset) + (end.1.offset - start.1.offset);
+        let mut counted = 0;
         let mut i = lo;
         while i < hi {
             if !bounds.aligned(i) {
@@ -460,9 +513,9 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
                     src_b,
                     (start_a.offset, start_b.offset),
                     len,
-                    buf_a,
-                    buf_b,
+                    (&mut *buf_a, &mut *buf_b),
                     first,
+                    (meter, &mut counted),
                 )?
                 else {
                     break;
@@ -474,6 +527,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
             }
             i = j;
         }
+        meter.add(span.saturating_sub(counted));
         Ok(())
     };
     (0..lanes).into_par_iter().try_for_each(|lane| {
@@ -691,6 +745,7 @@ fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
     off_b: ByteOffset,
     buf_a: &mut [u8],
     buf_b: &mut [u8],
+    meter: &Meter<'_>,
 ) -> Result<bool> {
     let step = buf_a.len().min(buf_b.len());
     assert!(step > 0, "empty comparison buffer");
@@ -702,6 +757,7 @@ fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
     let mut pos = 0u64;
     loop {
         let (at_a, at_b) = (off_a + pos, off_b + pos);
+        meter.check()?;
         let (na, nb) = (left(a.len(), at_a, want), left(b.len(), at_b, want));
         let (ca, cb) = (&mut buf_a[..na], &mut buf_b[..nb]);
         a.read_exact_at(ca, at_a)?;
@@ -726,15 +782,16 @@ fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
 /// through the two buffers. Reads start at `first` bytes and double up to
 /// the buffer size: the caller restarts the stream after every mismatch,
 /// and when mismatches are close a full first read would copy mostly bytes
-/// the next restart reads again.
+/// the next restart reads again. Both sides of every read are counted in
+/// `meter` and added to `counted`.
 fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
     starts: (u64, u64),
     len: u64,
-    buf_a: &mut [u8],
-    buf_b: &mut [u8],
+    (buf_a, buf_b): (&mut [u8], &mut [u8]),
     first: u64,
+    (meter, counted): (&Meter<'_>, &mut u64),
 ) -> Result<Option<u64>> {
     let (start_a, start_b) = starts;
     let max = buf_a.len().min(buf_b.len()) as u64;
@@ -744,11 +801,18 @@ fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
         let n = Bytes((len - pos).min(step)).as_usize();
         step = (2 * step).min(max);
         let (a, b) = (&mut buf_a[..n], &mut buf_b[..n]);
+        meter.check()?;
         src_a.read_exact_at(a, ByteOffset(start_a + pos))?;
         src_b.read_exact_at(b, ByteOffset(start_b + pos))?;
-        if a != b {
-            let i = a.iter().zip(b.iter()).position(|(x, y)| x != y);
-            return Ok(Some(pos + i.expect("slices differ") as u64));
+        // Only the bytes before a mismatch: a restart may read the rest
+        // again, and a byte counted twice would push the total past both
+        // files.
+        let same = a.iter().zip(b.iter()).position(|(x, y)| x != y);
+        let checked = same.unwrap_or(n) as u64;
+        meter.add(2 * checked);
+        *counted += 2 * checked;
+        if let Some(i) = same {
+            return Ok(Some(pos + i as u64));
         }
         pos += n as u64;
     }
@@ -759,6 +823,12 @@ fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
 mod tests {
     use super::*;
     use crate::lines::{LineAccess, MemLines};
+
+    /// A meter on a watch nobody reads or cancels.
+    fn meter() -> Meter<'static> {
+        static WATCH: std::sync::LazyLock<Watch> = std::sync::LazyLock::new(Watch::new);
+        Meter::new(&WATCH, 0)
+    }
 
     fn samples(data: &[u8]) -> Vec<Sample> {
         let mut offset = 0;
@@ -788,8 +858,9 @@ mod tests {
             )
         };
         let (oa, ob) = (off(a, i), off(b, j));
-        let small = same_line(a, oa, b, ob, &mut vec![0; buf], &mut vec![0; buf]).unwrap();
-        let large = same_line(a, oa, b, ob, &mut [0; 4096], &mut [0; 4096]).unwrap();
+        let meter = meter();
+        let small = same_line(a, oa, b, ob, &mut vec![0; buf], &mut vec![0; buf], &meter).unwrap();
+        let large = same_line(a, oa, b, ob, &mut [0; 4096], &mut [0; 4096], &meter).unwrap();
         assert_eq!(small, large, "buffer size changed the verdict");
         small
     }
@@ -882,7 +953,7 @@ mod tests {
             Counted(&a, AtomicU64::new(0)),
             Counted(&b, AtomicU64::new(0)),
         );
-        let verdicts = compare_gaps(&bounds, &ca, &cb, 1 << 20, 1, 1 << 20).unwrap();
+        let verdicts = compare_gaps(&bounds, &ca, &cb, 1 << 20, 1, 1 << 20, &meter()).unwrap();
         assert_eq!((0..4000).filter(|&g| verdicts.differs(g)).count(), 400);
         let read = ca.1.load(Ordering::Relaxed);
         assert!(
@@ -937,7 +1008,8 @@ mod tests {
         assert_ne!(false_anchors, [0; 0]);
         for task_bytes in [1, 3, 64, 100, 1 << 20] {
             for buf in [1, 5, 4096] {
-                let got = compare_gaps(&bounds, &a[..], &b[..], buf, 3, task_bytes).unwrap();
+                let got =
+                    compare_gaps(&bounds, &a[..], &b[..], buf, 3, task_bytes, &meter()).unwrap();
                 let bits: Vec<bool> = (0..gaps).map(|g| got.differs(g)).collect();
                 assert_eq!(bits, want, "task_bytes {task_bytes}, buf {buf}");
                 let false_got: Vec<usize> = (0..gaps).filter(|&g| got.false_anchor(g)).collect();

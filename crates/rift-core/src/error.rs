@@ -46,6 +46,9 @@ pub enum Error {
     /// Key mode could not compare the files.
     #[error(transparent)]
     Keyed(#[from] crate::keyed::KeyError),
+    /// The scan was stopped through its [`Watch`](crate::scan::Watch).
+    #[error("the scan was cancelled")]
+    Cancelled,
 }
 
 /// Result alias with the crate error.
