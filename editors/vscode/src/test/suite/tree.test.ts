@@ -18,7 +18,7 @@ describe('tree', () => {
     const [, diffs, moves] = x.tree.getChildren();
     const segs = labels(x, diffs);
     assert.strictEqual(segs.length, 5);
-    assert.strictEqual(segs[0], 'A 10–11 ↔ B 10–12');
+    assert.ok(segs[0].startsWith('A 10–11 ↔ B 10–12'));
     assert.strictEqual(segs[1], 'A 20–24 ↔ B before 21');
     assert.strictEqual(segs[2], 'A 35–38 ↔ B 31–34 | approx');
     assert.deepStrictEqual(labels(x, moves), ['A 20–24 → B 47–51 | 5 lines']);

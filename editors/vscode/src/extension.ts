@@ -2,13 +2,16 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { Server } from './client';
 import { Comparison, rerunOffer } from './comparison';
-import { num } from './format';
+import { excerpt, num, title } from './format';
+import { HunkDocs, SCHEME } from './hunk';
 import { RpcErrorObject } from './protocol';
 import { RiftTree, basename } from './tree';
+import { HunkResult } from './protocol';
 
 // What tests reach into; not a public API.
 export interface Api {
   tree: RiftTree;
+  docs: HunkDocs;
   comparison(): Comparison | undefined;
   serverPid(): Promise<number | undefined>;
 }
@@ -20,6 +23,11 @@ export function activate(ctx: vscode.ExtensionContext): Api {
   const bundled = path.join(ctx.extensionPath, 'bin', process.platform === 'win32' ? 'rift.exe' : 'rift');
 
   const tree = new RiftTree();
+  const docs = new HunkDocs();
+  ctx.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(SCHEME, docs),
+    vscode.languages.registerHoverProvider({ scheme: SCHEME }, docs),
+  );
   const view = vscode.window.createTreeView('rift.comparison', { treeDataProvider: tree });
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   let comparison: Comparison | undefined;
@@ -98,6 +106,59 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     render();
   }
 
+  // Shows one hunk in the diff editor. `lineA` also puts the cursor on that line of A.
+  async function show(target: { segment: number } | { line_a: number }): Promise<HunkResult | undefined> {
+    const c = comparison;
+    if (!c) return undefined;
+    let h: HunkResult | undefined;
+    try {
+      h = await c.hunk(target, cfg().get<number>('contextLines') ?? 3);
+    } catch (e) {
+      showError(e);
+      return undefined;
+    }
+    if (!h || c !== comparison) return undefined;
+    const left = docs.add('a', basename(c.a), excerpt(h.a));
+    const right = docs.add('b', basename(c.b), excerpt(h.b));
+    await vscode.commands.executeCommand('vscode.diff', left, right, title(basename(c.a), basename(c.b), h), { preview: true });
+    c.setVisible(h.range.a);
+    const seg = h.segment;
+    // An equal segment or a moved block is not in the list: stand after the last difference before it.
+    const pos = c.segments.findIndex((s) => s.index === seg);
+    c.current = pos >= 0 ? pos : c.segments.reduce((last, s, i) => (s.index < seg ? i : last), -1);
+    if ('line_a' in target) {
+      const ed = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === left.toString());
+      const line = Math.max(0, Math.min(target.line_a - h.a.start, (ed?.document.lineCount ?? 1) - 1));
+      if (ed) {
+        ed.selection = new vscode.Selection(line, 0, line, 0);
+        ed.revealRange(new vscode.Range(line, 0, line, 0), vscode.TextEditorRevealType.InCenter);
+      }
+    }
+    return h;
+  }
+
+  async function step(dir: 1 | -1): Promise<void> {
+    const c = comparison;
+    if (!c || c.state !== 'ready') return;
+    const pos = c.current < 0 ? 0 : c.current + dir;
+    if (pos >= c.segments.length && c.segments.length < c.segmentsTotal) {
+      try {
+        await c.loadSegments();
+      } catch (e) {
+        showError(e);
+        return;
+      }
+      render();
+    }
+    if (pos < 0 || pos >= c.segments.length) {
+      void vscode.window.setStatusBarMessage(pos < 0 ? 'Rift: this is the first difference' : 'Rift: this is the last difference', 3000);
+      return;
+    }
+    if (await show({ segment: c.segments[pos].index })) {
+      void Promise.resolve(view.reveal(tree.node(c.segments[pos]), { select: true, focus: false })).catch(() => {});
+    }
+  }
+
   async function pick(label: string, start?: vscode.Uri): Promise<string | undefined> {
     const r = await vscode.window.showOpenDialog({ canSelectMany: false, canSelectFolders: false, openLabel: 'Select', title: label, defaultUri: start });
     return r?.[0].fsPath;
@@ -118,6 +179,25 @@ export function activate(ctx: vscode.ExtensionContext): Api {
       return;
     }
     await compare(files[0].fsPath, files[1].fsPath);
+  });
+  reg('rift.openSegment', (index: number) => show({ segment: index }));
+  reg('rift.openMove', (lineA: number) => show({ line_a: lineA }));
+  reg('rift.nextDifference', () => step(1));
+  reg('rift.previousDifference', () => step(-1));
+  reg('rift.goToLineInA', async () => {
+    const c = comparison;
+    if (!c || c.state !== 'ready') return;
+    // From a rift: document of A the cursor's own line is the default.
+    const ed = vscode.window.activeTextEditor;
+    const doc = ed && docs.lookup(ed.document.uri);
+    const dflt = doc?.side === 'a' && ed ? String(doc.start + ed.selection.active.line) : '';
+    const lines = c.summary?.a.lines;
+    const text = await vscode.window.showInputBox({
+      prompt: `Line in file A${lines ? ` (1–${num(lines)})` : ''}`,
+      value: dflt,
+      validateInput: (v) => (/^\d+$/.test(v) && Number(v) >= 1 && (!lines || Number(v) <= lines) ? undefined : 'Enter a line number of file A'),
+    });
+    if (text) await show({ line_a: Number(text) });
   });
   reg('rift.closeComparison', async () => {
     const c = comparison;
@@ -150,7 +230,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     await Promise.race([comparison?.close(), new Promise((r) => setTimeout(r, 2000))]);
     server.dispose();
   };
-  return { tree, comparison: () => comparison, serverPid: () => server.pid() };
+  return { tree, docs, comparison: () => comparison, serverPid: () => server.pid() };
 }
 
 export function deactivate(): Promise<void> | undefined {

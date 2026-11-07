@@ -10,7 +10,7 @@ describe('format', () => {
 
   it('titles a hunk with both original ranges', () => {
     const side = { start: 1, total: 0, lines: [] };
-    const h = { range: { a: { start: 1204880, count: 61 }, b: { start: 1204877, count: 65 } }, a: side, b: side };
+    const h = { status: 'differs' as const, range: { a: { start: 1204880, count: 61 }, b: { start: 1204877, count: 65 } }, a: side, b: side };
     assert.strictEqual(title('a.sql', 'b.sql', h), 'a.sql 1,204,880–1,204,940 ↔ b.sql 1,204,877–1,204,941');
   });
 

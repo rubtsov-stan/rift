@@ -146,6 +146,7 @@ export class Comparison {
       if (r) {
         this.segments.push(...r.segments);
         this.segmentsTotal = r.total;
+        if (r.segments.length) this.setVisible(span(r.segments));
       }
     })().finally(() => (this.loadingSegments = undefined));
     return this.loadingSegments;
@@ -201,4 +202,11 @@ export function rerunOffer(error: RpcErrorObject | undefined, maxSessionMem: num
   if (typeof mem !== 'string') return undefined;
   if (maxSessionMem !== undefined && typeof bytes === 'number' && bytes > maxSessionMem) return { mem, limit: maxSessionMem };
   return { mem };
+}
+
+// The A lines from the first to the last of some segments.
+function span(segs: Segment[]): Range {
+  const start = Math.min(...segs.map((s) => s.a.start));
+  const end = Math.max(...segs.map((s) => s.a.start + Math.max(s.a.count, 1)));
+  return { start, count: end - start };
 }

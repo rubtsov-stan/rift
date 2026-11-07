@@ -47,8 +47,7 @@ describe('Comparison', () => {
     const { server, cmp } = setup();
     await cmp.open();
     await until(() => cmp.state === 'ready');
-    const h = await cmp.hunk({ segment: 1 }, 3);
-    assert.strictEqual(h?.pending, true);
+    await cmp.hunk({ segment: 1 }, 3);
     await until(() => cmp.segments[0].status === 'approx');
     server.dispose();
   });

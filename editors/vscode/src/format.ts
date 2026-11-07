@@ -9,9 +9,12 @@ export function fmtRange(r: Range): string {
   return `${num(r.start)}–${num(r.start + r.count - 1)}`;
 }
 
-export function title(a: string, b: string, h: Pick<HunkResult, 'range' | 'a' | 'b'>): string {
-  const flags = [h.a, h.b].some((s) => s.lines.some((l) => l.lossy)) ? ' (lossy lines)' : '';
-  return `${a} ${fmtRange(h.range.a)} ↔ ${b} ${fmtRange(h.range.b)}${flags}`;
+export function title(a: string, b: string, h: Pick<HunkResult, 'range' | 'a' | 'b' | 'status' | 'truncated'>): string {
+  const flags = [];
+  if (h.status === 'approx') flags.push('approx');
+  if ([h.a, h.b].some((s) => s.lines.some((l) => l.lossy))) flags.push('lossy lines');
+  if (h.truncated || [h.a, h.b].some((s) => s.lines.some((l) => l.truncated))) flags.push('cut');
+  return `${a} ${fmtRange(h.range.a)} ↔ ${b} ${fmtRange(h.range.b)}${flags.length ? ` (${flags.join(', ')})` : ''}`;
 }
 
 export interface Excerpt {

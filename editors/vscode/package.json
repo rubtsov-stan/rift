@@ -208,7 +208,7 @@
     "test": "npm run test:unit && npm run test:vscode",
     "check-mock": "node test/check-mock.js",
     "package": "vsce package",
-    "test:unit": "npm run build && mocha out/test/unit/*.test.js",
+    "test:unit": "npm run build && mocha --exit out/test/unit/*.test.js",
     "test:vscode": "npm run build && node out/test/run.js"
   },
   "bugs": {
