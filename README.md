@@ -132,6 +132,15 @@ kilobytes about two huge files instead of the files. It is released next
 to `rift`; see the
 [MCP guide](https://rubtsov-stan.github.io/rift/guide/mcp/).
 
+## VS Code
+
+An extension shows the difference map and the moved blocks of two huge
+files in a side panel and opens each difference in VS Code's diff editor,
+on just that excerpt. It is built on `rift serve`, the same engine and
+`--mem` limit as the command line. See the
+[extension README](editors/vscode/README.md). It is not yet published: there
+is no Marketplace page yet, only the source here.
+
 ## License
 
 Rift is dual-licensed under MIT and Apache 2.0, like Rust itself, so you can use it under whichever fits your project. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).

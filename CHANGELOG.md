@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A VS Code extension in `editors/vscode`, built on `rift serve`. It is not
+  yet published.
+
 ### Changed
 
 - `serve` and `git-diff` are subcommands, listed in `rift --help`, so a
