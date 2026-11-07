@@ -78,9 +78,9 @@ pub struct Report {
 ///
 /// # Errors
 ///
-/// [`KeyError`] for duplicate or missing keys, [`Error::LineTooLong`] for
-/// a record larger than the budget allows, a budget error when not even a
-/// single key fits, an I/O error from a source or from `on_change`.
+/// [`KeyError`] for duplicate or missing keys or a record longer than
+/// key mode holds, a budget error when not even a single key or record
+/// fits, an I/O error from a source or from `on_change`.
 pub fn compare<A, B>(
     a: &A,
     b: &B,
@@ -626,10 +626,11 @@ impl<'b> Pass<'b> {
             u32::try_from(rec.key.start),
             u32::try_from(key.len()),
         ) else {
-            return Err(Error::LineTooLong {
+            return Err(Error::Keyed(KeyError::TooLong {
+                side,
                 line: LineNo(rec.line),
                 cap: Bytes(u64::from(u32::MAX)),
-            });
+            }));
         };
         let at = self.kept.len();
         self.kept.push(Kept {

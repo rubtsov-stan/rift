@@ -65,6 +65,11 @@ fn with_path(err: Error, [a, b]: [&Path; 2]) -> anyhow::Error {
         Error::Keyed(KeyError::NoKey { side, line }) => {
             anyhow::anyhow!("line {} of {side} ({}) has no key", line.0 + 1, path(side))
         }
+        Error::Keyed(KeyError::TooLong { side, line, cap }) => anyhow::anyhow!(
+            "line {} of {side} ({}) starts a record longer than {cap} bytes, the most key mode holds",
+            line.0 + 1,
+            path(side)
+        ),
         e => e.into(),
     }
 }

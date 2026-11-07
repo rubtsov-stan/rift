@@ -20,7 +20,7 @@ pub mod fuzz_access {
 use std::fmt;
 use std::str::FromStr;
 
-use crate::types::LineNo;
+use crate::types::{Bytes, LineNo};
 
 /// Where the key of a record is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -156,6 +156,16 @@ pub enum KeyError {
         side: Side,
         /// The column asked for.
         name: String,
+    },
+    /// A record is longer than key mode can hold, whatever the budget.
+    #[error("line {} of {side} starts a record longer than {cap} bytes, the most key mode holds", line.0 + 1)]
+    TooLong {
+        /// The file.
+        side: Side,
+        /// The record's first line.
+        line: LineNo,
+        /// The longest record key mode holds.
+        cap: Bytes,
     },
     /// So many keys shared a hash with a matched key that duplicates could
     /// not be told apart from collisions.

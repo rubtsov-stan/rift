@@ -690,14 +690,17 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
         }
         if self.end == self.buf.len() {
             let more = self.buf.len();
-            if self.buf.len() + more > u32::MAX as usize
-                || self.res.grow(Bytes(more as u64)).is_err()
-                || self.buf.try_reserve_exact(more).is_err()
-            {
-                return Err(Error::LineTooLong {
+            if self.buf.len() + more > u32::MAX as usize {
+                return Err(Error::Keyed(KeyError::TooLong {
+                    side: self.side,
                     line: LineNo(self.line),
                     cap: Bytes(self.buf.len() as u64),
-                });
+                }));
+            }
+            self.res.grow(Bytes(more as u64))?;
+            if self.buf.try_reserve_exact(more).is_err() {
+                self.res.shrink(Bytes(more as u64));
+                return Err(io::Error::from(io::ErrorKind::OutOfMemory).into());
             }
             self.buf.resize(self.buf.len() + more, 0);
         }

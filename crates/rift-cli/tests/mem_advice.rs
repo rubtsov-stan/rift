@@ -124,3 +124,40 @@ fn key_mode_advises_a_mem_that_works() {
         String::from_utf8_lossy(&last.stderr)
     );
 }
+
+/// A record larger than the budget allows is a budget refusal too. The
+/// read windows grow with --mem, so following the advice from far below
+/// takes many small steps; from just below the smallest --mem that works,
+/// one step is enough.
+#[test]
+fn key_mode_advises_a_mem_for_a_long_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "x".repeat(200_000);
+    let (a, b) = pair(
+        dir.path(),
+        &format!("id,v\n1,{long}\n2,y\n"),
+        &format!("id,v\n2,y\n1,{long}z\n"),
+    );
+    let args = ["--key", "csv:id"];
+    let kib = |k: u64| format!("{k}K");
+    // The smallest limit in KiB, by bisection; every refusal on the way
+    // advises more than it was given.
+    let (mut lo, mut hi) = (64, 8 << 10);
+    assert!(advice(&rift(&args, &kib(lo), &a, &b)).is_some());
+    assert_eq!(rift(&args, &kib(hi), &a, &b).status.code(), Some(1));
+    while hi - lo > 1 {
+        let mid = u64::midpoint(lo, hi);
+        let out = rift(&args, &kib(mid), &a, &b);
+        if let Some(next) = advice(&out) {
+            assert_eq!(out.status.code(), Some(2));
+            assert!(bytes(&next) > mid << 10, "{mid}K advised {next}");
+            lo = mid;
+        } else {
+            assert_eq!(out.status.code(), Some(1), "{mid}K");
+            hi = mid;
+        }
+    }
+    let (refused, last) = follow(&args, kib(lo), &a, &b);
+    assert_eq!(refused, [kib(lo)]);
+    assert_eq!(String::from_utf8_lossy(&last.stdout), "~1\t2\t3\n");
+}
