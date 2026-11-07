@@ -45,7 +45,7 @@
 <a href="{{ get_url(path='benchmarks/') | safe }}">Benchmarks</a>
 <a href="{{ get_url(path='reference/') | safe }}">Reference</a>
 </nav>
-<a class="star" href="{{ config.extra.repo_url }}"><span class="st"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 .6l2.1 4.7 5.1.5-3.8 3.4 1.1 5-4.5-2.6-4.5 2.6 1.1-5L.8 5.8l5.1-.5z"/></svg></span><span class="long">Star on GitHub</span>{% if stats.stars >= config.extra.star_threshold %}<b data-star-min="{{ config.extra.star_threshold }}" data-repo="{{ config.extra.repo }}">{{ stats.stars }}</b>{% elif stats.release %}<b data-star-min="{{ config.extra.star_threshold }}" data-repo="{{ config.extra.repo }}">{{ stats.release }}</b>{% endif %}</a>
+<a class="star" href="{{ config.extra.repo_url }}"><span class="st"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 .6l2.1 4.7 5.1.5-3.8 3.4 1.1 5-4.5-2.6-4.5 2.6 1.1-5L.8 5.8l5.1-.5z"/></svg></span><span class="long">Star on GitHub</span>{% if stats.stars >= config.extra.star_threshold %}<b>{{ stats.stars }}</b>{% elif stats.release %}<b>{{ stats.release }}</b>{% endif %}</a>
 <button class="btn" type="button" data-theme-toggle hidden>Light</button>
 </div></header>
 {% block main %}{% endblock main %}

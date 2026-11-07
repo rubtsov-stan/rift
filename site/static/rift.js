@@ -104,20 +104,4 @@
       if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, old); else old();
     };
   });
-
-  /* star count: shown only at or above the threshold; the built page stays as it is if the request fails */
-  try {
-    var slot = d.querySelector('[data-star-min]');
-    if (slot) {
-      fetch('https://api.github.com/repos/' + slot.getAttribute('data-repo'))
-        .then(function (r) { return r.ok ? r.json() : {}; })
-        .then(function (j) {
-          if (typeof j.stargazers_count === 'number' && j.stargazers_count >= +slot.getAttribute('data-star-min')) {
-            slot.textContent = j.stargazers_count;
-            slot.setAttribute('aria-label', j.stargazers_count + ' stars');
-          }
-        })
-        .catch(function () {});
-    }
-  } catch (e) {}
 })();
