@@ -105,6 +105,12 @@ the first file, and `q` quits. A hunk Rift is still refining shows as a
 pending row and fills in by itself. Approximate hunks are yellow and
 marked with `~`.
 
+`--summary` and `--stats` also list blocks of at least three lines that
+appear in both files at different places. The terminal view marks both
+ends of such a block, and `m` jumps from one end to the other. The
+unified diff does not change: a moved block is still a deletion and an
+insertion there.
+
 ## Key mode
 
 ```sh
@@ -141,7 +147,9 @@ Key mode writes no temporary files. When the keys do not fit `--mem`,
 Rift splits them by hash and reads both files once per part, so a
 smaller budget means more passes over the files. Each pass prints its
 changes sorted by line. A 1 GiB CSV pair takes two passes at the default
-256 MiB; `--stats` reports the count.
+256 MiB; `--stats` reports the count. A record too long for the budget
+stops the run with a budget error that names a `--mem` under which the
+record fits.
 
 ## What is guaranteed
 
@@ -167,9 +175,11 @@ changes sorted by line. A 1 GiB CSV pair takes two passes at the default
 - An approximate region is a whole replacement: correct, but coarse. It
   happens in large regions without any line unique in both files, such
   as long runs of identical or repetitive lines.
-- A block of rows that moved, such as a dump written in a different
-  order, shows as a deletion and an insertion, as in any line-based
-  diff.
+- In the unified diff, a block of rows that moved, such as a dump
+  written in a different order, shows as a deletion and an insertion, as
+  in any line-based diff. `--summary`, `--stats` and the terminal view
+  name moved blocks, but only those that contain a sampled line, so they
+  can miss some.
 - Only the heap is bounded by `--mem`. The resident set also holds the
   binary, thread stacks and whatever page cache the kernel counts
   against the process.
