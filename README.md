@@ -93,8 +93,10 @@ rift --no-moves a b > changes.patch  # skip the search for moved blocks;
 ```
 
 Exit codes follow `diff`: 0 when the files are identical, 1 when they
-differ, 2 on an error. A `--mem` below about 12 MiB is refused with a
-budget error.
+differ, 2 on an error. The smallest `--mem` that works depends on the
+files. Below it, Rift exits with 2 and a budget error that ends with a
+lower bound, such as `these files need --mem of at least 10333K`. A run
+at that limit can still stop at a later stage and name a higher one.
 
 In the terminal view, `n` and `p` jump to the next and previous
 difference, space and `b` page down and up, `g` or `:` goes to a line of

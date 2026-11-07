@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use rift_core::alloc::CountingAlloc;
+use rift_core::{Budget, BudgetExceeded, Bytes};
 use rift_diff::Args;
 
 use crate::source::FileSource;
@@ -56,10 +57,39 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("rift: {err:#}");
+            match mem_advice(&err, args.mem) {
+                Some(advice) => eprintln!("rift: {err:#}; {advice}"),
+                None => eprintln!("rift: {err:#}"),
+            }
             ExitCode::from(2)
         }
     }
+}
+
+/// For a budget refusal, the `--mem` it proves necessary: the half held
+/// its capacity minus what was free, and needs that plus the request.
+/// Only a lower bound, since a later stage may need more.
+fn mem_advice(err: &anyhow::Error, mem: Bytes) -> Option<String> {
+    let refusal = err.chain().find_map(|e| match e.downcast_ref() {
+        Some(rift_core::Error::Budget(b)) => Some(*b),
+        _ => e.downcast_ref::<BudgetExceeded>().copied(),
+    })?;
+    let cap = Budget::new(mem).capacity(refusal.half).0;
+    let held = cap.saturating_sub(refusal.available.0);
+    let need = held.checked_add(refusal.requested.0)?.checked_mul(2)?;
+    // A refusal that does not exceed its half proves nothing about --mem.
+    (need > mem.0).then(|| format!("these files need --mem of at least {}", size(need)))
+}
+
+/// `bytes` rounded up to the largest unit that keeps the rounding under
+/// 1/64 of the value, so it stays usable as a --mem argument.
+fn size(bytes: u64) -> String {
+    let (unit, suffix) = [(40, 'T'), (30, 'G'), (20, 'M')]
+        .into_iter()
+        .map(|(shift, suffix)| (1u64 << shift, suffix))
+        .find(|&(unit, _)| bytes >= 64 * unit)
+        .unwrap_or((1 << 10, 'K'));
+    format!("{}{suffix}", bytes.div_ceil(unit))
 }
 
 #[cfg(test)]
@@ -80,5 +110,38 @@ mod tests {
         assert_eq!(alias(&["rift", "a", "tui", "b"]), ["rift", "a", "tui", "b"]);
         let args = Args::parse_from(alias(&["rift", "tui", "--mem", "1G", "a", "b"]));
         assert!(args.interactive);
+    }
+
+    #[test]
+    fn a_budget_refusal_names_the_mem_it_needs() {
+        let refusal = |half, requested, available| {
+            anyhow::Error::from(rift_core::Error::Budget(BudgetExceeded {
+                half,
+                requested: Bytes(requested),
+                available: Bytes(available),
+            }))
+        };
+        let mem = Bytes::mib(7);
+        // 3.5 MiB per half, 0.5 MiB of it free: 3 MiB held, 5 MiB needed.
+        let err = refusal(rift_core::Half::Refine, 2 << 20, 512 << 10);
+        assert_eq!(
+            mem_advice(&err, mem).as_deref(),
+            Some("these files need --mem of at least 10240K")
+        );
+        let err = err.context("the changes printed above are incomplete");
+        assert!(mem_advice(&err, mem).is_some(), "found under a context");
+        let fits = refusal(rift_core::Half::Skeleton, 10, 20);
+        assert_eq!(mem_advice(&fits, mem), None);
+        assert_eq!(mem_advice(&anyhow::anyhow!("other"), mem), None);
+    }
+
+    #[test]
+    fn sizes_round_up_by_less_than_a_64th() {
+        assert_eq!(size(1), "1K");
+        assert_eq!(size(4145), "5K");
+        assert_eq!(size(64 << 20), "64M");
+        assert_eq!(size((64 << 20) + 1), "65M");
+        assert_eq!(size((64 << 20) - 1), "65536K");
+        assert_eq!(size(100 << 30), "100G");
     }
 }
