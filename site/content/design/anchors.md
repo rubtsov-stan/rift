@@ -25,7 +25,7 @@ Sources: `crates/rift-core/src/anchors/mod.rs`, `UniqueLines`, `unique_hashes`, 
 
 The candidates, ordered by their line in A, are reduced to the longest chain that also increases in B. `longest_increasing` uses patience sorting: one pass over the candidates with a binary search per candidate, O(m log m) time for m candidates and 12 bytes each of working memory. Files that mostly agree put most candidates at the end of the longest chain so far, and the search checks that case first and skips the binary search.
 
-Candidates left out of the chain cross it. A block of rows that moved produces such candidates, so the skeleton keeps them as the off-chain list, 16 bytes per pair, capped at an eighth of the skeleton half that is free when the search starts. Moved blocks starts from that list.
+Candidates left out of the chain cross it. A block of rows that moved produces such candidates, so the skeleton keeps them as the off-chain list, 16 bytes per pair, capped at an eighth of the skeleton half that is free when the search starts. [Moved blocks](@/design/moves.md) starts from that list.
 
 Each anchor in the chain opens a gap that runs to the next anchor. Gap 0 starts at the top of both files, the last gap ends at their ends, and every line of both files lies in exactly one gap.
 
