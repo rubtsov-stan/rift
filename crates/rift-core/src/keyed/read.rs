@@ -13,6 +13,12 @@
 //! it ended where it starts, in the state it assumed; otherwise the next
 //! round parses again from there. A quoted line break at a cut, or a
 //! `COPY` header or terminator, costs a round; plain rows never do.
+//!
+//! A `COPY` table gets its id when it is first named, so only the first
+//! chunk of a round, which starts where a sequential read would be, may
+//! name a new table. Any other chunk stops at a header of a table not yet
+//! named: it may be a guess from the wrong state, and its id depends on
+//! the tables named before it.
 
 use std::io;
 use std::ops::Range;
@@ -83,10 +89,16 @@ impl Tables {
         })
     }
 
+    /// The id and hash seed of a table name, if it is named already.
+    fn find(&self, name: &[u8]) -> Option<(u32, u64)> {
+        let i = self.names.iter().position(|(n, _)| **n == *name)?;
+        Some((id(i), self.names[i].1))
+    }
+
     /// The id and hash seed of a table name, added if new.
     fn id(&mut self, name: &[u8]) -> Result<(u32, u64)> {
-        if let Some(i) = self.names.iter().position(|(n, _)| **n == *name) {
-            return Ok((id(i), self.names[i].1));
+        if let Some(found) = self.find(name) {
+            return Ok(found);
         }
         // The list doubles, so two slots per name cover its capacity.
         let slot = size_of::<(Box<[u8]>, u64)>() as u64;
@@ -216,6 +228,9 @@ enum Stop {
     Full,
     /// A record has no key, or a read failed.
     Failed,
+    /// A `COPY` header names a new table, which only the first chunk of a
+    /// round may do.
+    NewTable,
 }
 
 /// The error a chunk stopped on, with the line counted from its first.
@@ -223,6 +238,17 @@ enum Stop {
 enum Fault {
     NoKey(u64),
     Other(Error),
+}
+
+/// Why [`Ctx::key_of`] found no key for a line that needs one.
+#[derive(Debug)]
+enum Miss {
+    /// The record has no key.
+    NoKey,
+    /// A `COPY` header names a table this chunk may not name.
+    NewTable,
+    /// The header lacks the named column, or a budget error.
+    Error(Error),
 }
 
 /// One chunk of a window: where it starts and ends and the records it
@@ -250,12 +276,13 @@ struct Chunk {
 impl Chunk {
     /// Splits `buf[self.start..]` into records up to `self.until`, keeping
     /// those `filter` keeps. A record that starts before `until` is read
-    /// whole, past it if need be.
+    /// whole, past it if need be. Only a chunk that `may_name` tables
+    /// gives a new `COPY` table its id.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "the window stays below 4 GiB, see Reader::refill"
     )]
-    fn parse(&mut self, buf: &[u8], eof: bool, ctx: &Ctx<'_>) {
+    fn parse(&mut self, buf: &[u8], eof: bool, may_name: bool, ctx: &Ctx<'_>) {
         self.recs.clear();
         (self.lines, self.records, self.blocks) = (0, 0, 0);
         self.seen = [0; SUSPECTS];
@@ -284,15 +311,21 @@ impl Chunk {
             let found = if rec.is_empty() {
                 Ok(None)
             } else {
-                ctx.key_of(&mut state, rec, split.key, &mut self.blocks)
+                ctx.key_of(&mut state, rec, split.key, may_name, &mut self.blocks)
             };
             let found = match found {
                 Ok(found) => found,
-                Err(fault) => {
-                    self.fault = Some(match fault {
-                        None => Fault::NoKey(line),
-                        Some(e) => Fault::Other(e),
-                    });
+                Err(Miss::NewTable) => {
+                    self.stop = Stop::NewTable;
+                    break;
+                }
+                Err(Miss::NoKey) => {
+                    self.fault = Some(Fault::NoKey(line));
+                    self.stop = Stop::Failed;
+                    break;
+                }
+                Err(Miss::Error(e)) => {
+                    self.fault = Some(Fault::Other(e));
                     self.stop = Stop::Failed;
                     break;
                 }
@@ -339,25 +372,27 @@ struct Ctx<'c> {
 
 impl Ctx<'_> {
     /// The key, table and seed of a record, `None` for a line that is not
-    /// a record; `Err(None)` for a record without its key.
+    /// a record. A `COPY` header of a table not yet named is
+    /// [`Miss::NewTable`] unless `may_name`, and leaves `state` as it was.
     fn key_of(
         &self,
         state: &mut State,
         rec: &[u8],
         csv_key: Option<Range<usize>>,
+        may_name: bool,
         blocks: &mut u64,
-    ) -> std::result::Result<Found, Option<Error>> {
+    ) -> std::result::Result<Found, Miss> {
         match self.kind {
             Kind::Csv { name } => {
                 if state.col.is_some() {
-                    return csv_key.map(|k| Some((k, 0, 0))).ok_or(None);
+                    return csv_key.map(|k| Some((k, 0, 0))).ok_or(Miss::NoKey);
                 }
                 let name = name.as_deref().unwrap_or_default();
                 let found = (0..u32::MAX)
                     .map_while(|i| csv_field(rec, i).map(|r| (i, r)))
                     .find(|(_, r)| unquoted_eq(&rec[r.clone()], name.as_bytes()));
                 let Some((i, key)) = found else {
-                    return Err(Some(Error::Keyed(KeyError::NoColumn {
+                    return Err(Miss::Error(Error::Keyed(KeyError::NoColumn {
                         side: self.side,
                         name: name.into(),
                     })));
@@ -365,18 +400,21 @@ impl Ctx<'_> {
                 state.col = Some(i);
                 Ok(Some((key, 0, 0)))
             }
-            Kind::Ndjson(path) => json_key(rec, path).map(|k| Some((k, 0, 0))).ok_or(None),
+            Kind::Ndjson(path) => json_key(rec, path)
+                .map(|k| Some((k, 0, 0)))
+                .ok_or(Miss::NoKey),
             Kind::Copy { name } => match state.block {
                 Block::Outside => {
                     if let Some((table, cols)) = copy_header(rec) {
                         state.block = Block::Rows(match copy_column(cols, name.as_bytes()) {
                             Some(col) => {
-                                let (id, seed) = self
-                                    .tables
-                                    .lock()
-                                    .unwrap_or_else(PoisonError::into_inner)
-                                    .id(table)
-                                    .map_err(Some)?;
+                                let mut tables =
+                                    self.tables.lock().unwrap_or_else(PoisonError::into_inner);
+                                let (id, seed) = if may_name {
+                                    tables.id(table).map_err(Miss::Error)?
+                                } else {
+                                    tables.find(table).ok_or(Miss::NewTable)?
+                                };
                                 *blocks += 1;
                                 Some((col, id, seed))
                             }
@@ -392,7 +430,7 @@ impl Ctx<'_> {
                 Block::Rows(None) => Ok(None),
                 Block::Rows(Some((col, table, seed))) => tab_field(rec, col)
                     .map(|k| Some((k, table, seed)))
-                    .ok_or(None),
+                    .ok_or(Miss::NoKey),
             },
         }
     }
@@ -635,11 +673,12 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
         };
         let (buf, eof) = (&self.buf[..end], self.eof);
         if k == 1 {
-            self.chunks[0].parse(buf, eof, &ctx);
+            self.chunks[0].parse(buf, eof, true, &ctx);
         } else {
             self.chunks[..k]
                 .par_iter_mut()
-                .for_each(|c| c.parse(buf, eof, &ctx));
+                .enumerate()
+                .for_each(|(i, c)| c.parse(buf, eof, i == 0, &ctx));
         }
         for i in 0..k {
             if i > 0 {
@@ -1097,11 +1136,12 @@ mod tests {
 
     fn records(spec: &str, data: &[u8], buf: usize) -> Result<Vec<(u64, String, u32)>> {
         let budget = Budget::new(Bytes::mib(1));
-        let tables = Mutex::new(Tables::new(&budget)?);
         let spec: KeySpec = spec.parse().unwrap();
         let mut out = Vec::new();
-        // One chunk, then many: the chunks must agree with one thread.
+        // One chunk, then many: the chunks must agree with one thread,
+        // table ids included, so each starts with no tables named.
         for chunks in [1, 4, 16] {
+            let tables = Mutex::new(Tables::new(&budget)?);
             let mut r = Reader::new(data, Side::A, &spec, &budget, buf, chunks)?;
             let filter = Filter::new(0, u64::MAX, &[]);
             let mut runs = Vec::new();
