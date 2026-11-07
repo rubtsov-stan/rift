@@ -1,0 +1,99 @@
+name: VS Code packages
+
+# Follows the dist Release workflow like deb.yml: a release created with the
+# workflow token does not fire a `release` event, and that workflow also runs on
+# pull requests, hence the `push` check. A manual run takes the tag, for a
+# release published by hand.
+#
+# Each package bundles the `rift` binary from the release's own archive, so
+# the extension runs the same bytes that were attested and checksummed there.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the packages to, e.g. v0.3.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { vsce: darwin-arm64, target: aarch64-apple-darwin }
+          - { vsce: darwin-x64, target: x86_64-apple-darwin }
+          - { vsce: linux-x64, target: x86_64-unknown-linux-gnu }
+          - { vsce: linux-arm64, target: aarch64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Fetch and verify the release binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          archive="rift-diff-${TARGET}.tar.xz"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/dl" --pattern "$archive" --pattern sha256.sum
+          # sha256.sum lists every archive of the release; check only this one.
+          (cd "$RUNNER_TEMP/dl" && grep -F " *${archive}" sha256.sum | sha256sum -c -)
+          tar -xJf "$RUNNER_TEMP/dl/$archive" -C "$RUNNER_TEMP/dl"
+          install -D -m 755 "$RUNNER_TEMP/dl/rift-diff-${TARGET}/rift" editors/vscode/bin/rift
+      - name: Build the package
+        working-directory: editors/vscode
+        env:
+          VSCE_TARGET: ${{ matrix.vsce }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          set -eu
+          # The extension and the release carry one version.
+          [ "v$(node -p "require('./package.json').version")" = "$TAG" ]
+          npm ci
+          npm run lint
+          npm run build
+          npm run package -- --target "$VSCE_TARGET" --out "$RUNNER_TEMP/vsix/"
+      - name: Smoke test the bundled binary
+        if: matrix.vsce == 'linux-x64'
+        run: editors/vscode/bin/rift --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vsix-${{ matrix.vsce }}
+          path: ${{ runner.temp }}/vsix/*.vsix
+          if-no-files-found: error
+
+  upload:
+    needs: package
+    runs-on: ubuntu-latest
+    # Only this job holds a write token, and it runs no code from the repository.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+          path: vsix
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          set -eu
+          set -- vsix/*.vsix
+          [ "$#" -eq 4 ]
+          gh release upload "$TAG" "$@" --repo "$GITHUB_REPOSITORY" --clobber
