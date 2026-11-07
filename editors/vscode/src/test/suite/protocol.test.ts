@@ -33,12 +33,12 @@ describe('protocol handling', () => {
     await until(() => x.comparison()?.state === 'failed');
     const rows = labels(x);
     assert.match(rows[1], /^Scan failed: /);
-    assert.strictEqual(rows[2], 'Rerun with --mem 2560K');
+    assert.strictEqual(rows[2], 'Rerun with --mem 16M');
     assert.strictEqual(msg.error.length, 1);
-    assert.deepStrictEqual(msg.buttons[0], ['Rerun with --mem 2560K']);
+    assert.deepStrictEqual(msg.buttons[0], ['Rerun with --mem 16M']);
     await vscode.commands.executeCommand('rift.rerunWithMem');
     await ready(x);
-    assert.strictEqual(x.comparison()!.mem, '2560K');
+    assert.strictEqual(x.comparison()!.mem, '16M');
   });
 
   itMock('retries busy and shows no error', async () => {

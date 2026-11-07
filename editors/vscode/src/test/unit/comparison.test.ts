@@ -64,15 +64,45 @@ describe('Comparison', () => {
 });
 
 describe('rerunOffer', () => {
+  const M = 1 << 20;
   const err = (data: Record<string, unknown>, code = -32003) => ({ code, message: 'm', data });
-  it('offers the suggested budget', () => {
-    assert.deepStrictEqual(rerunOffer(err({ suggested_mem: '5120K', suggested_mem_bytes: 5242880 }), 1 << 30), { mem: '5120K' });
+  const adv = (bytes: number, failed = M) => err({ mem_bytes: failed, suggested_mem_bytes: bytes, suggested_mem: 'x' });
+  const mem = (bytes: number, max = 1 << 30, reruns = 0) => rerunOffer(adv(bytes), max, reruns);
+
+  it('adds 25% and rounds up to a power of two from 16M', () => {
+    assert.deepStrictEqual(mem(5 * M), { kind: 'rerun', mem: '16M' });
+    assert.deepStrictEqual(mem(1), { kind: 'rerun', mem: '16M' });
+    assert.deepStrictEqual(mem(16 * M), { kind: 'rerun', mem: '32M' });
+    assert.deepStrictEqual(mem(30 * M), { kind: 'rerun', mem: '64M' });
   });
-  it('names the limit when the suggestion is over it', () => {
-    assert.deepStrictEqual(rerunOffer(err({ suggested_mem: '2G', suggested_mem_bytes: 2 ** 31 }), 1 << 30), { mem: '2G', limit: 1 << 30 });
+  it('keeps 16M when the headroom lands exactly on it, and steps up just above', () => {
+    assert.deepStrictEqual(mem(13421772), { kind: 'rerun', mem: '16M' });
+    assert.deepStrictEqual(mem(13421773), { kind: 'rerun', mem: '32M' });
+  });
+  it('reaches 1G and names it in G', () => {
+    assert.deepStrictEqual(mem(858993459, 4 * 2 ** 30), { kind: 'rerun', mem: '1G' });
+    assert.deepStrictEqual(mem(858993460, 4 * 2 ** 30), { kind: 'rerun', mem: '2G' });
+  });
+  it('caps at the server limit', () => {
+    assert.deepStrictEqual(mem(900 * M, 1 << 30), { kind: 'rerun', mem: '1G' });
+    assert.deepStrictEqual(rerunOffer(adv(2 ** 31, 256 * M), 1 << 30, 0), { kind: 'rerun', mem: '1G' });
+  });
+  it('offers nothing when the capped value is not above the mem that failed', () => {
+    assert.deepStrictEqual(rerunOffer(adv(2 ** 31, 1 << 30), 1 << 30, 0), { kind: 'limit', limit: 1 << 30 });
+    assert.deepStrictEqual(rerunOffer(adv(900 * M, 64 * M), 32 * M, 0), { kind: 'limit', limit: 32 * M });
+  });
+  it('does not cap when the limit is unknown', () => {
+    assert.deepStrictEqual(rerunOffer(adv(2 ** 31), undefined, 0), { kind: 'rerun', mem: '4G' });
   });
   it('offers nothing without a suggestion or for another error', () => {
-    assert.strictEqual(rerunOffer(err({ mem_bytes: 1 }), 1 << 30), undefined);
-    assert.strictEqual(rerunOffer(err({ suggested_mem: '1M' }, -32001), 1 << 30), undefined);
+    assert.strictEqual(rerunOffer(err({ mem_bytes: 1 }), 1 << 30, 0), undefined);
+    assert.strictEqual(rerunOffer(err({ suggested_mem_bytes: 1 }, -32001), 1 << 30, 0), undefined);
+    assert.strictEqual(rerunOffer(undefined, 1 << 30, 0), undefined);
+  });
+  it('offers twice, then points to the memory guide', () => {
+    assert.strictEqual(mem(5 * M, 1 << 30, 0)?.kind, 'rerun');
+    assert.strictEqual(mem(5 * M, 1 << 30, 1)?.kind, 'rerun');
+    assert.deepStrictEqual(mem(5 * M, 1 << 30, 2), { kind: 'guide' });
+    assert.deepStrictEqual(mem(5 * M, 1 << 30, 3), { kind: 'guide' });
   });
 });

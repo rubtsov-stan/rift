@@ -27,6 +27,8 @@ export class Comparison {
   movesTotal = 0;
   // Position in `segments` of the difference last shown, -1 for none.
   current = -1;
+  // Reruns made after a budget failure of this pair.
+  reruns = 0;
   private closed = false;
   private early: Notification[] = [];
   private loadingSegments?: Promise<void>;
@@ -191,17 +193,37 @@ export class Comparison {
   }
 }
 
-export type RerunOffer = { mem: string } | { mem: string; limit: number };
+export type RerunOffer = { kind: 'rerun'; mem: string } | { kind: 'limit'; limit: number } | { kind: 'guide' };
 
-// What to offer after a scan failed on the budget: the server's suggested
-// budget, or the same with the server's limit when that is over it.
-export function rerunOffer(error: RpcErrorObject | undefined, maxSessionMem: number | undefined): RerunOffer | undefined {
+export const MEMORY_GUIDE = 'https://rubtsov-stan.github.io/rift/guide/memory/';
+
+// Offers a rerun twice; after that the memory guide, so a pair that keeps
+// failing does not loop.
+const MAX_RERUNS = 2;
+const MIN_MEM = 16 << 20;
+
+function memArg(bytes: number): string {
+  for (const [unit, size] of [['G', 2 ** 30], ['M', 2 ** 20], ['K', 1024]] as const) {
+    if (bytes % size === 0) return `${bytes / size}${unit}`;
+  }
+  return String(bytes);
+}
+
+// What to offer after a scan failed on the budget: the server's advice plus
+// 25%, rounded up to a power of two from 16 MiB and capped at the server's
+// per-session limit. Over the limit and no larger than what failed, there is
+// nothing to offer. `reruns` counts the reruns already made for this pair.
+export function rerunOffer(error: RpcErrorObject | undefined, maxSessionMem: number | undefined, reruns: number): RerunOffer | undefined {
   if (error?.code !== Code.budgetExceeded) return undefined;
-  const mem = error.data?.suggested_mem;
-  const bytes = error.data?.suggested_mem_bytes;
-  if (typeof mem !== 'string') return undefined;
-  if (maxSessionMem !== undefined && typeof bytes === 'number' && bytes > maxSessionMem) return { mem, limit: maxSessionMem };
-  return { mem };
+  const suggested = error.data?.suggested_mem_bytes;
+  if (typeof suggested !== 'number') return undefined;
+  if (reruns >= MAX_RERUNS) return { kind: 'guide' };
+  let bytes = MIN_MEM;
+  while (bytes < Math.ceil(suggested * 1.25)) bytes *= 2;
+  if (maxSessionMem !== undefined) bytes = Math.min(bytes, maxSessionMem);
+  const failed = error.data?.mem_bytes;
+  if (maxSessionMem !== undefined && bytes <= (typeof failed === 'number' ? failed : 0)) return { kind: 'limit', limit: maxSessionMem };
+  return { kind: 'rerun', mem: memArg(bytes) };
 }
 
 // The A lines from the first to the last of some segments.

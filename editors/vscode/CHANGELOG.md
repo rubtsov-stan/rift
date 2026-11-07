@@ -10,7 +10,7 @@ First release.
 - Commands: Compare Files, Compare with Rift, Next and Previous Difference,
   Go to Line in File A, Close Comparison.
 - Status bar progress for the scan and the refinement.
-- A rerun offer when a scan does not fit its memory budget.
+- A rerun offer when a scan does not fit its memory budget: the server's advice plus 25%, rounded up to a power of two and capped at the server's limit. After two reruns the memory guide replaces the button.
 - One `rift serve` process per window, restarted when it crashes.
 - Settings `rift.path`, `rift.mem` and `rift.contextLines`.
 - Platform packages for darwin-arm64, darwin-x64, linux-x64 and linux-arm64,

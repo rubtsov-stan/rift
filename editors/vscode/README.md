@@ -44,9 +44,12 @@ progress, and the tree fills in when the scan ends.
 | `rift.contextLines` | `3` | Lines of context around a difference, 0 to 100. |
 
 If a scan does not fit its budget, the error offers to rerun with the
-budget the server suggests. The suggestion is the amount the failed step
-needed, so a large pair can fail once or twice more with a slightly larger
-suggestion.
+server's advice plus 25%, rounded up to the next power of two from 16M
+(16M, 32M, 64M, … 1G, 2G) and capped at the server's per-comparison limit.
+When the cap leaves no room above the budget that just failed, no rerun is
+offered. A pair that is refused twice more gets a link to the
+[memory guide](https://rubtsov-stan.github.io/rift/guide/memory/) instead of a
+third button.
 
 ## Commands and keys
 

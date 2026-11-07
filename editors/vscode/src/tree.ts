@@ -50,7 +50,7 @@ export class RiftTree implements vscode.TreeDataProvider<Node> {
       const out: Node[] = [{ kind: 'summary' }];
       if (c.state === 'failed') {
         out.push({ kind: 'error' });
-        if (rerunOffer(c.error, this.maxSessionMem?.())) out.push({ kind: 'rerun' });
+        if (rerunOffer(c.error, this.maxSessionMem?.(), c.reruns)) out.push({ kind: 'rerun' });
       } else if (c.state === 'ready') {
         if (!c.summary?.identical) out.push(GROUPS[0]);
         if (c.summary?.moves !== 'off' && (c.summary?.moves === 'skipped' || (c.summary?.moved_blocks ?? 0) > 0)) out.push(GROUPS[1]);
@@ -82,11 +82,17 @@ export class RiftTree implements vscode.TreeDataProvider<Node> {
         return item;
       }
       case 'rerun': {
-        const offer = rerunOffer(c.error, this.maxSessionMem?.())!;
-        if ('limit' in offer) {
-          const item = new vscode.TreeItem(`Suggested --mem ${offer.mem} exceeds the server's limit`);
+        const offer = rerunOffer(c.error, this.maxSessionMem?.(), c.reruns)!;
+        if (offer.kind === 'limit') {
+          const item = new vscode.TreeItem("The server's limit is the ceiling for --mem");
           item.description = `limit ${MB(offer.limit)}`;
           item.iconPath = new vscode.ThemeIcon('info');
+          return item;
+        }
+        if (offer.kind === 'guide') {
+          const item = new vscode.TreeItem('Read the memory guide');
+          item.iconPath = new vscode.ThemeIcon('link-external');
+          item.command = { command: 'rift.openMemoryGuide', title: 'Open Memory Guide' };
           return item;
         }
         const item = new vscode.TreeItem(`Rerun with --mem ${offer.mem}`);

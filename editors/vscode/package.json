@@ -73,6 +73,11 @@
         "command": "rift.rerunWithMem",
         "title": "Rerun with Suggested Memory",
         "category": "Rift"
+      },
+      {
+        "command": "rift.openMemoryGuide",
+        "title": "Open Memory Guide",
+        "category": "Rift"
       }
     ],
     "menus": {
@@ -102,6 +107,10 @@
         },
         {
           "command": "rift.rerunWithMem",
+          "when": "false"
+        },
+        {
+          "command": "rift.openMemoryGuide",
           "when": "false"
         },
         {

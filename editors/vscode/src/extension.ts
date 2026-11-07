@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Server } from './client';
-import { Comparison, rerunOffer } from './comparison';
+import { Comparison, MEMORY_GUIDE, rerunOffer } from './comparison';
 import { excerpt, num, title } from './format';
 import { HunkDocs, SCHEME } from './hunk';
 import { RpcErrorObject } from './protocol';
@@ -75,22 +75,28 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     status.show();
   }
 
-  function failed(error: RpcErrorObject): void {
-    const offer = rerunOffer(error, server.limits?.max_session_mem);
-    if (offer && !('limit' in offer)) {
+  function failed(error: RpcErrorObject, c: Comparison): void {
+    const offer = rerunOffer(error, server.limits?.max_session_mem, c.reruns);
+    const text = `Rift: ${error.message}`;
+    if (offer?.kind === 'rerun') {
       const label = `Rerun with --mem ${offer.mem}`;
-      void vscode.window.showErrorMessage(`Rift: ${error.message}`, label).then((pick) => {
+      void vscode.window.showErrorMessage(text, label).then((pick) => {
         if (pick === label) void vscode.commands.executeCommand('rift.rerunWithMem');
       });
-    } else if (offer) {
-      void vscode.window.showErrorMessage(`Rift: ${error.message}. The suggested --mem ${offer.mem} is over the server's limit of ${num(offer.limit)} bytes.`);
+    } else if (offer?.kind === 'guide') {
+      const label = 'Memory guide';
+      void vscode.window.showErrorMessage(text, label).then((pick) => {
+        if (pick === label) void vscode.commands.executeCommand('rift.openMemoryGuide');
+      });
+    } else if (offer?.kind === 'limit') {
+      void vscode.window.showErrorMessage(`${text}. The server's limit of ${num(offer.limit)} bytes per comparison is the ceiling for --mem.`);
     } else {
-      void vscode.window.showErrorMessage(`Rift: ${error.message}`);
+      void vscode.window.showErrorMessage(text);
     }
   }
 
   async function compare(a: string, b: string): Promise<void> {
-    const next = new Comparison(server, a, b, cfg().get<string>('mem') ?? '256M', { change: render, failed });
+    const next = new Comparison(server, a, b, cfg().get<string>('mem') ?? '256M', { change: render, failed: (e) => failed(e, next) });
     opening = next;
     try {
       await next.open();
@@ -220,8 +226,9 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     render();
   });
   reg('rift.rerunWithMem', async () => {
-    const offer = rerunOffer(comparison?.error, server.limits?.max_session_mem);
-    if (!comparison || !offer || 'limit' in offer) return;
+    const offer = rerunOffer(comparison?.error, server.limits?.max_session_mem, comparison?.reruns ?? 0);
+    if (!comparison || offer?.kind !== 'rerun') return;
+    comparison.reruns++;
     try {
       await comparison.open(offer.mem);
     } catch (e) {
@@ -229,6 +236,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     }
     render();
   });
+  reg('rift.openMemoryGuide', () => vscode.env.openExternal(vscode.Uri.parse(MEMORY_GUIDE)));
 
   ctx.subscriptions.push(view, status);
   shutdown = async () => {
