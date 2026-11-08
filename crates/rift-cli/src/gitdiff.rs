@@ -197,9 +197,9 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
 /// A reader that quit early (git's pager) is not a failure: any nonzero
 /// exit makes git report a dead external diff, so it exits 0 silently.
 pub fn main(cli: &GitDiffArgs) -> ExitCode {
-    match run(cli) {
+    let code = match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(err) if crate::broken_pipe(&err) => ExitCode::SUCCESS,
+        Err(err) if crate::broken_pipe(&err) => return ExitCode::SUCCESS,
         Err(err) => {
             match crate::mem_advice(&err, cli.mem) {
                 Some(advice) => eprintln!("rift: {err:#}; {advice}"),
@@ -207,7 +207,11 @@ pub fn main(cli: &GitDiffArgs) -> ExitCode {
             }
             ExitCode::from(2)
         }
+    };
+    if cli.stats {
+        eprintln!("{}", crate::summary::peak_heap(cli.mem));
     }
+    code
 }
 
 #[cfg(test)]

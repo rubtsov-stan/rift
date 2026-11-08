@@ -260,6 +260,17 @@ fn stats_report_peak_heap_on_stderr_only() {
 }
 
 #[test]
+fn stats_report_peak_heap_after_an_error_too() {
+    let p = pair(b"one\ntwo\n", b"one\n2\n");
+    let out = rift(&["--stats", "--mem", "64K"], &p.a, &p.b);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (error, peak) = stderr.split_once('\n').unwrap();
+    assert!(error.contains(" budget exceeded: "), "{stderr}");
+    assert!(peak.starts_with("peak heap "), "{stderr}");
+}
+
+#[test]
 fn pathological_inputs() {
     let cases: [(&[u8], &[u8]); 7] = [
         (b"", b""),

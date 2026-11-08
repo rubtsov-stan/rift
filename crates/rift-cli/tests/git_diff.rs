@@ -363,6 +363,38 @@ fn run_by_hand_it_exits_two_on_errors() {
 }
 
 #[test]
+fn stats_print_the_peak_heap_after_the_diff_or_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("x"), lines(5000, None)).unwrap();
+    fs::write(dir.path().join("y"), lines(5000, Some(100))).unwrap();
+    let run = |opts: &[&str]| {
+        Command::new(BIN)
+            .current_dir(dir.path())
+            .arg("git-diff")
+            .args(opts)
+            .args(["f", "x", "1111111", "100644", "y", "2222222", "100644"])
+            .output()
+            .unwrap()
+    };
+    let plain = run(&[]);
+    let out = run(&["--stats"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, plain.stdout, "--stats changes only stderr");
+    assert!(
+        lossy(&out.stderr).starts_with("peak heap "),
+        "{}",
+        lossy(&out.stderr)
+    );
+
+    let out = run(&["--stats", "--mem", "64K"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = lossy(&out.stderr);
+    let (error, peak) = stderr.split_once('\n').unwrap();
+    assert!(error.contains(" budget exceeded: "), "{stderr}");
+    assert!(peak.starts_with("peak heap "), "{stderr}");
+}
+
+#[test]
 fn identical_files_print_nothing_and_exit_zero() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("x"), "same\n").unwrap();
