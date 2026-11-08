@@ -19,6 +19,8 @@ env:
   LYCHEE_VERSION: 0.24.2
   LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
   LHCI_VERSION: 0.16.0
+  # The VS Code extension is published: build the pages that describe it.
+  RIFT_SITE_VSCODE: "1"
 
 jobs:
   build:

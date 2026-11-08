@@ -138,8 +138,9 @@ An extension shows the difference map and the moved blocks of two huge
 files in a side panel and opens each difference in VS Code's diff editor,
 on just that excerpt. It is built on `rift serve`, the same engine and
 `--mem` limit as the command line. See the
-[extension README](editors/vscode/README.md). It is not yet published: there
-is no Marketplace page yet, only the source here.
+[extension README](editors/vscode/README.md). Install it from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=rubtsov-stan.rift-diff)
+or [Open VSX](https://open-vsx.org/extension/rubtsov-stan/rift-diff).
 
 ## License
 

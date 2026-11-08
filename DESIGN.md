@@ -608,8 +608,8 @@ regions.
 
 ## Clients (0.3)
 
-`rift-mcp` ships in 0.2. The protocol, `rift serve` and `rift-session` ship in
-0.3. The VS Code extension is on `main` and unreleased.
+`rift-mcp` ships in 0.2. The protocol, `rift serve`, `rift-session` and the
+VS Code extension ship in 0.3.
 
 One protocol serves every client that is not the terminal interface:
 `rift serve`, JSON-RPC 2.0 over standard input and output with LSP's
