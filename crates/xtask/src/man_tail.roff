@@ -159,16 +159,25 @@ larger than the smallest possible one.
 Detection of every moved block. Blocks are found from sampled lines, so
 some moves are missed.
 .SH APPROXIMATE REGIONS
-When a region is too large to refine within the budget, Rift replaces it
+When Rift cannot align a region within the budget, it replaces it
 whole: the output is still correct, but coarse. This happens in large
 regions with no line that is unique in both files, such as long runs of
-identical lines.
+identical lines. A region whose two sides share no line at all is also
+replaced whole, but that is the smallest diff, so it is not approximate.
 .PP
-The unified diff marks such a hunk with the word \fBapprox\fR after the
-closing \fB@@\fR of its header, where \fBdiff \-p\fR prints a function
-name. \fBpatch\fR(1) ignores it. The terminal view draws the hunk in
-yellow with a \fB~\fR. \fB\-\-stats\fR counts the approximate segments
-and lines.
+The unified diff marks such a hunk with \fBapprox:\fR and the reason
+after the closing \fB@@\fR of its header, where \fBdiff \-p\fR prints a
+function name. \fBpatch\fR(1) ignores it. The reasons are:
+.IP \(bu 2
+\fItoo many changes among repeated lines to align them exactly\fR
+.IP \(bu 2
+\fIfound no line here that occurs once in each file, so there is nothing to align on\fR
+.IP \(bu 2
+\fItoo large to align within \-\-mem; a larger \-\-mem may help\fR
+.PP
+The terminal view draws the hunk in yellow with a \fB~\fR and shows the
+reason in the status line when it fits. \fB\-\-stats\fR counts the
+approximate segments and lines, and the segments for each reason.
 .SH MOVED BLOCKS
 A block of at least 3 lines that appears in both files at different
 positions is reported as moved. The unified diff still shows it as a

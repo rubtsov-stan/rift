@@ -13,7 +13,7 @@ summary = "Browse the differences with n and p before the whole diff is done."
 rift -i a.sql b.sql
 ```
 
-`rift tui a.sql b.sql` does the same. The view is usable before the diff is complete. A hunk Rift is still refining shows as one pending row and fills in by itself. Approximate hunks are yellow and marked with `~`.
+`rift tui a.sql b.sql` does the same. The view is usable before the diff is complete. A hunk Rift is still refining shows as one pending row and fills in by itself. Approximate hunks are yellow and marked with `~`, and the status line gives the reason when it fits.
 
 {{ media(ready=true, mp4="demo.mp4", gif="demo.gif", poster="demo-poster.jpg", width=960, height=540, alt="rift --summary on a 64 MiB pair, then the terminal view jumping between differences") }}
 

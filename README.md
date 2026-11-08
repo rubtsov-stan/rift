@@ -95,10 +95,10 @@ in [DESIGN.md](DESIGN.md).
   fixed buffers, never `mmap`. The tests and CI check the peak with a
   counting allocator.
 - Rift marks a region it could not refine within the budget as
-  approximate in every output. The unified diff puts `approx` after the
-  hunk header, where `diff -p` puts a function name and `patch` ignores
-  it. The terminal view draws the region in yellow, and `--stats` counts
-  it.
+  approximate in every output. The unified diff puts `approx:` and the
+  reason after the hunk header, where `diff -p` puts a function name and
+  `patch` ignores it. The terminal view draws the region in yellow, and
+  `--stats` counts it by reason.
 
 ## What is not guaranteed
 
@@ -106,7 +106,9 @@ in [DESIGN.md](DESIGN.md).
   change as larger than the smallest possible one.
 - An approximate region is a whole replacement: correct, but coarse. It
   happens in large regions without any line unique in both files, such
-  as long runs of identical or repetitive lines.
+  as long runs of identical or repetitive lines. Files that share no
+  line are replaced whole too, but that is the smallest diff, so it is
+  not approximate.
 - In the unified diff, a block of rows that moved, such as a dump
   written in a different order, shows as a deletion and an insertion, as
   in any line-based diff. `--summary`, `--stats` and the terminal view

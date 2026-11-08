@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rift git-diff` exits 0 without a message when git's pager quits early,
   so `git diff` no longer reports "external diff died".
 - A failed write to standard output says "write failed", not "read failed".
+- Two files, or two regions, that share no line are no longer marked
+  `approx`. Deleting one side and inserting the other is the smallest
+  diff there, and Rift now proves it from the line hashes: a different
+  hash means a different line. The script is the same as before.
+
+### Changed
+
+- An approximate hunk says why in plain words: the unified diff writes
+  `@@ ... @@ approx: <reason>`, `--stats` counts the segments for each
+  reason, the terminal view shows the reason in the status line when it
+  fits, and `rift-mcp` adds it to the hunk header. `Hunk::approx` in
+  `rift-core` is now an `Option<ApproxReason>`.
 
 ## [0.3.0] - 2026-11-08
 

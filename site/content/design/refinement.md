@@ -30,6 +30,8 @@ Sources: `crates/rift-core/src/diff/mod.rs`, `refine` and `hashes`; `crates/rift
 
 Myers is fast when the two sides are similar and slow when they are not. Each piece that reaches Myers gets a limit of `(N+M) × 256` hash comparisons, 256 being the floor git uses. A piece that runs past it is emitted as one replacement, all of its A lines deleted and all of its B lines inserted, and the hunk is marked approximate. The replacement is a valid edit script, only not minimal.
 
+A piece whose two sides share no line hash never reaches Myers. Two different hashes mean two different lines, so such a piece has no line in common, one replacement is the smallest script for it, and Rift leaves the hunk unmarked. The sort that looks for unique lines already groups every hash, so the check costs no memory and no read.
+
 Sources: `diff/mod.rs`, `CUTOFF`; `refine/mod.rs`, `Diff::solve` (the `limit`); `refine/myers.rs`, `Diff::myers`.
 
 ## The scheduler and the visible range
@@ -77,24 +79,32 @@ Sources: `sched/mod.rs`, `Scheduler::new`, `worker`, the `Job` trait; `crates/ri
 
 A segment whose estimate exceeds `work_cap` cannot run as is. The scheduler hands it to `too_large` with `work_cap` as its whole budget, and `refine_large` samples the segment again, inside the segment only, at the lowest stratum whose samples fit. Lines unique among those samples on both sides are chained as the skeleton chains anchors, and the chain cuts the segment into pieces. A piece that fits is refined. A piece with the same line count on both sides is compared byte by byte and, when equal, kept as one equal run. Any other piece is sampled again, at a lower stratum still.
 
-Only a piece that is not equal and has no anchor at any lower stratum becomes a whole replacement, and its hunk is marked approximate. These cuts need no confirmation: each piece's own script is exact, so any cut gives a valid script.
+Only a piece that is not equal and has no anchor at any lower stratum becomes a whole replacement. The read that samples a piece also checks whether its sides share a line: `chain` reads the shorter side first and keeps its line hashes in a `Seen`, where each also sets two bits in a filter of 16 bits per hash. A line of the other side whose two bits are set becomes a candidate; about 2% of lines that share nothing do. After the read, `Seen::disjoint` looks every first-side hash up among the sorted candidates. When none is found, the sides share no line and the replacement is exact. A lookup in a sorted copy of the hashes for every line cost a cache miss each and made a 100 MB disjoint pair about 60 ms slower at `--mem 256M`; the filter stays in cache. The `Seen` takes about 10 bytes per line from the skeleton half of the job's own budget, and is released before the anchor search. A shared hash, or more candidates than its room for 1 in 32 lines, sends the piece on to the anchor search; no room for the `Seen` leaves it approximate for lack of budget. These cuts need no confirmation: each piece's own script is exact, so any cut gives a valid script.
 
-Sources: `crates/rift-core/src/diff/resample.rs`, `refine_large`, `split`, `chain`, `whole`.
+Sources: `crates/rift-core/src/diff/resample.rs`, `refine_large`, `split`, `chain`, `Seen`, `whole`.
 
 ## When a segment comes out approximate
 
-Two cases produce `approx`: a piece that passes the Myers cost cutoff, and a too-large piece with no anchor below its stratum. The second needs repetitive data. The test `approximate_regions_are_marked_and_still_patch` builds one: 300,000 copies of `same line` with one byte changed in the middle. No line is unique at any stratum.
+Three causes produce `approx`, and the hunk keeps the one that applies, with its text in plain words:
+
+| Cause | Text after `approx:` |
+|---|---|
+| A piece passes the Myers cost cutoff | `too many changes among repeated lines to align them exactly` |
+| A too-large piece has no anchor among its samples, and its sides share a hash | `found no line here that occurs once in each file, so there is nothing to align on` |
+| The job runs out of its own budget, also for the hashes that would show whether the sides share a line | `too large to align within --mem; a larger --mem may help` |
+
+A hunk with several causes keeps the last in the table, the one a larger `--mem` can fix. The second cause needs repetitive data. The test `approximate_regions_are_marked_and_still_patch` builds one: 300,000 copies of `same line` with one byte changed in the middle. No line is unique at any stratum.
 
 The same pair from the command line:
 
 | `--mem` | Unified diff | Statistics |
 |---|---|---|
-| 16M | `@@ -1,300000 +1,300000 @@ approx`, 600,003 lines | approx 1 segments, 600000 lines in a and b |
-| 64M | the same | the same |
+| 16M | `@@ -1,300000 +1,300000 @@ approx: too large to align within --mem; a larger --mem may help`, 600,003 lines | approx 1 segments, 600000 lines in a and b |
+| 64M | `@@ -1,300000 +1,300000 @@ approx: found no line here that occurs once in each file, so there is nothing to align on`, 600,003 lines | the same |
 | 256M | `@@ -149998,7 +149998,7 @@`, 11 lines | approx 0 segments |
 
-At 256M the one segment of 600,000 lines fits a job and Myers finds the single change. Below that it is too large, resampling finds no anchor, and Rift prints the whole region as one replacement with the mark. Either diff patches A into B. Measured 2026-11-07 with `rift --mem M --stats ra rb` on an Apple M1, 16 GiB, macOS 27.0.1.
+At 256M the one segment of 600,000 lines fits a job and Myers finds the single change. Below that it is too large, resampling finds no anchor, and Rift prints the whole region as one replacement with the mark. At 16M the job has no room for the 2.4 MB of hashes that show the sides share lines, so the reason is the budget. Either diff patches A into B. Measured 2026-11-08 with `rift --mem M --stats ra rb` on an Apple M1, 16 GiB, macOS 27.0.1.
 
-The mark appears in every output: `approx` after the hunk header in the unified diff, a count in `--summary` and `--stats`, and a marker in the terminal view.
+The mark appears in every output: `approx:` and the reason after the hunk header in the unified diff, a count per reason in `--stats`, a `~` in the terminal view with the reason in its status line when it fits, and the reason in the hunk text of `rift-mcp`. `rift serve` reports the status `approx` without a reason.
 
 Sources: `crates/rift-cli/tests/full.rs`, `approximate_regions_are_marked_and_still_patch`; `crates/rift-core/src/unified/mod.rs`; `diff/mod.rs`, `Written`.
