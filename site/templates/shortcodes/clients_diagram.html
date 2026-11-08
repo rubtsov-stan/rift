@@ -1,0 +1,23 @@
+{#- The diagram on design/clients. The client of rift serve is named only in builds with RIFT_SITE_VSCODE=1. -#}
+{%- set vscode = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
+{%- if vscode %}{% set c1 = "VS Code" %}{% set c2 = "extension" %}{% else %}{% set c1 = "editor" %}{% set c2 = "client" %}{% endif -%}
+<figure class="diagram">
+<svg viewBox="0 0 720 280" role="img" aria-labelledby="cl-t cl-d">
+<title id="cl-t">Two front ends over one session layer</title>
+<desc id="cl-d">On the left, two clients. The {{ c1 }} {{ c2 }} talks to rift serve over standard input and output with JSON-RPC 2.0. An MCP client talks to rift-mcp over standard input and output with MCP. Both rift serve and rift-mcp call into rift-session, which keeps one diff per pair of files and reads files A and B with pread, read-only. Only excerpts and pages cross the pipes, each with a size bound.</desc>
+<defs><marker id="cl-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" style="fill:var(--muted)"/></marker></defs>
+<rect class="box" x="10" y="40" width="150" height="60"/><text x="22" y="64" font-weight="700">{{ c1 }}</text><text x="22" y="86" style="font-size:12px">{{ c2 }}</text>
+<rect class="box" x="230" y="40" width="170" height="60" style="stroke:var(--accent)"/><text x="242" y="64" font-weight="700">rift serve</text><text x="242" y="86" style="font-size:12px">JSON-RPC 2.0</text>
+<rect class="box" x="10" y="160" width="150" height="60"/><text x="22" y="184" font-weight="700">MCP client</text><text x="22" y="206" style="font-size:12px">editor, chat app</text>
+<rect class="box" x="230" y="160" width="170" height="60"/><text x="242" y="184" font-weight="700">rift-mcp</text><text x="242" y="206" style="font-size:12px">three MCP tools</text>
+<rect class="box" x="460" y="40" width="130" height="180"/><text x="472" y="64" font-weight="700">rift-session</text><text x="472" y="92" style="font-size:12px">one diff per pair</text><text x="472" y="112" style="font-size:12px">scan threads</text><text x="472" y="132" style="font-size:12px">response pools</text><text x="472" y="152" style="font-size:12px">budgets, eviction</text><text x="472" y="172" style="font-size:12px">rift-core</text>
+<rect class="box" x="630" y="60" width="80" height="50"/><text x="642" y="91" font-weight="700">file A</text>
+<rect class="box" x="630" y="150" width="80" height="50"/><text x="642" y="181" font-weight="700">file B</text>
+<path class="link" d="M164 70 H226" marker-start="url(#cl-arrow)" marker-end="url(#cl-arrow)"/><text x="172" y="62" style="font-size:11px">stdio</text>
+<path class="link" d="M164 190 H226" marker-start="url(#cl-arrow)" marker-end="url(#cl-arrow)"/><text x="172" y="182" style="font-size:11px">stdio</text>
+<path class="link" d="M400 70 H456" marker-end="url(#cl-arrow)"/><path class="link" d="M400 190 H456" marker-end="url(#cl-arrow)"/>
+<path class="link" d="M590 85 H626" marker-end="url(#cl-arrow)"/><path class="link" d="M590 175 H626" marker-end="url(#cl-arrow)"/><text x="594" y="130" style="font-size:11px">pread</text>
+<text x="10" y="256" style="font-size:12px">Pages and excerpts cross the pipes, never the files. Each answer has a size bound.</text>
+</svg>
+<figcaption>rift serve and rift-mcp speak different protocols over the same session layer. rift serve scans in the background and answers at once; rift-mcp waits for the scan inside the call that needs it.</figcaption>
+</figure>
