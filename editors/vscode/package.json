@@ -1,11 +1,15 @@
 {
   "name": "rift-vscode",
-  "displayName": "Rift",
-  "description": "Compare large text files with Rift, one difference at a time.",
+  "displayName": "Rift: Diff Huge Files",
+  "description": "Compare huge text files in VS Code's own diff editor, one difference at a time.",
   "version": "0.3.0",
   "publisher": "rubtsov-stan",
   "license": "MIT OR Apache-2.0",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#191b1e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rubtsov-stan/rift.git",
@@ -16,6 +20,13 @@
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "diff",
+    "large files",
+    "csv",
+    "sql dump",
+    "compare"
   ],
   "main": "./out/extension.js",
   "activationEvents": [],
@@ -218,7 +229,7 @@
     "lint": "eslint .",
     "test": "npm run test:unit && npm run test:vscode",
     "check-mock": "node test/check-mock.js",
-    "package": "vsce package --no-dependencies --baseContentUrl https://github.com/rubtsov-stan/rift/blob/main/editors/vscode --baseImagesUrl https://github.com/rubtsov-stan/rift/raw/main/editors/vscode",
+    "package": "vsce package --no-dependencies",
     "test:unit": "npm run build && mocha --exit out/test/unit/*.test.js",
     "test:vscode": "npm run build && node out/test/run.js",
     "test:real": "npm run build && RIFT_BIN=${RIFT_BIN:-../../target/release/rift} node out/test/run.js"
@@ -226,7 +237,6 @@
   "bugs": {
     "url": "https://github.com/rubtsov-stan/rift/issues"
   },
-  "homepage": "https://github.com/rubtsov-stan/rift#readme",
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "@types/mocha": "10.0.10",
@@ -240,5 +250,6 @@
     "playwright-core": "1.65.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.1"
-  }
+  },
+  "homepage": "https://rubtsov-stan.github.io/rift/"
 }
