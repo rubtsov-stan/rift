@@ -39,7 +39,15 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
     let a = FileSource::open(path_a).with_context(|| format!("open {}", path_a.display()))?;
     let b = FileSource::open(path_b).with_context(|| format!("open {}", path_b.display()))?;
     if let Some(spec) = &args.key {
-        return keyed::run(&a, &b, [path_a, path_b], spec, args.mem, args.stats);
+        return keyed::run(
+            &a,
+            &b,
+            [path_a, path_b],
+            spec,
+            args.mem,
+            args.stats,
+            args.show_records,
+        );
     }
     if args.summary {
         return summary::run(&a, &b, args.mem, !args.no_moves);

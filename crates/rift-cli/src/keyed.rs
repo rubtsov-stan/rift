@@ -5,15 +5,22 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use rift_core::keyed::{ChangeKind, KeyError, KeySpec, KeyedChange, Side, compare};
-use rift_core::{Budget, Bytes, Error, LineNo};
+use rift_core::keyed::{
+    ChangeKind, KeyError, KeySpec, KeyedChange, RangedChange, RecordReader, Side, compare,
+    compare_with_ranges,
+};
+use rift_core::{Budget, Bytes, Error, LineNo, Source};
 
 use crate::source::FileSource;
 use crate::summary::peak_heap;
 
+/// Read-back buffer for `--show-records`, from the refine half: a record
+/// longer than this streams through it.
+const RECORD_BUF: usize = 64 << 10;
+
 /// Compares `a` and `b` record by record, keyed by `spec`, under `mem`,
-/// and prints one line per changed key. Exit code 0 when no key changed,
-/// 1 otherwise.
+/// and prints one line per changed key, followed by its records when
+/// `show_records` is set. Exit code 0 when no key changed, 1 otherwise.
 ///
 /// # Errors
 ///
@@ -26,20 +33,30 @@ pub fn run(
     spec: &KeySpec,
     mem: Bytes,
     stats: bool,
+    show_records: bool,
 ) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
-    let mut out = BufWriter::new(io::stdout().lock());
-    let mut printed = 0u64;
-    // The core reports an error from the callback as a failed read; keep
-    // the real one to report it as a failed write.
-    let mut write_error = None;
-    let result = compare(a, b, spec, &Budget::new(mem), |c| {
-        printed += 1;
-        write_change(&mut out, c).inspect_err(|e| {
-            write_error = Some(io::Error::new(e.kind(), e.to_string()));
-        })
+    let mut out = BufWriter::new(Out {
+        inner: io::stdout().lock(),
+        failed: None,
     });
-    if let Some(e) = write_error.or(out.flush().err()) {
+    let mut printed = 0u64;
+    let budget = Budget::new(mem);
+    let result = if show_records {
+        let mut reader = RecordReader::new(&budget, RECORD_BUF)?;
+        compare_with_ranges(a, b, spec, &budget, |c| {
+            printed += 1;
+            write_change(&mut out, &c.change)?;
+            write_records(&mut out, c, &mut reader, [a, b])
+        })
+    } else {
+        compare(a, b, spec, &budget, |c| {
+            printed += 1;
+            write_change(&mut out, c)
+        })
+    };
+    let flushed = out.flush();
+    if let Some(e) = out.get_mut().failed.take().or(flushed.err()) {
         return Err(Error::Write(e).into());
     }
     let report = result.map_err(|e| incomplete(with_path(e, paths), printed))?;
@@ -56,6 +73,32 @@ pub fn run(
     } else {
         ExitCode::from(1)
     })
+}
+
+/// Standard output that keeps its first error. The core reports an error
+/// from the callback as a failed read, and with --show-records the
+/// callback also reads records back, so only the writer can tell a failed
+/// write from a failed read.
+struct Out<W> {
+    inner: W,
+    failed: Option<io::Error>,
+}
+
+impl<W: Write> Write for Out<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf).inspect_err(|e| self.keep(e))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush().inspect_err(|e| self.keep(e))
+    }
+}
+
+impl<W> Out<W> {
+    fn keep(&mut self, e: &io::Error) {
+        self.failed
+            .get_or_insert_with(|| io::Error::new(e.kind(), e.to_string()));
+    }
 }
 
 /// Names the file as well as the side when an error points into one:
@@ -119,6 +162,31 @@ fn write_change(out: &mut impl Write, c: &KeyedChange) -> io::Result<()> {
     writeln!(out, "\t{}\t{}", line(c.a), line(c.b))
 }
 
+/// The records of `c`, A's then B's, each line behind `  - ` or `  + `.
+/// A change line never starts with a space, and a record's own bytes,
+/// line breaks and quotes included, print as the file has them.
+fn write_records<S: Source + ?Sized>(
+    out: &mut impl Write,
+    c: &RangedChange,
+    reader: &mut RecordReader,
+    [a, b]: [&S; 2],
+) -> io::Result<()> {
+    for (src, range, prefix) in [(a, &c.a_range, b"  - "), (b, &c.b_range, b"  + ")] {
+        let Some(range) = range else { continue };
+        out.write_all(prefix)?;
+        reader.read(src, range.clone(), |mut chunk| {
+            while let Some(i) = memchr::memchr(b'\n', chunk) {
+                out.write_all(&chunk[..=i])?;
+                out.write_all(prefix)?;
+                chunk = &chunk[i + 1..];
+            }
+            out.write_all(chunk)
+        })?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +207,27 @@ mod tests {
             kind,
             a: a.map(LineNo),
             b: b.map(LineNo),
+        }
+    }
+
+    #[test]
+    fn every_line_of_a_record_gets_its_prefix_across_buffer_edges() {
+        let (a, b): (&[u8], &[u8]) = (b"k,\"ab\n\ncd\"\n", b"k,\"x\"\"\n\"\n");
+        let c = RangedChange {
+            change: change(b"k", ChangeKind::Changed, Some(0), Some(0)),
+            a_range: Some(0..10),
+            b_range: Some(0..8),
+        };
+        let budget = Budget::new(Bytes(1 << 20));
+        for size in 1..12 {
+            let mut reader = RecordReader::new(&budget, size).unwrap();
+            let mut out = Vec::new();
+            write_records(&mut out, &c, &mut reader, [a, b]).unwrap();
+            assert_eq!(
+                String::from_utf8(out).unwrap(),
+                "  - k,\"ab\n  - \n  - cd\"\n  + k,\"x\"\"\n  + \"\n",
+                "buffer of {size}"
+            );
         }
     }
 

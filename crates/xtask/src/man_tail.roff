@@ -85,6 +85,26 @@ then says the output is incomplete and must be discarded, so check the
 exit status before you use the output. \fB\-\-key\fR cannot be combined
 with \fB\-\-summary\fR or \fB\-\-interactive\fR.
 .TP
+\fB\-\-show\-records\fR
+With \fB\-\-key\fR, prints the records under each change line, the one
+from \fIA\fR behind two spaces and \fB\-\fR, the one from \fIB\fR behind
+two spaces and \fB+\fR, each followed by a space:
+.RS
+.nf
+~\fIKEY\fR	\fIA\fR	\fIB\fR
+  \- \fIrecord in A\fR
+  + \fIrecord in B\fR
+.fi
+.RE
+.IP
+A record that spans lines, such as a CSV record with a line break inside
+quotes, carries the prefix on each of its lines. Strip the prefixes and
+you get the record's bytes as the file has them, without its line
+terminator. Rift reads each record back from its file through a 64 KiB
+buffer, so a long record takes no more memory than a short one. Without
+\fB\-\-key\fR, Rift refuses the option. Field-level output, which names
+the fields that changed, is planned for 0.4.
+.TP
 \fB\-\-stats\fR
 After a diff, prints to standard error the peak heap, the time, the
 number of approximate regions and the moved blocks. With \fB\-\-key\fR it
