@@ -1,9 +1,10 @@
 //! Local diff of one segment: recursive patience, then linear-memory Myers.
 //!
 //! The segment arrives as two slices of line hashes. Lines unique in both
-//! slices become anchors (patience); the gaps between anchors recurse, and
-//! a gap without unique lines goes to Myers with a middle-snake search and
-//! a cost cutoff. Tiny gaps use quadratic DP. The result is two flag arrays,
+//! slices become anchors (patience); the gaps between anchors recurse. A
+//! gap whose sides share no line hash is a whole replacement, which is
+//! minimal there; one with shared but no unique lines goes to Myers with a
+//! middle-snake search and a cost cutoff. Tiny gaps use quadratic DP. The result is two flag arrays,
 //! `removed` over A and `added` over B; the unflagged lines of both sides
 //! pair up in order and are then confirmed byte by byte through
 //! [`LineAccess`], since a hash match is not equality.
@@ -260,10 +261,19 @@ impl Diff<'_> {
         let Some((ra, rb)) = self.reduce(ra, rb) else {
             return;
         };
-        if self.patience
-            && depth < MAX_DEPTH
-            && let Some(chain) = self.anchors(ra.clone(), rb.clone())
-        {
+        let found = if self.patience && depth < MAX_DEPTH {
+            self.anchors(ra.clone(), rb.clone())
+        } else {
+            Anchors::Repeated
+        };
+        if let Anchors::Disjoint = found {
+            // No hash is on both sides, so no line is: the LCS is empty
+            // and the whole replacement is minimal.
+            self.ws.removed[ra].fill(true);
+            self.ws.added[rb].fill(true);
+            return;
+        }
+        if let Anchors::Chain(chain) = found {
             let (mut pa, mut pb) = (ra.start, rb.start);
             for i in chain.clone() {
                 let [x, y] = self.ws.anchors[i];
@@ -321,14 +331,14 @@ impl Diff<'_> {
     }
 
     /// Pushes the longest increasing chain of lines unique in both ranges
-    /// onto the anchor stack and returns its slot range, or `None` if there
-    /// is no unique line.
+    /// onto the anchor stack and returns its slot range, or says why there
+    /// is none.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::many_single_char_names,
         reason = "side lengths are checked below u32::MAX in refine; a, b, s, p follow the algorithm"
     )]
-    fn anchors(&mut self, ra: Range<usize>, rb: Range<usize>) -> Option<Range<usize>> {
+    fn anchors(&mut self, ra: Range<usize>, rb: Range<usize>) -> Anchors {
         let a = &self.a[ra.clone()];
         let b = &self.b[rb.clone()];
         let s = a.len() + b.len();
@@ -344,7 +354,10 @@ impl Diff<'_> {
 
         let pairs = &mut self.ws.pairs;
         pairs.clear();
+        let mut shared = false;
         for group in recs.chunk_by(|x, y| x[..2] == y[..2]) {
+            // Sorted by hash only, so a group's sides can interleave.
+            shared |= group.iter().any(|r| r[3] != group[0][3]);
             if let [x, y] = group
                 && x[3] != y[3]
             {
@@ -357,7 +370,11 @@ impl Diff<'_> {
             }
         }
         if pairs.is_empty() {
-            return None;
+            return if shared {
+                Anchors::Repeated
+            } else {
+                Anchors::Disjoint
+            };
         }
         // Into A order by scattering over the dead records, cheaper than
         // a sort: `scratch[ia] = ib`.
@@ -402,8 +419,18 @@ impl Diff<'_> {
             anchors[slot] = [pr[0] + ra.start as u32, pr[1] + rb.start as u32];
             cur = prev[cur as usize];
         }
-        Some(base..base + len)
+        Anchors::Chain(base..base + len)
     }
+}
+
+/// What [`Diff::anchors`] found in a gap.
+enum Anchors {
+    /// Slots of the anchor chain on the stack.
+    Chain(Range<usize>),
+    /// Some line hash occurs on both sides, but none once on each.
+    Repeated,
+    /// No line hash occurs on both sides.
+    Disjoint,
 }
 
 /// Confirms every unflagged pair byte by byte, flagging the pairs whose
