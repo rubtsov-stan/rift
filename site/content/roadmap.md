@@ -20,7 +20,7 @@ Rift 0.3.0 is the current release. This page lists work that is not in it.
 - **`rift git-diff`.** Git's external diff for files git calls binary, with Git LFS pointers resolved. See the [git guide](@/guide/git.md).
 {% end %}
 
-## After 0.3
+## Next
 
 - **Directory diff.** `rift A/ B/` walks both trees in sorted order in bounded memory and diffs each pair of files under the same `--mem`, with a summary of added, removed and changed files.
 - **Field-level key diff.** In [key mode](@/guide/key-mode.md), name the fields that changed for a changed key: CSV columns, top-level NDJSON keys, COPY columns.
