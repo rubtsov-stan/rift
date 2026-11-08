@@ -38,4 +38,4 @@ pub use sample::Sample;
 pub use segment::{Segment, SegmentStatus};
 pub use source::Source;
 pub use types::{ByteOffset, Bytes, LineHash, LineNo, ParseBytesError};
-pub use view::{DiffView, HunkState, Progress};
+pub use view::{ApproxTally, DiffView, HunkState, Progress};

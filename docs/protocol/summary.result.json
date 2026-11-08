@@ -23,9 +23,11 @@
           "$ref": "defs.json#/$defs/tally"
         },
         "differs": {
+          "description": "differing segments not known to be approximate: not refined yet, or refined exactly",
           "$ref": "defs.json#/$defs/tally"
         },
         "approx": {
+          "description": "refined segments that came out approximate, out of progress.done; grows while refinement runs",
           "$ref": "defs.json#/$defs/tally"
         },
         "differing_segments": {

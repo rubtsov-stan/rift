@@ -318,18 +318,20 @@ fn queue_rewinds_cursor_after_a_cancel() {
         background: true,
         running: Vec::new(),
         failures: Vec::new(),
+        approx: ApproxTally::default(),
         stop: false,
     };
+    let seg = &segments(1, |_| false)[0];
     assert_eq!(q.pick(), Some((2, true)));
     q.start(2, true);
     for i in [1, 0] {
         assert_eq!(q.pick(), Some((i, true)), "neighbours before the window");
         q.start(i, true);
-        q.complete(i, Hunk::default(), false);
+        q.complete(i, seg, Hunk::default(), false);
     }
     assert_eq!(q.pick(), None, "cursor passed the running 2");
     q.visible = 0..0;
-    q.complete(2, Hunk::default(), true);
+    q.complete(2, seg, Hunk::default(), true);
     assert_eq!(q.pick(), Some((2, false)), "cursor came back for it");
     assert_eq!(q.cache.done(), 2);
 }
@@ -387,6 +389,12 @@ fn too_large_jobs_get_the_fallback_and_are_marked_approx() {
     assert!(matches!(s.hunk(1), HunkState::Approx(_)));
     assert!(ready(&s.hunk(0)).is_some());
     assert_eq!(*s.shared.job.too_large.lock().unwrap(), [(1, limit)]);
+    let one = ApproxTally {
+        segments: 1,
+        a_lines: LINES,
+        b_lines: LINES,
+    };
+    assert_eq!(s.approx_refined(), one);
 }
 
 #[test]

@@ -43,7 +43,7 @@ use crate::edit::{Edit, Hunk};
 use crate::error::Result;
 use crate::segment::{Segment, SegmentStatus};
 use crate::types::{Bytes, LineNo};
-use crate::view::{DiffView, HunkState, Progress};
+use crate::view::{ApproxTally, DiffView, HunkState, Progress};
 pub use cache::HUNK_OVERHEAD;
 use cache::{Cache, State};
 
@@ -159,6 +159,8 @@ struct Queue {
     running: Vec<Running>,
     /// Segments whose job failed, with the reason; one entry each.
     failures: Vec<(usize, Failure)>,
+    /// First completions that came out approximate.
+    approx: ApproxTally,
     stop: bool,
 }
 
@@ -250,6 +252,7 @@ impl<J: Job> Scheduler<J> {
                 background: true,
                 running: Vec::with_capacity(threads),
                 failures: Vec::new(),
+                approx: ApproxTally::default(),
                 stop: false,
             }),
             work: Condvar::new(),
@@ -376,6 +379,10 @@ impl<J: Job> DiffView for Scheduler<J> {
         }
     }
 
+    fn approx_refined(&self) -> ApproxTally {
+        self.shared.lock().approx
+    }
+
     fn set_visible(&self, range: Range<LineNo>) {
         let visible = visible_segments(&self.shared.segments, range);
         {
@@ -492,7 +499,7 @@ impl Queue {
         self.failures.push((segment, why));
     }
 
-    fn complete(&mut self, segment: usize, hunk: Hunk, cancelled: bool) {
+    fn complete(&mut self, segment: usize, seg: &Segment, hunk: Hunk, cancelled: bool) {
         let at = self.running.iter().position(|r| r.segment == segment);
         self.running
             .swap_remove(at.expect("completed job was running"));
@@ -501,7 +508,11 @@ impl Queue {
             self.cursor = self.cursor.min(segment);
             return;
         }
-        self.cache.mark_done(segment);
+        if self.cache.mark_done(segment) && hunk.approx.is_some() {
+            self.approx.segments += 1;
+            self.approx.a_lines += seg.len_a();
+            self.approx.b_lines += seg.len_b();
+        }
         // A hunk larger than the whole cache would be dropped and a waiter
         // would recompute it forever. The cache is as large as work_cap and
         // a job's hunk stays within its reservation, so this cannot happen
@@ -565,10 +576,10 @@ fn worker<J: Job>(shared: &Shared<J>) {
         match out {
             Ok(Ok(mut hunk)) => {
                 hunk.edits.shrink_to_fit();
-                q.complete(i, hunk, cancel.is_set());
+                q.complete(i, segment, hunk, cancel.is_set());
             }
             // A cancelled job may stop with an error; nobody wants it.
-            Ok(Err(_)) if cancel.is_set() => q.complete(i, Hunk::default(), true),
+            Ok(Err(_)) if cancel.is_set() => q.complete(i, segment, Hunk::default(), true),
             Ok(Err(e)) => q.fail(i, Failure::Error(e)),
             Err(_) => q.fail(i, Failure::Panicked),
         }

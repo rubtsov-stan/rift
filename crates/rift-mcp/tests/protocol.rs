@@ -200,6 +200,11 @@ async fn an_approximate_hunk_names_its_reason() {
         header.ends_with(" @@ approx: too many changes among repeated lines to align them exactly"),
         "{header}"
     );
+    // The summary counts it among the refined segments.
+    let sum = ok(&c, "summary", json!({"a": a, "b": b})).await;
+    assert_eq!(sum["refined_segments"], 1, "{sum}");
+    assert_eq!(sum["approx"]["segments"], 1, "{sum}");
+    assert_eq!(sum["differs"]["segments"], 0, "{sum}");
 }
 
 #[tokio::test]

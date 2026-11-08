@@ -285,8 +285,10 @@ its `ApproxReason`.
 
 **`DiffView`, `HunkState`, `Progress`** (`view`). What a front end sees:
 line counts, the segment list, `hunk(i)` returning `Ready`, `Pending` or
-`Approx` without blocking, a `done / total` progress, and `set_visible`
-with the A lines on screen so the scheduler can prioritize.
+`Approx` without blocking, a `done / total` progress, `approx_refined`
+with the segments among those done whose hunk came out approximate, and
+`set_visible` with the A lines on screen so the scheduler can
+prioritize.
 
 **`Error`** (`error`). One enum for the crate: I/O, budget exceeded, line
 too long for its buffer, line out of range, invalid edit script, `Keyed`
