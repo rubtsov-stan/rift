@@ -15,7 +15,7 @@ summary = "What is guaranteed and how it is checked: property tests, byte-identi
 
 1. **The output is a correct edit script.** Applied to A, it yields exactly B, approximate regions included.
 2. **Equal means compared.** A segment or a line is reported equal only after Rift compared its bytes. A matching 64-bit hash is never enough.
-3. **Approximate regions are marked** in the unified diff (`approx` after the hunk header), in `--summary` and `--stats`, and in the terminal view.
+3. **Approximate regions are marked** in the unified diff (`approx` and the reason after the hunk header), in `--stats`, and in the terminal view.
 4. **Peak heap stays under `--mem`.**
 5. **Exit codes follow `diff`:** 0 for identical files, 1 for different ones, 2 for an error.
 

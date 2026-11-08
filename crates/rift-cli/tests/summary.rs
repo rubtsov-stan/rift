@@ -104,7 +104,8 @@ fn ranges_past_the_first_ten_are_counted() {
         stdout.contains(&format!("  ... and {} more\n", differs - 10)),
         "{stdout}"
     );
-    assert!(stdout.contains("approx   0 segments"), "{stdout}");
+    // Nothing is refined, so nothing is known to be approximate.
+    assert!(!stdout.lines().any(|l| l.starts_with("approx")), "{stdout}");
 }
 
 #[test]

@@ -44,8 +44,8 @@ pub struct Args {
     #[arg(long, conflicts_with = "key")]
     pub no_moves: bool,
     /// After a diff, print peak heap, time and approximate regions to
-    /// standard error. With --summary it adds nothing: the summary already
-    /// prints them.
+    /// standard error. With --summary it adds nothing: the summary prints
+    /// the heap and the time, and refines nothing.
     #[arg(long)]
     pub stats: bool,
     /// Compare records by key instead of lines, regardless of row order:
