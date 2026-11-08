@@ -151,6 +151,33 @@ fn approximate_regions_are_marked_and_still_patch() {
     patch_gives_b(&p.a, &p.b, &out.stdout);
 }
 
+fn generated_a(seed: u64, size: u64, profile: Profile) -> Vec<u8> {
+    let config = Config::new(seed, size, profile);
+    let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+    rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+    a
+}
+
+/// Files that share no line: deleting one and inserting the other is the
+/// minimal script, whether the segment fits one job (256 MiB) or has to be
+/// resampled (16 MiB).
+#[test]
+fn files_without_a_common_line_are_exact_and_patch() {
+    let p = pair(
+        &generated_a(1, 4 << 20, Profile::Csv),
+        &generated_a(2, 4 << 20, Profile::Ndjson),
+    );
+    for mem in ["16M", "256M"] {
+        let out = rift(&["--mem", mem, "--stats"], &p.a, &p.b);
+        assert_eq!(out.status.code(), Some(1));
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(!text.contains("approx"), "{mem}: {}", &text[..200]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("approx 0 segments"), "{mem}: {stderr}");
+        patch_gives_b(&p.a, &p.b, &out.stdout);
+    }
+}
+
 #[test]
 fn exit_codes_follow_diff() {
     let same = pair(b"one\ntwo\n", b"one\ntwo\n");

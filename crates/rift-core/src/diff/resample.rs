@@ -31,7 +31,7 @@ use crate::segment::Segment;
 use crate::skeleton::longest_increasing;
 use crate::source::Source;
 use crate::strata::{self, MAX_LEVEL};
-use crate::types::{ByteOffset, Bytes, LineNo};
+use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 
 const SAMPLE_BYTES: u64 = size_of::<Sample>() as u64;
 /// Skeleton-half bytes per sample while a level is chained: the record, at
@@ -147,8 +147,18 @@ fn split<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
             len: n,
         });
     }
-    let Some(chain) = chain(w, inner, &ra, &rb, parent)? else {
-        return out.replace(ra, rb, 2);
+    let chain = match chain(w, inner, &ra, &rb, parent)? {
+        Ok(chain) => chain,
+        Err(NoChain::Disjoint) => {
+            return Ok(out.push(Edit::Delete {
+                a: ra.start,
+                len: n,
+            })? && out.push(Edit::Insert {
+                b: rb.start,
+                len: m,
+            })?);
+        }
+        Err(NoChain::Approx) => return out.replace(ra, rb, 2),
     };
     let (mut at_a, mut at_b) = (ra.start, rb.start);
     for &(x, y) in &chain.cuts {
@@ -176,35 +186,64 @@ struct Chain {
     _reservation: Reservation,
 }
 
+/// Why a range has no chain.
+enum NoChain {
+    /// No line hash is on both sides, so no line is, and the whole
+    /// replacement is minimal.
+    Disjoint,
+    /// No anchor, and nothing proves the sides disjoint: the range stays
+    /// approximate.
+    Approx,
+}
+
 /// Samples A lines `ra` and B lines `rb` at the lowest stratum below
 /// `parent` whose samples fit the skeleton half of `inner`, and chains
-/// them. `None` when no stratum below `parent` fits or no anchor is found.
+/// them. The inner error says why there is no chain.
+///
+/// The same read proves the sides disjoint when no line hash of one is on
+/// the other: the shorter side is read first into a [`Seen`], and every
+/// line of the longer one is looked up in it. The `Seen` is released before
+/// the anchor search, which sees the budget it would without it. When it
+/// does not fit, a range without anchors stays approximate.
 fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     w: &mut Worker<A, B>,
     inner: &Budget,
     ra: &Range<LineNo>,
     rb: &Range<LineNo>,
     parent: u32,
-) -> Result<Option<Chain>> {
+) -> Result<std::result::Result<Chain, NoChain>> {
     // Half of what is free, so the levels below this one have room for
     // theirs while this chain is held.
     let cap = inner.available(Half::Skeleton).0 / 2 / BYTES_PER_SAMPLE;
     let lines = (ra.end - ra.start) + (rb.end - rb.start);
     let mut level = strata::initial_level(lines, cap);
     if cap == 0 || level >= parent {
-        return Ok(None);
+        return Ok(Err(NoChain::Approx));
     }
     let cap = Bytes(cap).as_usize();
     let held = inner.try_reserve(Half::Skeleton, Bytes(cap as u64 * SAMPLE_BYTES))?;
+    let (n, m) = (ra.end - ra.start, rb.end - rb.start);
+    let a_first = n <= m;
+    let mut seen = Seen::new(inner, n.min(m), n.max(m));
     let mut samples: Vec<Sample> = Vec::with_capacity(cap);
-    let mut in_a = 0;
-    for (side, range) in [(0, ra), (1, rb)] {
+    // Samples of the side read first come first; the final set does not
+    // depend on the order, so B first only needs a rotation after.
+    let mut in_first = 0;
+    let order = if a_first { [0, 1] } else { [1, 0] };
+    for (k, side) in order.into_iter().enumerate() {
+        let range = if side == 0 { ra } else { rb };
+        if k == 1 {
+            in_first = samples.len();
+        }
         let mut line = range.start;
         let mut sample = |hash| {
+            if let Some(s) = &mut seen {
+                s.see(k == 0, hash);
+            }
             if level < parent && strata::contains(level, hash) {
                 if samples.len() == cap {
                     level += 1;
-                    in_a = thin(&mut samples, in_a, level);
+                    in_first = thin(&mut samples, in_first, level);
                 }
                 if level < parent && strata::contains(level, hash) {
                     samples.push(Sample {
@@ -218,14 +257,21 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
         };
         if side == 0 {
             each_hash(&w.a, range.clone(), &mut w.buf, &mut sample)?;
-            in_a = samples.len();
         } else {
             each_hash(&w.b, range.clone(), &mut w.buf, &mut sample)?;
         }
     }
+    if seen.take().is_some_and(Seen::disjoint) {
+        return Ok(Err(NoChain::Disjoint));
+    }
+    let mut in_a = in_first;
+    if !a_first {
+        samples.rotate_left(in_first);
+        in_a = samples.len() - in_first;
+    }
     let anchors = loop {
         if level >= parent {
-            return Ok(None);
+            return Ok(Err(NoChain::Approx));
         }
         let (sa, sb) = samples.split_at(in_a);
         let attempt = anchors::select(sa, sb, inner).and_then(|mut found| {
@@ -243,7 +289,7 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     };
     let pairs = anchors.pairs();
     if pairs.is_empty() {
-        return Ok(None);
+        return Ok(Err(NoChain::Approx));
     }
     let reservation = inner.try_reserve(Half::Skeleton, Bytes(16 * pairs.len() as u64))?;
     let (sa, sb) = samples.split_at(in_a);
@@ -254,20 +300,157 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     drop(anchors);
     drop(samples);
     drop(held);
-    Ok(Some(Chain {
+    Ok(Ok(Chain {
         cuts,
         level,
         _reservation: reservation,
     }))
 }
 
-/// Keeps the samples of stratum `level`, A's first, and returns how many
-/// of A's remain.
-fn thin(samples: &mut Vec<Sample>, in_a: usize, level: u32) -> usize {
-    let kept_a = samples[..in_a]
+/// Line hashes of the side of a range read first, to tell whether any
+/// line of the other side has one of them.
+///
+/// Looking each line up in a sorted or bucketed copy of 1.3M hashes costs
+/// a cache miss per line. Instead each first-side hash sets two bits of
+/// one word in a filter of 16 bits per hash, which stays in cache, and a
+/// second-side hash is kept as a candidate only when both its bits are
+/// set: about 2% of hashes that are not there, and every one that is. At
+/// the end one pass over the first side's hashes looks them up among the
+/// sorted candidates, behind the same kind of filter rebuilt over the
+/// candidates in the first one's words. A candidate found there is a
+/// shared hash. More
+/// candidates than the room for them prove nothing, and the range goes on
+/// as if a hash were shared.
+///
+/// Memory: 8 bytes per line of the first side for the hashes, 2 for the
+/// filter, and 8 bytes per 32 lines of the second side for candidates,
+/// from the skeleton half of the job's budget, held only while chain
+/// reads.
+struct Seen {
+    hashes: Vec<LineHash>,
+    /// Two bits per hash in one word, chosen by its low 44 bits: a bit
+    /// that is not set proves the hash absent.
+    filter: Vec<u64>,
+    candidates: Vec<LineHash>,
+    /// More candidates came than `candidates` has room for.
+    overflow: bool,
+    _reservation: Reservation,
+}
+
+impl Seen {
+    /// Room for `first` hashes and the candidates among `second`, or none
+    /// when it does not fit.
+    fn new(inner: &Budget, first: u64, second: u64) -> Option<Self> {
+        let words = first / 4 + 1;
+        let room = second / 32 + 64;
+        let bytes = 8 * (first + words + room);
+        let reservation = inner.try_reserve(Half::Skeleton, Bytes(bytes)).ok()?;
+        let vec = |len: u64| -> Option<Vec<LineHash>> {
+            let mut v = Vec::new();
+            v.try_reserve_exact(usize::try_from(len).ok()?).ok()?;
+            Some(v)
+        };
+        let mut filter = vec(words)?;
+        filter.resize(usize::try_from(words).ok()?, 0);
+        Some(Self {
+            hashes: vec(first)?,
+            filter,
+            candidates: vec(room)?,
+            overflow: false,
+            _reservation: reservation,
+        })
+    }
+
+    /// Keeps `h` while the first side is read, filters it after.
+    fn see(&mut self, first: bool, h: LineHash) {
+        let (w, bits) = self.slot(h);
+        if first {
+            self.hashes.push(h);
+            self.filter[w] |= bits;
+        } else if self.filter[w] & bits == bits && !self.overflow {
+            if self.candidates.len() < self.candidates.capacity() {
+                self.candidates.push(h);
+            } else {
+                self.overflow = true;
+            }
+        }
+    }
+
+    /// Whether no hash of the second side is among the first side's.
+    fn disjoint(mut self) -> bool {
+        if self.overflow {
+            return false;
+        }
+        if self.candidates.is_empty() {
+            return true;
+        }
+        self.candidates.sort_unstable();
+        // The same filter shape, now over the candidates; its words are
+        // reused from the first side's filter, which is no longer needed.
+        let words = (self.candidates.capacity() / 4).min(self.filter.len());
+        self.filter.truncate(words);
+        self.filter.fill(0);
+        for i in 0..self.candidates.len() {
+            let (w, bits) = self.slot(self.candidates[i]);
+            self.filter[w] |= bits;
+        }
+        !self.hashes.iter().any(|&h| {
+            let (w, bits) = self.slot(h);
+            self.filter[w] & bits == bits && self.candidates.binary_search(&h).is_ok()
+        })
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the product of two 32-bit values shifted by 32 is below the word count"
+    )]
+    fn slot(&self, h: LineHash) -> (usize, u64) {
+        let w = ((h & 0xffff_ffff) * self.filter.len() as u64) >> 32;
+        (w as usize, 1 << ((h >> 32) & 63) | 1 << ((h >> 38) & 63))
+    }
+}
+
+/// Keeps the samples of stratum `level` and returns how many of the first
+/// `in_first` remain.
+fn thin(samples: &mut Vec<Sample>, in_first: usize, level: u32) -> usize {
+    let kept_a = samples[..in_first]
         .iter()
         .filter(|s| strata::contains(level, s.hash))
         .count();
     strata::thin(samples, level);
     kept_a
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        /// A second side is disjoint exactly when it shares no hash with
+        /// the first, through filter hits and misses alike.
+        #[test]
+        fn seen_is_disjoint_exactly_without_a_shared_hash(
+            first in prop::collection::vec(any::<u64>(), 0..3000),
+            other in prop::collection::vec(any::<u64>(), 0..200),
+            shared in prop::option::of(any::<prop::sample::Index>()),
+        ) {
+            let mut second = other.clone();
+            if let (Some(i), false) = (shared, first.is_empty()) {
+                second.push(first[i.index(first.len())]);
+            }
+            let len = |v: &[u64]| v.len() as u64;
+            let budget = Budget::new(Bytes::mib(4));
+            let mut seen = Seen::new(&budget, len(&first), len(&second)).unwrap();
+            for &h in &first {
+                seen.see(true, h);
+            }
+            for &h in &second {
+                seen.see(false, h);
+            }
+            let truth = !second.iter().any(|h| first.contains(h));
+            prop_assert_eq!(seen.disjoint(), truth);
+        }
+    }
 }

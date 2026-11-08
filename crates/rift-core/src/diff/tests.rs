@@ -192,6 +192,31 @@ fn a_large_range_without_unique_lines_is_approximate_but_valid() {
 }
 
 #[test]
+fn a_large_range_without_a_common_line_is_replaced_exactly() {
+    let a = rows(20_000, |i| format!("a {}\n", i % 7));
+    let b = rows(20_000, |i| format!("b {i}\n"));
+    // The check holds the hashes of one side, 160 kB of the 256 kB
+    // skeleton half a 512 KiB job has.
+    let hunk = large(&a, &b, Bytes(512 << 10));
+    assert!(!hunk.approx);
+    assert_eq!(changes(&hunk), 40_000);
+    // Without room for them nothing is proved, and the hunk stays
+    // approximate.
+    assert!(large(&a, &b, Bytes(256 << 10)).approx);
+}
+
+#[test]
+fn a_pair_without_a_common_line_is_exact_at_any_budget() {
+    let a = rows(60_000, |i| format!("left {}\n", i % 5));
+    let b = rows(50_000, |i| format!("right {i}\n"));
+    // 16 MiB sends the segment through resampling, 256 MiB refines it whole.
+    for mem in [Bytes::mib(16), Bytes::mib(256)] {
+        let hunks = check(&a, &b, mem, 2);
+        assert!(hunks.iter().all(|h| !h.approx), "{mem}");
+    }
+}
+
+#[test]
 fn a_large_equal_range_is_compared_not_replaced() {
     let a = b"x\n".repeat(40_000);
     let hunk = large(&a, &a, Bytes(256 << 10));
