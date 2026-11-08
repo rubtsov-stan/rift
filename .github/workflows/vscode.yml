@@ -66,6 +66,8 @@ jobs:
           npm ci
           npm run lint
           npm run build
+          # vsce stats --out as an existing directory and fails with ENOTDIR otherwise.
+          mkdir -p "$RUNNER_TEMP/vsix"
           npm run package -- --target "$VSCE_TARGET" --out "$RUNNER_TEMP/vsix/"
       - name: Smoke test the bundled binary
         if: matrix.vsce == 'linux-x64'
