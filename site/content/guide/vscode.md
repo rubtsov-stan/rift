@@ -17,7 +17,7 @@ summary = "Install the extension, compare two files, step through the difference
 Or from a terminal:
 
 ```
-code --install-extension rubtsov-stan.rift-vscode
+code --install-extension rubtsov-stan.rift-diff
 ```
 
 The packages for macOS and Linux, on arm64 and x86_64, carry their own `rift` binary, so you install nothing else. On another platform, install `rift` yourself and point `rift.path` at it. Windows is not supported. The extension needs VS Code 1.100 or later.

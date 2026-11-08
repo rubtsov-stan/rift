@@ -1,5 +1,5 @@
 {
-  "name": "rift-vscode",
+  "name": "rift-diff",
   "displayName": "Rift: Diff Huge Files",
   "description": "Compare huge text files in VS Code's own diff editor, one difference at a time.",
   "version": "0.3.0",
