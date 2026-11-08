@@ -28,12 +28,16 @@
 
 4. Watch the Release workflow, then Debian packages and VS Code packages,
    which start when Release succeeds. On the release page, check the
-   archives, the shell installer, the checksums, the `.deb` files and the
-   VSIX packages, and verify one archive:
+   archives, the shell installer, the checksums, the `.deb` files, the VSIX
+   packages and, for each archive, its `.sigstore.json` bundle and
+   `.intoto.jsonl` provenance, and verify one archive against its bundle:
 
    ```sh
-   gh attestation verify <archive> --repo rubtsov-stan/rift
+   gh attestation verify <archive> --bundle <archive>.sigstore.json --repo rubtsov-stan/rift
    ```
+
+   If a release lacks the provenance files, run the `Release provenance`
+   workflow with its tag.
 
 5. If the `host` job still gets 403, push the release branch at the tagged
    commit and rerun the failed jobs:
