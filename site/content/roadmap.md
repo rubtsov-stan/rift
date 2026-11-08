@@ -18,6 +18,7 @@ lead = "What comes after the current release. Nothing here has a date."
 
 - **Directory diff.** `rift A/ B/` walks both trees in sorted order in bounded memory and diffs each pair of files under the same `--mem`, with a summary of added, removed and changed files.
 - **Field-level key diff.** Planned for 0.4. In [key mode](@/guide/key-mode.md), name the fields that changed for a changed key: CSV columns, top-level NDJSON keys, COPY columns. Until then, `--show-records` prints both records of a changed key in full.
+- **Exact diff for regions that share only repeated lines.** Today Rift can replace such a region whole and marks it `approx`; an alignment that counts only the line pairs that match would make it exact.
 - **Homebrew tap.** `brew install` from a tap repository, added to the release installers once the tap and its token exist.
 
 ## Not planned
