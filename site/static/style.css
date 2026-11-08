@@ -37,8 +37,8 @@ ul.plain{padding-left:1.1rem;margin:.5rem 0}ul.plain li{margin:.4rem 0}
 .top nav{margin-left:auto;display:flex;gap:1.25rem;font:400 .8125rem var(--mono)}
 .top nav a{color:var(--ink);text-decoration-color:transparent}
 .top nav a:hover{text-decoration-color:var(--accent);color:var(--accent)}
-.star{display:inline-flex;align-items:center;gap:.5rem;font:700 .8125rem var(--mono);color:var(--ink);text-decoration:none;border:1px solid var(--rule);border-radius:4px;padding:.3rem .6rem;white-space:nowrap;transition:border-color .15s,background .15s}
-.star:hover{border-color:var(--accent);background:var(--panel)}
+.star,.get a{display:inline-flex;align-items:center;gap:.5rem;font:700 .8125rem var(--mono);color:var(--ink);text-decoration:none;border:1px solid var(--rule);border-radius:4px;padding:.3rem .6rem;white-space:nowrap;transition:border-color .15s,background .15s}
+.star:hover,.get a:hover{border-color:var(--accent);background:var(--panel)}
 .star .st{color:var(--accent);display:flex}
 .star b{min-width:1.2ch;text-align:right;font-variant-numeric:tabular-nums}
 .btn{font:700 .75rem var(--mono);color:var(--ink);background:transparent;border:1px solid var(--rule);border-radius:4px;padding:.35rem .65rem;cursor:pointer;min-width:4.2rem;transition:border-color .15s,background .15s,color .15s}
@@ -175,7 +175,7 @@ body.land{font-size:1.0625rem}
 .diagram text{fill:var(--ink);font-family:var(--mono);font-size:13px}
 .diagram .box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
 .diagram .eq{fill:var(--green)}.diagram .df{fill:var(--red)}.diagram .link{stroke:var(--muted);stroke-width:1.5;fill:none}
-.diagram figcaption,.prose figure.media figcaption{font-size:.875rem;color:var(--muted);margin-top:.5rem}
+.diagram figcaption,figure.media figcaption{font-size:.875rem;color:var(--muted);margin-top:.5rem}
 .media{margin:0}
 .media .slot{display:block;width:100%;height:auto;background:var(--tbg);border:1px solid var(--tln);border-radius:10px;aspect-ratio:var(--ar)}
 .media video,.media img{display:block;width:100%;height:auto;border-radius:10px;aspect-ratio:var(--ar);background:var(--tbg)}
@@ -187,4 +187,5 @@ body.land{font-size:1.0625rem}
 .prose pre:not(.tb):not(.cmd){margin:1.25rem 0;padding:.9rem 1.1rem;background:var(--tbg);color:var(--tfg);border:1px solid var(--tln);border-left:3px solid var(--accent);border-radius:6px;overflow-x:auto;font-size:.8125rem;line-height:1.55}
 .prose pre code{color:inherit}
 .prose .tb{white-space:pre-wrap;overflow-wrap:anywhere}
+.get{display:flex;flex-wrap:wrap;gap:.75rem;margin:1rem 0 .5rem}
 .land .links{display:flex;flex-wrap:wrap;gap:1.25rem;font:700 .8125rem var(--mono);margin:1.5rem 0 0}

@@ -22,6 +22,6 @@ repo_url = "https://github.com/rubtsov-stan/rift"
 # browser for stars.
 star_threshold = 50
 download_threshold = 500
-# The files site/static/vscode-demo.{mp4,gif} and vscode-demo-poster.jpg exist.
-# The slots appear only in builds with RIFT_SITE_VSCODE=1.
-vscode_media = true
+# The extension's id on the Marketplace and Open VSX. Pages that use it
+# appear only in builds with RIFT_SITE_VSCODE=1.
+vscode_ext = "rubtsov-stan.rift-vscode"

@@ -29,6 +29,5 @@ if [ "${RIFT_SITE_VSCODE:-0}" = 1 ]; then
   for f in mp4 gif; do
     [ -f "$media/rift-demo.$f" ] && cp "$media/rift-demo.$f" "public/vscode-demo.$f"
   done
-  [ -f "$media/rift-demo-poster.jpg" ] && cp "$media/rift-demo-poster.jpg" public/vscode-demo-poster.jpg
 fi
 exit 0

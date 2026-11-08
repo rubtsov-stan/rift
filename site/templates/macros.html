@@ -80,3 +80,8 @@
 {%- if caption != "" %}<figcaption>{{ caption }}</figcaption>{% endif %}
 </figure>
 {% endmacro media %}
+
+{% macro vscode_install() %}
+{%- set ext = config.extra.vscode_ext | split(pat=".") -%}
+<p class="get"><a href="https://marketplace.visualstudio.com/items?itemName={{ config.extra.vscode_ext }}">Install from the Marketplace</a> <a href="https://open-vsx.org/extension/{{ ext[0] }}/{{ ext[1] }}">Install from Open VSX</a></p>
+{% endmacro vscode_install %}
