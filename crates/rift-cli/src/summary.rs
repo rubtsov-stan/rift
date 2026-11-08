@@ -58,11 +58,9 @@ pub fn run<A: Source, B: Source>(
             b.len()
         )?;
         writeln!(out, "stratum {}, {} anchors", map.level(), map.anchors())?;
-        for status in [
-            SegmentStatus::Equal,
-            SegmentStatus::Differs,
-            SegmentStatus::Approx,
-        ] {
+        // No approx line: whether a segment comes out approximate is known
+        // only once it is refined, and the summary refines nothing.
+        for status in [SegmentStatus::Equal, SegmentStatus::Differs] {
             let (count, lines_a, lines_b) = segments
                 .iter()
                 .filter(|s| s.status == status)

@@ -3,7 +3,6 @@ b: 13337797 lines, 1074747414 bytes
 stratum 6, 205021 anchors
 equal    6512 segments, 12357315 lines in a, 12357315 in b
 differs  6753 segments, 969786 lines in a, 980482 in b
-approx   0 segments, 0 lines in a, 0 in b
 first differing ranges (0-based, end exclusive):
   a 278..409  b 278..408
   a 904..1043  b 903..1042

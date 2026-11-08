@@ -16,9 +16,10 @@ is given with a path: \fBrift ./serve other\fR.
 .TP
 \fB\-\-summary\fR
 Writes no diff. Prints the line and byte count of each file, the number
-of segments that are equal, differing or approximate, the first 10
-differing ranges (counted from 0, end excluded), the moved blocks, the
-peak heap and the time.
+of segments that are equal or differing, the first 10 differing ranges
+(counted from 0, end excluded), the moved blocks, the peak heap and the
+time. It refines no segment, so it cannot say which ones would come out
+approximate; the full diff with \fB\-\-stats\fR does.
 .TP
 \fB\-i\fR, \fB\-\-interactive\fR, \fBrift tui\fR \fIA\fR \fIB\fR
 Opens a terminal view of the diff. The view is usable before the diff is

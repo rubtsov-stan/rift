@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `approx`. Deleting one side and inserting the other is the smallest
   diff there, and Rift now proves it from the line hashes: a different
   hash means a different line. The script is the same as before.
+- `--summary` no longer prints an `approx` line. It refines nothing, so
+  its count was always 0 whatever the files.
 
 ### Changed
 
