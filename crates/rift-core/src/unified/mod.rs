@@ -7,10 +7,10 @@
 //! through untouched (so CRLF stays CRLF), and `---`/`+++` headers with
 //! the name and mtime formatted like GNU diff.
 //!
-//! An approximate hunk is marked by the word `approx` after the closing
-//! `@@` of its header, the slot where `diff -p` prints a function name.
-//! `patch` ignores that slot, so the diff applies exactly as it would
-//! without the mark.
+//! An approximate hunk is marked by `approx:` and its reason in plain
+//! words after the closing `@@` of its header, the slot where `diff -p`
+//! prints a function name. `patch` ignores that slot, so the diff applies
+//! exactly as it would without the mark.
 //!
 //! Memory: the 1 MiB output buffer and one line buffer of at most 64
 //! lines, both in the Refine half; the caller holds the reservation. No
@@ -22,7 +22,7 @@ use std::io::{self, BufWriter, Write};
 use std::marker::PhantomData;
 use std::ops::{Deref, Range};
 
-use crate::edit::{Edit, Hunk};
+use crate::edit::{ApproxReason, Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::lines::{LineAccess, LineBuf};
 use crate::script::{Cursor, for_each_piece};
@@ -150,7 +150,7 @@ pub fn write_diff<H: Deref<Target = Hunk>>(
                 }
                 Edit::Equal { .. } => end = cursor,
                 _ => {
-                    approx |= m.approx;
+                    approx = approx.max(m.approx);
                     end = cursor;
                 }
             }
@@ -196,8 +196,8 @@ struct At {
 #[derive(Debug, Clone, Copy)]
 struct Step {
     edit: Edit,
-    /// The hunk it came from was approximate.
-    approx: bool,
+    /// Why the hunk it came from was approximate, if it was.
+    approx: Option<ApproxReason>,
     /// Where it starts in the raw script.
     at: At,
     /// Nothing follows it.
@@ -214,7 +214,7 @@ struct Step {
 struct Merged<'f, F, H> {
     hunk: &'f F,
     at: At,
-    peeked: Option<(Edit, bool, At)>,
+    peeked: Option<(Edit, Option<ApproxReason>, At)>,
     _hunk: PhantomData<H>,
 }
 
@@ -228,8 +228,8 @@ impl<'f, F: Fn(usize) -> Result<Option<H>>, H: Deref<Target = Hunk>> Merged<'f, 
         }
     }
 
-    /// The next raw edit and its hunk's approx flag.
-    fn raw(&mut self) -> Result<Option<(Edit, bool, At)>> {
+    /// The next raw edit and its hunk's approx reason.
+    fn raw(&mut self) -> Result<Option<(Edit, Option<ApproxReason>, At)>> {
         if let Some(p) = self.peeked.take() {
             return Ok(Some(p));
         }
@@ -299,11 +299,16 @@ struct Writer<'o, A, B, W: Write> {
 impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
     /// The file headers before the first hunk, then the `@@` line of a
     /// hunk from `start` to `end`.
-    fn header(&mut self, start: Cursor, end: Cursor, approx: bool) -> Result<()> {
+    fn header(&mut self, start: Cursor, end: Cursor, approx: Option<ApproxReason>) -> Result<()> {
         self.write_header(start, end, approx).map_err(Error::Write)
     }
 
-    fn write_header(&mut self, start: Cursor, end: Cursor, approx: bool) -> io::Result<()> {
+    fn write_header(
+        &mut self,
+        start: Cursor,
+        end: Cursor,
+        approx: Option<ApproxReason>,
+    ) -> io::Result<()> {
         if !self.wrote_header {
             write_label(&mut self.out, b"--- ", &self.opts.old)?;
             write_label(&mut self.out, b"+++ ", &self.opts.new)?;
@@ -313,8 +318,11 @@ impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
         write_range(&mut self.out, start.a, end.a - start.a)?;
         self.out.write_all(b" +")?;
         write_range(&mut self.out, start.b, end.b - start.b)?;
-        self.out
-            .write_all(if approx { b" @@ approx\n" } else { b" @@\n" })
+        // Patch tools ignore what follows the closing `@@`.
+        match approx {
+            Some(reason) => writeln!(self.out, " @@ approx: {}", reason.describe()),
+            None => self.out.write_all(b" @@\n"),
+        }
     }
 
     /// Second pass: the lines of the hunk from its first change at `first`

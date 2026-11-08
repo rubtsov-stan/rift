@@ -42,18 +42,14 @@ pub struct Rendered {
 }
 
 /// Waits until segment `i` has a script.
-fn script(
-    diff: &Diff<FileSource, FileSource>,
-    i: usize,
-) -> Result<(rift_core::Hunk, bool), String> {
+fn script(diff: &Diff<FileSource, FileSource>, i: usize) -> Result<rift_core::Hunk, String> {
     let seg = &diff.segments()[i];
     let start = seg.a.start.0.saturating_sub(1);
     diff.set_visible(LineNo(start)..LineNo(seg.a.end.0.max(start + 1)));
     let began = Instant::now();
     loop {
         match diff.hunk(i) {
-            HunkState::Ready(h) => return Ok(((*h).clone(), false)),
-            HunkState::Approx(h) => return Ok(((*h).clone(), true)),
+            HunkState::Ready(h) | HunkState::Approx(h) => return Ok((*h).clone()),
             HunkState::Pending if began.elapsed() > HUNK_WAIT => {
                 return Err("the hunk was not computed in time".into());
             }
@@ -86,7 +82,7 @@ pub fn hunk_text(
 ) -> Result<Rendered, String> {
     let segs = diff.segments();
     let seg = &segs[i];
-    let (hunk, approx) = script(diff, i)?;
+    let hunk = script(diff, i)?;
     let is_change = |e: &Edit| !matches!(e, Edit::Equal { .. });
     let first = hunk.edits.iter().position(is_change).unwrap_or(0);
     let last = hunk.edits.iter().rposition(is_change).unwrap_or(0);
@@ -104,12 +100,11 @@ pub fn hunk_text(
     let (ac, bc) = (pre + a_len + post, pre + b_len + post);
     // As in `diff -u`, an empty range is named by the line before it.
     let start = |s: u64, count: u64| if count == 0 { s - pre } else { s - pre + 1 };
-    let mut text = format!(
-        "@@ -{},{ac} +{},{bc} @@{}\n",
-        start(a0, ac),
-        start(b0, bc),
-        if approx { " approx" } else { "" }
-    );
+    let mut text = format!("@@ -{},{ac} +{},{bc} @@", start(a0, ac), start(b0, bc));
+    if let Some(reason) = hunk.approx {
+        let _ = write!(text, " approx: {}", reason.describe());
+    }
+    text.push('\n');
     let total = pre + sum(edits) + post;
     let mut out = Out {
         text: &mut text,
@@ -134,7 +129,7 @@ pub fn hunk_text(
         total,
         a: (a0, a_len),
         b: (b0, b_len),
-        approx,
+        approx: hunk.approx.is_some(),
     })
 }
 

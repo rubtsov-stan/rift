@@ -300,7 +300,7 @@ impl<J: Job> Scheduler<J> {
         }
         Ok(
             match self.shared.lookup(&mut self.shared.lock(), segment)? {
-                Some(hunk) if hunk.approx => HunkState::Approx(hunk),
+                Some(hunk) if hunk.approx.is_some() => HunkState::Approx(hunk),
                 Some(hunk) => HunkState::Ready(hunk),
                 None => HunkState::Pending,
             },
@@ -409,7 +409,7 @@ impl<J: Job> Shared<J> {
                     b: s.b.start,
                     len: s.len_a(),
                 }],
-                approx: false,
+                approx: None,
             })
         })
     }

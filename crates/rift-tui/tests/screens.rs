@@ -114,6 +114,22 @@ v ·············▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀�
     });
 }
 
+/// A status line with room gives the reason of the approximate hunk on
+/// screen; at 56 columns it does not fit and is left out.
+#[test]
+fn approx_reason_in_the_status_line() {
+    let m = Mock::build(&specs(), true);
+    with_app(&m, |app| {
+        press(app, "nn");
+        let text = screen(app, 120, H);
+        let status = text.lines().last().unwrap();
+        assert!(
+            status.contains("approx: too many changes among repeated lines to align them exactly"),
+            "{status}"
+        );
+    });
+}
+
 #[test]
 fn approx_hunk() {
     let m = Mock::build(&specs(), true);

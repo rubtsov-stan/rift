@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use super::{Diff, LineHash, NONE};
+use super::{ApproxReason, Diff, LineHash, NONE};
 
 impl Diff<'_> {
     /// Myers on `a[ra]` against `b[rb]` within the gap's `limit`. Recursion
@@ -39,7 +39,7 @@ impl Diff<'_> {
             // Cutoff: a whole replacement is valid, only not minimal.
             self.ws.removed[ra].fill(true);
             self.ws.added[rb].fill(true);
-            self.approx = true;
+            self.approx = Some(ApproxReason::Cutoff);
         }
     }
 

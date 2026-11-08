@@ -127,7 +127,7 @@ fn generated_pairs_patch_from_a_to_b() {
 
 /// A region with no unique line, too large for one job at 16 MiB: it
 /// cannot be resampled and comes out as one approximate replacement, which
-/// still patches.
+/// still patches. A larger `--mem` aligns it, as the reason says.
 #[test]
 fn approximate_regions_are_marked_and_still_patch() {
     let a = b"same line\n".repeat(300_000);
@@ -138,9 +138,17 @@ fn approximate_regions_are_marked_and_still_patch() {
     assert_eq!(out.status.code(), Some(1));
     let text = String::from_utf8_lossy(&out.stdout);
     let header = text.lines().find(|l| l.starts_with("@@")).unwrap();
-    assert!(header.ends_with("@@ approx"), "{header}");
+    let reason = "too large to align within --mem; a larger --mem may help";
+    assert!(
+        header.ends_with(&format!("@@ approx: {reason}")),
+        "{header}"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("approx 1 segments"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("1 segments: {reason}")),
+        "{stderr}"
+    );
     patch_gives_b(&p.a, &p.b, &out.stdout);
 
     // With room to refine it, the same pair diffs exactly.
@@ -176,6 +184,37 @@ fn files_without_a_common_line_are_exact_and_patch() {
         assert!(stderr.contains("approx 0 segments"), "{mem}: {stderr}");
         patch_gives_b(&p.a, &p.b, &out.stdout);
     }
+}
+
+/// Different rows that share only a repeated blank line: no line anchors
+/// them, the search passes its cutoff, and the hunk says so.
+#[test]
+fn a_nearly_disjoint_pair_names_its_approx_reason() {
+    let rows = |tag: &str| -> Vec<u8> {
+        (0..20_000)
+            .flat_map(|i| {
+                if i % 100 == 0 {
+                    "\n".to_owned()
+                } else {
+                    format!("{tag} row {i}\n")
+                }
+                .into_bytes()
+            })
+            .collect()
+    };
+    let p = pair(&rows("left"), &rows("right"));
+    let out = rift(&["--mem", "256M", "--stats"], &p.a, &p.b);
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&out.stdout);
+    let header = text.lines().find(|l| l.starts_with("@@")).unwrap();
+    let reason = "too many changes among repeated lines to align them exactly";
+    assert!(
+        header.ends_with(&format!("@@ approx: {reason}")),
+        "{header}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(reason), "{stderr}");
+    patch_gives_b(&p.a, &p.b, &out.stdout);
 }
 
 #[test]

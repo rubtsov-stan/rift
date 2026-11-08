@@ -21,7 +21,7 @@ fn label(name: &'static str) -> Label<'static> {
 fn hunk(edits: Vec<Edit>) -> Hunk {
     Hunk {
         edits,
-        approx: false,
+        approx: None,
     }
 }
 
@@ -177,13 +177,16 @@ fn approx_hunks_carry_a_marker_after_the_header() {
     let b = b"a\nX\nc\n";
     let mut hunks = script(a, b);
     let (plain, _) = render(a, b, &hunks, &options(3));
-    hunks[0].approx = true;
-    let (marked, _) = render(a, b, &hunks, &options(3));
-    assert_eq!(
-        String::from_utf8_lossy(&marked),
-        "--- a\n+++ b\n@@ -1,3 +1,3 @@ approx\n a\n-b\n+X\n c\n"
-    );
-    assert_eq!(marked.len(), plain.len() + " approx".len());
+    for reason in ApproxReason::ALL {
+        hunks[0].approx = Some(reason);
+        let (marked, _) = render(a, b, &hunks, &options(3));
+        let mark = format!(" approx: {}", reason.describe());
+        assert_eq!(
+            String::from_utf8_lossy(&marked),
+            format!("--- a\n+++ b\n@@ -1,3 +1,3 @@{mark}\n a\n-b\n+X\n c\n")
+        );
+        assert_eq!(marked.len(), plain.len() + mark.len());
+    }
 }
 
 #[test]

@@ -23,7 +23,7 @@ use std::ops::Range;
 use super::{Out, Worker, each_hash, estimate, refine, same_lines};
 use crate::anchors;
 use crate::budget::{Budget, Half, Reservation};
-use crate::edit::{Edit, Hunk};
+use crate::edit::{ApproxReason, Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::sample::Sample;
 use crate::sched::Cancel;
@@ -70,7 +70,7 @@ pub(super) fn refine_large<A: Source + Send + ?Sized, B: Source + Send + ?Sized>
     };
     if !done && !cancel.is_set() {
         let rest = (out.at_a..seg.a.end, out.at_b..seg.b.end);
-        let closed = out.replace(rest.0, rest.1, 0)?;
+        let closed = out.replace(rest.0, rest.1, 0, ApproxReason::Budget)?;
         debug_assert!(closed, "two slots are kept for the rest");
     }
     Ok(out.into_hunk())
@@ -93,7 +93,7 @@ fn whole(seg: &Segment) -> Hunk {
     }
     Hunk {
         edits,
-        approx: true,
+        approx: Some(ApproxReason::Budget),
     }
 }
 
@@ -132,7 +132,7 @@ fn split<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
         let mut reservation = inner.try_reserve(Half::Refine, need)?;
         let hunk = refine(w, ra, rb, None, &mut reservation, cancel)?;
         drop(reservation);
-        out.approx |= hunk.approx;
+        out.approx = out.approx.max(hunk.approx);
         for e in hunk.edits {
             if !out.push(e)? {
                 return Ok(false);
@@ -158,7 +158,7 @@ fn split<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
                 len: m,
             })?);
         }
-        Err(NoChain::Approx) => return out.replace(ra, rb, 2),
+        Err(NoChain::Approx(reason)) => return out.replace(ra, rb, 2, reason),
     };
     let (mut at_a, mut at_b) = (ra.start, rb.start);
     for &(x, y) in &chain.cuts {
@@ -191,9 +191,8 @@ enum NoChain {
     /// No line hash is on both sides, so no line is, and the whole
     /// replacement is minimal.
     Disjoint,
-    /// No anchor, and nothing proves the sides disjoint: the range stays
-    /// approximate.
-    Approx,
+    /// The range stays approximate, for this reason.
+    Approx(ApproxReason),
 }
 
 /// Samples A lines `ra` and B lines `rb` at the lowest stratum below
@@ -204,7 +203,8 @@ enum NoChain {
 /// the other: the shorter side is read first into a [`Seen`], and every
 /// line of the longer one is looked up in it. The `Seen` is released before
 /// the anchor search, which sees the budget it would without it. When it
-/// does not fit, a range without anchors stays approximate.
+/// does not fit, a range without anchors stays approximate for lack of
+/// budget.
 fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     w: &mut Worker<A, B>,
     inner: &Budget,
@@ -218,13 +218,14 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     let lines = (ra.end - ra.start) + (rb.end - rb.start);
     let mut level = strata::initial_level(lines, cap);
     if cap == 0 || level >= parent {
-        return Ok(Err(NoChain::Approx));
+        return Ok(Err(NoChain::Approx(ApproxReason::Budget)));
     }
     let cap = Bytes(cap).as_usize();
     let held = inner.try_reserve(Half::Skeleton, Bytes(cap as u64 * SAMPLE_BYTES))?;
     let (n, m) = (ra.end - ra.start, rb.end - rb.start);
     let a_first = n <= m;
     let mut seen = Seen::new(inner, n.min(m), n.max(m));
+    let checked = seen.is_some();
     let mut samples: Vec<Sample> = Vec::with_capacity(cap);
     // Samples of the side read first come first; the final set does not
     // depend on the order, so B first only needs a rotation after.
@@ -271,7 +272,7 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     }
     let anchors = loop {
         if level >= parent {
-            return Ok(Err(NoChain::Approx));
+            return Ok(Err(NoChain::Approx(ApproxReason::Budget)));
         }
         let (sa, sb) = samples.split_at(in_a);
         let attempt = anchors::select(sa, sb, inner).and_then(|mut found| {
@@ -289,7 +290,12 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     };
     let pairs = anchors.pairs();
     if pairs.is_empty() {
-        return Ok(Err(NoChain::Approx));
+        let reason = if checked {
+            ApproxReason::NoAnchor
+        } else {
+            ApproxReason::Budget
+        };
+        return Ok(Err(NoChain::Approx(reason)));
     }
     let reservation = inner.try_reserve(Half::Skeleton, Bytes(16 * pairs.len() as u64))?;
     let (sa, sb) = samples.split_at(in_a);

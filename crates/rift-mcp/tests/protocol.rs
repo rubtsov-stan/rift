@@ -171,6 +171,37 @@ async fn hunks_at_shows_an_insertion_and_a_deletion() {
     );
 }
 
+/// Different rows sharing only a repeated blank line: the hunk is
+/// approximate and its header says why.
+#[tokio::test]
+async fn an_approximate_hunk_names_its_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let rows = |tag: &'static str| {
+        (0..20_000).map(move |i| {
+            if i % 100 == 0 {
+                String::new()
+            } else {
+                format!("{tag} row {i}")
+            }
+        })
+    };
+    let a = write(dir.path(), "a", rows("left"));
+    let b = write(dir.path(), "b", rows("right"));
+    let c = connect(&Server::default()).await;
+    let h = ok(
+        &c,
+        "hunks_at",
+        json!({"a": a, "b": b, "line": 1, "context": 0, "max_lines": 1}),
+    )
+    .await;
+    let text = h["text"].as_str().unwrap();
+    let header = text.lines().next().unwrap();
+    assert!(
+        header.ends_with(" @@ approx: too many changes among repeated lines to align them exactly"),
+        "{header}"
+    );
+}
+
 #[tokio::test]
 async fn next_difference_steps_through_the_ranges() {
     let dir = tempfile::tempdir().unwrap();

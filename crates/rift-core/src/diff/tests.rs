@@ -5,6 +5,7 @@ use std::sync::Arc;
 use proptest::prelude::*;
 
 use super::*;
+use crate::edit::ApproxReason;
 use crate::lines::MemLines;
 use crate::scan::{ScanConfig, scan};
 use crate::script::{apply, validate};
@@ -61,7 +62,7 @@ fn a_generated_pair_replays_and_writes_like_its_script() {
         _ => format!("row {i} {}\n", i % 13),
     });
     let hunks = check(&a, &b, Bytes::mib(64), 3);
-    assert!(hunks.iter().all(|h| !h.approx));
+    assert!(hunks.iter().all(|h| h.approx.is_none()));
     let d = Diff::new(
         Arc::<[u8]>::from(&a[..]),
         Arc::<[u8]>::from(&b[..]),
@@ -178,7 +179,7 @@ fn a_segment_too_large_for_a_job_is_resampled_not_approximated() {
     // About 60 bytes per line: the whole segment would need 3.6 MB.
     assert!(estimate(30_000, 30_000) > Bytes::mib(3));
     let hunk = large(&a, &b, Bytes(512 << 10));
-    assert!(!hunk.approx);
+    assert!(hunk.approx.is_none());
     assert_eq!(changes(&hunk), 60, "30 lines changed on each side");
 }
 
@@ -187,8 +188,12 @@ fn a_large_range_without_unique_lines_is_approximate_but_valid() {
     let a = b"x\n".repeat(40_000);
     let mut b = a.clone();
     b[2 * 20_000] = b'y';
+    // With room to look the hashes up, the sides share them.
+    let hunk = large(&a, &b, Bytes(1 << 20));
+    assert_eq!(hunk.approx, Some(ApproxReason::NoAnchor));
+    // Without it nothing is known, and budget is the reason.
     let hunk = large(&a, &b, Bytes(256 << 10));
-    assert!(hunk.approx);
+    assert_eq!(hunk.approx, Some(ApproxReason::Budget));
 }
 
 #[test]
@@ -198,11 +203,12 @@ fn a_large_range_without_a_common_line_is_replaced_exactly() {
     // The check holds the hashes of one side, 160 kB of the 256 kB
     // skeleton half a 512 KiB job has.
     let hunk = large(&a, &b, Bytes(512 << 10));
-    assert!(!hunk.approx);
+    assert!(hunk.approx.is_none());
     assert_eq!(changes(&hunk), 40_000);
     // Without room for them nothing is proved, and the hunk stays
-    // approximate.
-    assert!(large(&a, &b, Bytes(256 << 10)).approx);
+    // approximate for lack of budget.
+    let hunk = large(&a, &b, Bytes(256 << 10));
+    assert_eq!(hunk.approx, Some(ApproxReason::Budget));
 }
 
 #[test]
@@ -212,7 +218,7 @@ fn a_pair_without_a_common_line_is_exact_at_any_budget() {
     // 16 MiB sends the segment through resampling, 256 MiB refines it whole.
     for mem in [Bytes::mib(16), Bytes::mib(256)] {
         let hunks = check(&a, &b, mem, 2);
-        assert!(hunks.iter().all(|h| !h.approx), "{mem}");
+        assert!(hunks.iter().all(|h| h.approx.is_none()), "{mem}");
     }
 }
 
@@ -220,7 +226,7 @@ fn a_pair_without_a_common_line_is_exact_at_any_budget() {
 fn a_large_equal_range_is_compared_not_replaced() {
     let a = b"x\n".repeat(40_000);
     let hunk = large(&a, &a, Bytes(256 << 10));
-    assert!(!hunk.approx);
+    assert!(hunk.approx.is_none());
     assert_eq!(changes(&hunk), 0);
 }
 
@@ -236,7 +242,7 @@ fn too_many_edits_close_the_rest_as_one_replacement() {
         }
     });
     let hunk = large(&a, &b, Bytes(64 << 10));
-    assert!(hunk.approx);
+    assert_eq!(hunk.approx, Some(ApproxReason::Budget));
 }
 
 #[test]

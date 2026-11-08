@@ -8,7 +8,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use rift_core::moves::MovedBlock;
-use rift_core::{DiffView, Edit, HunkState, LineAccess, LineNo, Progress, Segment, SegmentStatus};
+use rift_core::{
+    ApproxReason, DiffView, Edit, HunkState, LineAccess, LineNo, Progress, Segment, SegmentStatus,
+};
 
 use crate::app::{App, Mode, Pos, Scratch, anchor_at, row_of, rows_in};
 use crate::cache::LineCache;
@@ -52,6 +54,8 @@ struct Info {
     pending: bool,
     /// The first moved row: its block and whether it is the inserted side.
     moved: Option<(usize, bool)>,
+    /// The greatest reason among the approximate hunks on screen.
+    approx: Option<ApproxReason>,
 }
 
 /// `len` consecutive rows of one kind; `a` and `b` are the first line
@@ -234,7 +238,7 @@ impl Painter<'_> {
         approx: bool,
         skip: u64,
     ) -> u64 {
-        let approx = approx || hunk.approx;
+        let approx = approx || hunk.approx.is_some();
         let mut left = skip;
         let mut done = skip;
         let mut cursor = seg.a.start.0;
@@ -266,6 +270,9 @@ impl Painter<'_> {
                 self.show_insert(cursor);
             }
             done += self.run(buf, &run);
+        }
+        if done > skip {
+            self.info.approx = self.info.approx.max(hunk.approx);
         }
         done
     }
@@ -373,6 +380,7 @@ impl App<'_> {
             buf,
             Rect::new(area.x, area.bottom() - 1, area.width, 1),
             progress,
+            info.approx,
         );
         self.drawn_progress = Some(progress);
         self.pending_shown = info.pending;
@@ -400,6 +408,7 @@ impl App<'_> {
                 last: self.pos,
                 pending: false,
                 moved: None,
+                approx: None,
             };
         }
         // The first segment's hunk is fetched here and reused by the loop.
@@ -438,6 +447,7 @@ impl App<'_> {
                 last: self.pos,
                 pending: false,
                 moved: None,
+                approx: None,
             },
         };
         let mut skip = self.pos.off;
@@ -514,10 +524,26 @@ impl App<'_> {
         }
     }
 
-    fn draw_status(&mut self, buf: &mut Buffer, area: Rect, pr: Progress) {
+    fn draw_status(
+        &mut self,
+        buf: &mut Buffer,
+        area: Rect,
+        pr: Progress,
+        approx: Option<ApproxReason>,
+    ) {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         buf.set_style(area, style);
         let sc = &mut self.scratch;
+        let t = &mut sc.text;
+        t.clear();
+        if pr.total > 0 && pr.done >= pr.total {
+            let _ = write!(t, "refined {}/{} ", pr.done, pr.total);
+        } else if let Some(tenths) = (pr.done * 10).checked_div(pr.total) {
+            let filled = usize::try_from(tenths).unwrap_or(10);
+            let _ = write!(t, "refining {}/{} [", pr.done, pr.total);
+            t.extend((0..10).map(|i| if i < filled { '█' } else { '░' }));
+            t.push_str("] ");
+        }
         sc.status.clear();
         if let Mode::Goto(n) = self.mode {
             let _ = write!(sc.status, " go to line: ");
@@ -552,23 +578,21 @@ impl App<'_> {
             if !self.message.is_empty() {
                 let _ = write!(sc.status, "  {}", self.message);
             }
+            // The reason only when it fits whole beside the progress; the
+            // `~` rows already say approximate.
+            if let Some(reason) = approx {
+                let len = sc.status.chars().count() + 10 + reason.describe().len();
+                if len + sc.text.chars().count() < usize::from(area.width) {
+                    let _ = write!(sc.status, "  approx: {}", reason.describe());
+                }
+            }
         }
         buf.set_stringn(area.x, area.y, &sc.status, area.width.into(), style);
 
         if pr.total == 0 {
             return;
         }
-        let t = &mut sc.text;
-        t.clear();
-        if pr.done >= pr.total {
-            let _ = write!(t, "refined {}/{} ", pr.done, pr.total);
-        } else {
-            let filled = usize::try_from(pr.done * 10 / pr.total).unwrap_or(10);
-            let _ = write!(t, "refining {}/{} [", pr.done, pr.total);
-            t.extend((0..10).map(|i| if i < filled { '█' } else { '░' }));
-            t.push_str("] ");
-        }
-        let cols = u16::try_from(t.chars().count()).unwrap_or(u16::MAX);
+        let cols = u16::try_from(sc.text.chars().count()).unwrap_or(u16::MAX);
         // Overwrites the right end of the status text on a narrow terminal.
         let x = area.right().saturating_sub(cols).max(area.x);
         buf.set_stringn(x, area.y, &sc.text, cols.into(), style);
