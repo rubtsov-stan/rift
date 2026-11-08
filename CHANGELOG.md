@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hash means a different line. The script is the same as before.
 - `--summary` no longer prints an `approx` line. It refines nothing, so
   its count was always 0 whatever the files.
+- The `summary` of `rift serve` and `rift-mcp` counted `approx` segments
+  by the map, which never marks one, so it read 0. `approx` now counts
+  the refined segments that came out approximate, and `differs` the other
+  differing segments; together they are still every differing segment.
+  `rift-mcp` adds `refined_segments`; in `rift serve`, `progress.done` is
+  that count.
 
 ### Changed
 

@@ -119,10 +119,14 @@ pub struct Summary {
     pub identical: bool,
     /// Equal segments.
     pub equal: Tally,
-    /// Differing segments.
+    /// Differing segments not known to be approximate: not refined yet, or
+    /// refined exactly.
     pub differs: Tally,
-    /// Differing segments whose local diff was cut short.
+    /// Refined segments whose local diff was cut short, out of
+    /// `refined_segments`.
     pub approx: Tally,
+    /// Differing segments refined so far. It grows as hunks are asked for.
+    pub refined_segments: u64,
     /// The first differing ranges in file order, at most 20.
     pub first_differences: Vec<Range>,
     /// Differing ranges beyond those listed.
@@ -279,6 +283,7 @@ impl Server {
                 equal: tally(sum.equal),
                 differs: tally(sum.differs),
                 approx: tally(sum.approx),
+                refined_segments: sum.progress.done,
                 first_differences: s
                     .differing()
                     .map_err(|e| e.to_string())?

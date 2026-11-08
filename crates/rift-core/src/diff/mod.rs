@@ -46,7 +46,7 @@ use crate::skeleton::{OffChain, build_pair_watched};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 use crate::unified::{Options, Verdict, write_diff};
-use crate::view::{DiffView, HunkState, Progress};
+use crate::view::{ApproxTally, DiffView, HunkState, Progress};
 
 /// Read buffer of each worker's line readers. Lines longer than this are
 /// hashed and compared in pieces.
@@ -430,6 +430,10 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
 
     fn progress(&self) -> Progress {
         self.sched.progress()
+    }
+
+    fn approx_refined(&self) -> ApproxTally {
+        self.sched.approx_refined()
     }
 
     fn set_visible(&self, range: Range<LineNo>) {

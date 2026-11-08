@@ -310,6 +310,47 @@ fn a_scripted_session_on_a_generated_pair() {
     clean_exit(c);
 }
 
+/// Rows that share only a repeated blank line: refining the one differing
+/// segment passes the Myers cutoff, and the summary then counts it as
+/// approx among the refined segments.
+#[test]
+fn the_summary_counts_approx_among_refined_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let rows = |tag: &str| -> Vec<u8> {
+        (0..20_000)
+            .flat_map(|i| {
+                if i % 100 == 0 {
+                    "\n".to_owned()
+                } else {
+                    format!("{tag} row {i}\n")
+                }
+                .into_bytes()
+            })
+            .collect()
+    };
+    let a = write(dir.path(), "a", &rows("left"));
+    let b = write(dir.path(), "b", &rows("right"));
+    let mut c = Client::start(&[]);
+    c.initialize();
+    let s = open_ready(&mut c, &a, &b, "64M");
+    c.until("refinement to finish", |c| {
+        c.notes_of("progress", s)
+            .iter()
+            .any(|p| p["phase"] == "refine" && p["done"] == p["total"])
+    });
+    let sum = c.ok("summary", json!({"session": s}));
+    assert_eq!(sum["progress"]["done"], sum["progress"]["total"], "{sum}");
+    assert!(sum["approx"]["segments"].as_u64().unwrap() >= 1, "{sum}");
+    let parts =
+        sum["differs"]["segments"].as_u64().unwrap() + sum["approx"]["segments"].as_u64().unwrap();
+    assert_eq!(sum["differing_segments"], parts, "{sum}");
+    assert_eq!(
+        c.ok("close", json!({"session": s})),
+        json!({"closed": true})
+    );
+    clean_exit(c);
+}
+
 #[test]
 fn scan_progress_grows_to_its_total_at_most_20_times_a_second() {
     let dir = tempfile::tempdir().unwrap();

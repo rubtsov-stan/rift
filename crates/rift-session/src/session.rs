@@ -67,9 +67,11 @@ pub struct Summary {
     pub identical: bool,
     /// Equal segments.
     pub equal: Tally,
-    /// Differing segments whose status in the map is `Differs`.
+    /// Differing segments not known to be approximate: not refined yet, or
+    /// refined exactly.
     pub differs: Tally,
-    /// Differing segments whose status in the map is `Approx`.
+    /// Refined segments whose hunk came out approximate, out of
+    /// `progress.done`. Grows while refinement runs.
     pub approx: Tally,
     /// `differs` plus `approx` segments.
     pub differing: u64,
@@ -270,7 +272,21 @@ impl Session {
                     b_lines: t.b_lines + x.len_b(),
                 })
         };
-        let (differs, approx) = (tally(SegmentStatus::Differs), tally(SegmentStatus::Approx));
+        // Approx before progress: both only grow, so approx stays within
+        // the refined count reported with it.
+        let refined = diff.approx_refined();
+        let progress = diff.progress();
+        let approx = Tally {
+            segments: refined.segments,
+            a_lines: refined.a_lines,
+            b_lines: refined.b_lines,
+        };
+        let mapped = tally(SegmentStatus::Differs);
+        let differs = Tally {
+            segments: mapped.segments - approx.segments,
+            a_lines: mapped.a_lines - approx.a_lines,
+            b_lines: mapped.b_lines - approx.b_lines,
+        };
         let moves = diff.moves();
         let used = |h| built.budget.used(h).0;
         Ok(Summary {
@@ -293,7 +309,7 @@ impl Session {
             moved_blocks: moves.blocks().len() as u64,
             mem: self.mem,
             reserved: Bytes(used(Half::Skeleton) + used(Half::Refine)),
-            progress: diff.progress(),
+            progress,
         })
     }
 

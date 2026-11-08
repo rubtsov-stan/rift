@@ -28,6 +28,18 @@ pub struct Progress {
     pub total: u64,
 }
 
+/// Refined segments whose hunk came out approximate, each counted once,
+/// with their lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ApproxTally {
+    /// Segments.
+    pub segments: u64,
+    /// Their lines in A.
+    pub a_lines: u64,
+    /// Their lines in B.
+    pub b_lines: u64,
+}
+
 /// A diff that computes its hunks lazily.
 ///
 /// The front end calls [`set_visible`](DiffView::set_visible) whenever the
@@ -53,6 +65,12 @@ pub trait DiffView: Send + Sync {
 
     /// Background progress.
     fn progress(&self) -> Progress;
+
+    /// The approximate ones among the refined segments. It only grows: read
+    /// it before [`progress`](Self::progress) and it stays within `done`.
+    fn approx_refined(&self) -> ApproxTally {
+        ApproxTally::default()
+    }
 
     /// Lines of A currently on screen. Inserted lines count with the A line
     /// they follow.

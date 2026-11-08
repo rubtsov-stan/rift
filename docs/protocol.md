@@ -229,9 +229,13 @@ error object:
 {"state": "failed", "error": {"code": -32003, "message": "...", "data": {"mem_bytes": 1048576, "half": "skeleton", "requested_bytes": 2097152, "available_bytes": 0, "suggested_mem_bytes": 5242880, "suggested_mem": "5120K"}}}
 ```
 
-- `differs` and `approx` count segments by their status in the map. A
-  `differs` segment can still turn out approximate when it is refined;
-  `segment_ready` and `hunk` say so.
+- `approx` counts the refined segments that came out approximate, out of
+  the `progress.done` refined so far, and `differs` the other differing
+  segments: not refined yet, or refined exactly. Together they are
+  `differing_segments`. Both change while refinement runs, and `approx`
+  is final once `done` reaches `total`. In Rift 0.3.0, `approx` counted
+  segments by their status in the map, which never holds `approx`, so it
+  was always 0 and `differs` counted every differing segment.
 - `moves`: `found` (the search ran; `moved_blocks` may be 0), `off` (the
   server was started without move detection), or `skipped` (the budget
   did not allow the search, so 0 blocks says nothing about the files).

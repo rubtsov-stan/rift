@@ -114,11 +114,12 @@ impl Cache {
         row.state == State::Idle && !row.done
     }
 
-    /// Records a completion; only the first one per segment counts.
-    pub(super) fn mark_done(&mut self, i: usize) {
-        if !std::mem::replace(&mut self.rows[i].done, true) {
-            self.done += 1;
-        }
+    /// Records a completion; only the first one per segment counts, and
+    /// returns whether this was it.
+    pub(super) fn mark_done(&mut self, i: usize) -> bool {
+        let first = !std::mem::replace(&mut self.rows[i].done, true);
+        self.done += u64::from(first);
+        first
     }
 
     /// Segments completed at least once, even if evicted since.
