@@ -7,6 +7,8 @@
 #   --out DIR      where the media go (default editors/vscode/media)
 #   --rift PATH    the rift binary (default $RIFT_BIN, else target/release/rift)
 #   --size SIZE    rift-gen size (default 1G)
+#   --data DIR     use an existing pair DIR/a, DIR/b instead of generating one
+#   --shots DIR    write store screenshots (dark and light) to DIR instead of recording
 #
 # Needs node, ffmpeg on PATH, and for a real run target/release/{rift,rift-gen}.
 set -eu

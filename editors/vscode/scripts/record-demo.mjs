@@ -15,13 +15,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const repo = path.resolve(root, '..', '..');
 
-const opts = { out: path.join(root, 'media'), rift: process.env.RIFT_BIN, size: '1G', mock: false };
+const opts = { out: path.join(root, 'media'), rift: process.env.RIFT_BIN, size: '1G', mock: false, shots: undefined, data: undefined };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--mock') opts.mock = true;
   else if (argv[i] === '--out') opts.out = path.resolve(argv[++i]);
   else if (argv[i] === '--rift') opts.rift = path.resolve(argv[++i]);
   else if (argv[i] === '--size') opts.size = argv[++i];
+  else if (argv[i] === '--shots') opts.shots = path.resolve(argv[++i]);
+  else if (argv[i] === '--data') opts.data = path.resolve(argv[++i]);
   else throw new Error(`unknown argument ${argv[i]}`);
 }
 
@@ -35,7 +37,13 @@ try {
 }
 
 async function main() {
-  const work = path.join(tmp, 'work');
+  const env = prepare();
+  if (opts.shots) await shots(env);
+  else await record(env);
+}
+
+function prepare() {
+  let work = path.join(tmp, 'work');
   let names;
   let riftBin;
   if (opts.mock) {
@@ -48,20 +56,30 @@ async function main() {
     fs.writeFileSync(riftBin, `#!/bin/sh\nexec "${process.execPath}" "${mock}"\n`, { mode: 0o755 });
   } else {
     riftBin = opts.rift ?? path.join(repo, 'target', 'release', 'rift');
-    // Seed 7, the same pair as bench/data.sh and bench/ci-mem.sh.
-    sh(path.join(repo, 'target', 'release', 'rift-gen'), ['--seed', '7', '--size', opts.size, '--profile', 'sql', '--out', work]);
     names = ['a', 'b'];
+    if (opts.data) {
+      work = opts.data;
+    } else {
+      // Seed 7, the same pair as bench/data.sh and bench/ci-mem.sh.
+      sh(path.join(repo, 'target', 'release', 'rift-gen'), ['--seed', '7', '--size', opts.size, '--profile', 'sql', '--out', work]);
+    }
   }
 
-  const userData = path.join(tmp, 'user-data');
+  return { work, names, riftBin };
+}
+
+// Starts VS Code on the work dir with its own profile; the theme and rift.mem go in its settings.
+async function launch({ work, names, riftBin }, { theme = 'Default Dark Modern', mem, video = false } = {}) {
+  const userData = fs.mkdtempSync(path.join(tmp, 'user-data-'));
   fs.mkdirSync(path.join(userData, 'User'), { recursive: true });
   fs.writeFileSync(
     path.join(userData, 'User', 'settings.json'),
     JSON.stringify({
       'rift.path': riftBin,
+      ...(mem ? { 'rift.mem': mem } : {}),
       'workbench.startupEditor': 'none',
       'workbench.tips.enabled': false,
-      'workbench.colorTheme': 'Default Dark Modern',
+      'workbench.colorTheme': theme,
       'update.mode': 'none',
       'telemetry.telemetryLevel': 'off',
       'editor.minimap.enabled': false,
@@ -74,7 +92,8 @@ async function main() {
   // files in the Explorer and runs the command with both paths from a keybinding.
   fs.writeFileSync(
     path.join(userData, 'User', 'keybindings.json'),
-    JSON.stringify([{ key: 'f9', command: 'rift.compareFiles', args: { a: path.join(work, names[0]), b: path.join(work, names[1]) } }]),
+    JSON.stringify([{ key: 'f9', command: 'rift.compareFiles', args: { a: path.join(work, names[0]), b: path.join(work, names[1]) } },
+      { key: 'f10', command: 'workbench.action.closeAllEditors' }]),
   );
 
   const executablePath = await downloadAndUnzipVSCode();
@@ -94,7 +113,7 @@ async function main() {
       '--skip-release-notes',
       '--new-window',
     ],
-    recordVideo: { dir: videoDir, size: { width: 1280, height: 800 } },
+    ...(video ? { recordVideo: { dir: videoDir, size: { width: 1280, height: 800 } } } : {}),
   });
   const launched = Date.now();
   const page = await app.firstWindow();
@@ -106,6 +125,12 @@ async function main() {
   const pause = (ms) => page.waitForTimeout(ms);
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   const row = (name) => page.locator(`.monaco-list-row[aria-label="${name}"]`).first();
+  return { app, page, launched, pause, mod, row };
+}
+
+async function record(env) {
+  const { names, work } = env;
+  const { app, page, launched, pause, mod, row } = await launch(env, { video: true });
 
   await row(names[0]).waitFor({ timeout: 60000 });
   await pause(1500);
@@ -171,7 +196,7 @@ async function main() {
     if (fs.statSync(gif).size < 3 * 1024 * 1024) break;
   }
 
-    const poster = path.join(opts.out, 'rift-demo-poster.png');
+  const poster = path.join(opts.out, 'rift-demo-poster.png');
   sh('ffmpeg', ['-y', '-v', 'error', '-ss', String(posterAt), '-i', webm, '-vf', fit, '-frames:v', '1', poster]);
 
   // The site shows the poster as a JPEG to keep the landing page light.
@@ -179,4 +204,80 @@ async function main() {
   sh('ffmpeg', ['-y', '-v', 'error', '-i', poster, '-q:v', '4', posterJpg]);
 
   for (const f of [mp4, gif, poster, posterJpg]) console.log(`${f} ${(fs.statSync(f).size / 1024).toFixed(0)} KiB`);
+}
+
+// Screenshot mode: one fresh window per theme and shot group, PNGs named by shot and theme.
+async function shots(env) {
+  const { names } = env;
+  fs.mkdirSync(opts.shots, { recursive: true });
+  const themes = { dark: 'Default Dark Modern', light: 'Default Light Modern' };
+  for (const [tag, theme] of Object.entries(themes)) {
+    // The title bar names the Extension Development Host, so every shot starts below it.
+    const save = async (page, name) => {
+      const top = await page.evaluate(() => document.querySelector('.part.titlebar')?.getBoundingClientRect().bottom ?? 0);
+      await page.screenshot({ path: path.join(opts.shots, `${name}-${tag}.png`), clip: { x: 0, y: Math.ceil(top), width: 1280, height: 800 - Math.ceil(top) } });
+    };
+    const compare = async (s) => {
+      await s.row(names[0]).waitFor({ timeout: 60000 });
+      await s.pause(1500);
+      await s.row(names[0]).click();
+      await s.row(names[1]).click({ modifiers: [s.mod] });
+      await s.page.keyboard.press('F9');
+      await s.pause(1500);
+      // Selecting the pair opened file A, which VS Code refuses to show at 1 GiB.
+      await s.page.keyboard.press('F10');
+      await s.page.locator('.activitybar [aria-label^="Rift"]').first().click();
+    };
+    // The sash sits at x=350; wide enough for the summary row, but the diff goes inline.
+    const sidebar = async (s, from, to) => {
+      await s.page.mouse.move(from, 400);
+      await s.page.mouse.down();
+      await s.page.mouse.move(to, 400, { steps: 5 });
+      await s.page.mouse.up();
+      await s.page.mouse.move(1000, 700);
+      await s.pause(500);
+    };
+
+    let s = await launch(env, { theme });
+    try {
+      await compare(s);
+      const diffs = s.page.locator('.monaco-list-row', { hasText: /^Differences/ });
+      await diffs.waitFor({ timeout: 20 * 60 * 1000 });
+      await s.pause(2000);
+      await sidebar(s, 350, 470);
+      await save(s.page, '1-tree');
+      await sidebar(s, 470, 350);
+
+      const segments = s.page.locator('.monaco-list-row', { hasText: '↔ B' });
+      await segments.nth(2).click();
+      await s.page.locator('.monaco-diff-editor .view-line').first().waitFor({ timeout: 60000 });
+      await s.pause(2500);
+      await save(s.page, '2-hunk');
+
+      await diffs.first().click();
+      await s.pause(800);
+      const moves = s.page.locator('.monaco-list-row', { hasText: /^Moved blocks/ }).first();
+      await moves.click();
+      await s.pause(1200);
+      await s.page.locator('.monaco-list-row', { hasText: '→ B' }).first().click();
+      await s.page.locator('.monaco-diff-editor .view-line').first().waitFor({ timeout: 60000 });
+      await s.pause(2500);
+      await save(s.page, '3-moves');
+    } finally {
+      await s.app.close();
+    }
+
+    // 512K is far below what 1 GiB needs, so the server refuses and the offer appears.
+    s = await launch(env, { theme, mem: '512K' });
+    try {
+      await compare(s);
+      const offer = s.page.locator('.notification-toast', { hasText: 'Rerun with --mem' });
+      await offer.waitFor({ timeout: 5 * 60 * 1000 });
+      await s.pause(1000);
+      await sidebar(s, 350, 470);
+      await save(s.page, '4-rerun');
+    } finally {
+      await s.app.close();
+    }
+  }
 }
