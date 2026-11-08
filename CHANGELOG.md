@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limit that gets past that point; here 1089K, which gives the same
   summary as before.
 
+### Known issues
+
+- Key mode at exactly `--mem 16M` runs on one thread: the reserve takes
+  the refine half just under the 8 MiB key mode needs for several. On a
+  128 MiB CSV pair it takes 2.21 s instead of 1.25 s in 0.3.0, about 77%
+  longer. `--mem 16528K` or more restores the old time.
+- Key mode's line order can differ between runs once it uses several
+  threads. The set of lines is always the same.
+
 ### Fixed
 
 - Key mode at a small `--mem` peaked up to 10 KiB over the limit: its
