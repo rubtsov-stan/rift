@@ -29,10 +29,14 @@ status=$?
 [ "$status" -le 1 ] || exit "$status"
 ```
 
+## When the reader quits early
+
+If standard output closes before Rift finishes, as in `rift a b | head`, Rift stops without a message and exits 141. That is the status a shell reports for `diff` killed by SIGPIPE, so `${PIPESTATUS[0]}` in bash holds 141 for both. This applies to the unified diff, `--summary` and `--key` output.
+
 ## Key mode can stop late
 
 A run in [key mode](@/guide/key-mode.md) can stop with status 2 after it printed some changes, for example when a key occurs twice. The message on standard error says the output is incomplete. Check the status before you use the output.
 
 ## Git
 
-`rift git-diff`, new in 0.3.0, is the one exception: it exits 0 whether or not the files differ, because git treats any other status as a failure. See [git integration](@/guide/git.md).
+`rift git-diff`, new in 0.3.0, is the one exception: it exits 0 whether or not the files differ, because git treats any other status as a failure. It also exits 0, silently, when git's pager quits before the diff ends. See [git integration](@/guide/git.md).
