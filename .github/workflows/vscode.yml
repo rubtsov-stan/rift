@@ -1,16 +1,26 @@
 name: VS Code packages
 
-# Follows the dist Release workflow like deb.yml: a release created with the
-# workflow token does not fire a `release` event, and that workflow also runs on
-# pull requests, hence the `push` check. A manual run takes the tag, for a
-# release published by hand.
+# Called by the Release workflow once the release exists (a dist post-announce
+# job), so it runs on the tagged commit and checks out nothing an event
+# supplies. A manual run takes the tag of an existing release instead.
 #
 # Each package bundles the `rift` binary from the release's own archive, so
 # the extension runs the same bytes that were attested and checksummed there.
 on:
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
+  workflow_call:
+    inputs:
+      plan:
+        description: Passed by the Release workflow, not read here
+        required: false
+        type: string
+      tag:
+        description: Release tag; defaults to the tag that triggered the run
+        required: false
+        type: string
+      ref:
+        description: Commit to package the extension from, if not the tag
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -27,7 +37,6 @@ permissions:
 
 jobs:
   package:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -40,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref || inputs.tag || github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.ref || inputs.tag }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -48,7 +57,7 @@ jobs:
       - name: Fetch and verify the release binary
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           TARGET: ${{ matrix.target }}
         run: |
           set -eu
@@ -62,7 +71,7 @@ jobs:
         working-directory: editors/vscode
         env:
           VSCE_TARGET: ${{ matrix.vsce }}
-          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -eu
           # The extension and the release carry one version.
@@ -97,7 +106,7 @@ jobs:
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -eu
           set -- vsix/*.vsix

@@ -303,6 +303,28 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+  custom-deb:
+    needs:
+      - plan
+      - announce
+    uses: $/.github/workflows/deb.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "contents": "write"
+
+  custom-vscode:
+    needs:
+      - plan
+      - announce
+    uses: $/.github/workflows/vscode.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "contents": "write"
+
   custom-provenance:
     needs:
       - plan
