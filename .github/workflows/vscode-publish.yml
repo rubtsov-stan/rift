@@ -1,0 +1,55 @@
+name: VS Code publish
+
+# Publishes the four VSIX packages attached to a release to the Marketplace
+# and Open VSX. Manual only: a published version cannot be replaced, so the
+# owner starts it after checking the release page.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose VSIX packages to publish, e.g. v0.3.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The pinned vsce and ovsx from package-lock.json; install scripts are not needed.
+      - run: npm ci --ignore-scripts
+        working-directory: editors/vscode
+      - name: Download the packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/vsix" --pattern '*.vsix'
+          set -- "$RUNNER_TEMP"/vsix/*.vsix
+          [ "$#" -eq 4 ]
+          for f in "$@"; do
+            case "$f" in *"-${TAG#v}.vsix") ;; *) echo "not $TAG: $f"; exit 1 ;; esac
+          done
+          ls -l "$@"
+      - name: Marketplace
+        working-directory: editors/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath "$RUNNER_TEMP"/vsix/*.vsix
+      - name: Open VSX
+        working-directory: editors/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set -eu
+          for f in "$RUNNER_TEMP"/vsix/*.vsix; do npx ovsx publish "$f"; done
