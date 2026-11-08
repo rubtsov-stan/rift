@@ -16,10 +16,10 @@ install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
 
-# Built after the release exists, by the workflow of the same name, which the
+# Built after the release exists, by the workflows of the same name, which the
 # generated Release workflow calls.
-post-announce-jobs = ["./provenance"]
-github-custom-job-permissions = { provenance = { contents = "write", attestations = "read" } }
+post-announce-jobs = ["./deb", "./vscode", "./provenance"]
+github-custom-job-permissions = { deb = { contents = "write" }, vscode = { contents = "write" }, provenance = { contents = "write", attestations = "read" } }
 
 # Build provenance for every release archive, checkable with `gh attestation verify`
 github-attestations = true

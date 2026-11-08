@@ -26,9 +26,9 @@
    tagged commit, so if main has moved on and changed `.github/workflows`,
    the `host` job gets HTTP 403 unless a branch points at that commit.
 
-4. Watch the Release workflow, then Debian packages and VS Code packages,
-   which start when Release succeeds. On the release page, check the
-   archives, the shell installer, the checksums, the `.deb` files, the VSIX
+4. Watch the Release workflow. The Debian packages, VS Code packages and
+   Release provenance workflows run from it once the release is published.
+   On the release page, check the archives, the shell installer, the checksums, the `.deb` files, the VSIX
    packages and, for each archive, its `.sigstore.json` bundle and
    `.intoto.jsonl` provenance, and verify one archive against its bundle:
 
