@@ -20,13 +20,14 @@
 //! duplicate, or another key. The next pass, or a last read when there is
 //! none, counts the suspects in their file.
 
+use std::fmt;
 use std::io;
 use std::sync::Mutex;
 
 use rayon::prelude::*;
 
 use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow, reader_bytes};
-use super::{ChangeKind, KeyError, KeyedChange, Side};
+use super::{ChangeKind, KeyError, KeyedChange, RangedChange, Side};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::source::Source;
@@ -86,7 +87,45 @@ pub fn compare<A, B>(
     b: &B,
     spec: &super::KeySpec,
     budget: &Budget,
-    mut on_change: impl FnMut(&KeyedChange) -> io::Result<()>,
+    on_change: impl FnMut(&KeyedChange) -> io::Result<()>,
+) -> Result<Report>
+where
+    A: Source + ?Sized,
+    B: Source + ?Sized,
+{
+    run::<A, B, ()>(a, b, spec, budget, on_change)
+}
+
+/// [`compare`], handing out each change with the byte ranges of its
+/// records, so a caller can read them back.
+///
+/// Each record that waits for its match, and each changed key until its
+/// pass ends, holds 24 more bytes of the refine half, so a tight budget
+/// can take more passes than [`compare`] does.
+///
+/// # Errors
+///
+/// As [`compare`].
+pub fn compare_with_ranges<A, B>(
+    a: &A,
+    b: &B,
+    spec: &super::KeySpec,
+    budget: &Budget,
+    on_change: impl FnMut(&RangedChange) -> io::Result<()>,
+) -> Result<Report>
+where
+    A: Source + ?Sized,
+    B: Source + ?Sized,
+{
+    run::<A, B, Ranges>(a, b, spec, budget, on_change)
+}
+
+fn run<A, B, X: Extra>(
+    a: &A,
+    b: &B,
+    spec: &super::KeySpec,
+    budget: &Budget,
+    mut on_change: impl FnMut(&X::Change) -> io::Result<()>,
 ) -> Result<Report>
 where
     A: Source + ?Sized,
@@ -100,7 +139,7 @@ where
     let mut rb = Reader::new(b, Side::B, spec, budget, sizes.windows[1], sizes.chunks)?;
     let tables = Mutex::new(Tables::new(budget)?);
     let keys = ra.estimate_lines()? + rb.estimate_lines()?;
-    let (mut shards, _list) = Pass::shards(budget, keys, sizes.chunks)?;
+    let (mut shards, _list) = Pass::<X>::shards(budget, keys, sizes.chunks)?;
     let mut pending = Pending::new(budget)?;
     let mut report = Report::default();
     let (mut lo, mut width) = (0, END);
@@ -328,7 +367,7 @@ fn narrowed(half: Half, w: u64, progress: f64, fill: f64, ceiling: &mut u64) -> 
 }
 
 /// The fullest shard table, as a share of its limit.
-fn fill(shards: &[Pass<'_>]) -> f64 {
+fn fill<X: Extra>(shards: &[Pass<'_, X>]) -> f64 {
     #[allow(clippy::cast_precision_loss, reason = "a ratio")]
     shards
         .iter()
@@ -380,9 +419,9 @@ type Readers<'r, 's, A, B> = (
 
 /// Reads both files once, the shards taking the records in `lo..hi`, and
 /// counts `pending` on the way. An empty range only counts.
-fn read_pass<A, B>(
+fn read_pass<A, B, X: Extra>(
     (ra, rb, tables): &mut Readers<'_, '_, A, B>,
-    shards: &mut [Pass<'_>],
+    shards: &mut [Pass<'_, X>],
     lo: u64,
     hi: u64,
     pending: &[Suspect],
@@ -443,7 +482,7 @@ where
 }
 
 /// The waiting duplicates the shards found, the first few.
-fn collect_dups(shards: &mut [Pass<'_>]) -> Vec<Vec<u8>> {
+fn collect_dups<X: Extra>(shards: &mut [Pass<'_, X>]) -> Vec<Vec<u8>> {
     let mut dups: Vec<Vec<u8>> = Vec::new();
     for s in shards {
         for d in s.dups.drain(..) {
@@ -477,7 +516,7 @@ impl Pending {
     }
 
     /// Moves a shard's suspects here, as many as are counted at once.
-    fn take_from(&mut self, shard: &mut Pass<'_>) -> Result<()> {
+    fn take_from<X: Extra>(&mut self, shard: &mut Pass<'_, X>) -> Result<()> {
         for s in shard.suspects.drain(..) {
             let bytes = Bytes(s.key.len() as u64);
             shard.res.shrink(bytes);
@@ -529,7 +568,7 @@ enum State {
 
 /// A record kept by the pass, its bytes in the arena.
 #[derive(Debug, Clone, Copy)]
-struct Kept {
+struct Kept<X> {
     hash: u64,
     line_a: u64,
     line_b: u64,
@@ -540,9 +579,90 @@ struct Kept {
     key_len: u32,
     table: u32,
     state: State,
+    extra: X,
 }
 
-const _: () = assert!(size_of::<Kept>() == 48);
+const _: () = assert!(size_of::<Kept<()>>() == 48);
+const _: () = assert!(size_of::<Kept<Ranges>>() == 72);
+
+/// What a kept record carries besides its key and lines, and the change
+/// it is handed out as.
+trait Extra: Copy + Send + fmt::Debug {
+    type Change: Send + fmt::Debug;
+    /// `offset` finds the record's file offset, for an `Extra` that
+    /// keeps it.
+    fn new(rec: &Record<'_>, offset: impl FnOnce() -> u64) -> Self;
+    /// The other file's record for the same key, with different bytes.
+    fn matched(&mut self, side: Side, rec: &Record<'_>, offset: impl FnOnce() -> u64);
+    fn change(base: KeyedChange) -> Self::Change;
+    fn base(change: &mut Self::Change) -> &mut KeyedChange;
+    /// Fills in what `base` does not hold, for a record in A if `in_a`
+    /// and in B if `in_b`.
+    fn fill(&self, change: &mut Self::Change, in_a: bool, in_b: bool);
+}
+
+impl Extra for () {
+    type Change = KeyedChange;
+    fn new(_: &Record<'_>, _: impl FnOnce() -> u64) -> Self {}
+    fn matched(&mut self, _: Side, _: &Record<'_>, _: impl FnOnce() -> u64) {}
+    fn change(base: KeyedChange) -> KeyedChange {
+        base
+    }
+    fn base(change: &mut KeyedChange) -> &mut KeyedChange {
+        change
+    }
+    fn fill(&self, _: &mut KeyedChange, _: bool, _: bool) {}
+}
+
+/// Where the record's bytes are in A and B, for reading it back: 24
+/// bytes more per kept record, paid only by [`compare_with_ranges`].
+#[derive(Debug, Clone, Copy)]
+struct Ranges {
+    off: [u64; 2],
+    len: [u32; 2],
+}
+
+impl Extra for Ranges {
+    type Change = RangedChange;
+
+    fn new(rec: &Record<'_>, offset: impl FnOnce() -> u64) -> Self {
+        Self {
+            off: [offset(); 2],
+            len: [record_len(rec); 2],
+        }
+    }
+
+    fn matched(&mut self, side: Side, rec: &Record<'_>, offset: impl FnOnce() -> u64) {
+        let i = side as usize;
+        (self.off[i], self.len[i]) = (offset(), record_len(rec));
+    }
+
+    fn change(change: KeyedChange) -> RangedChange {
+        RangedChange {
+            change,
+            a_range: None,
+            b_range: None,
+        }
+    }
+
+    fn base(change: &mut RangedChange) -> &mut KeyedChange {
+        &mut change.change
+    }
+
+    fn fill(&self, change: &mut RangedChange, in_a: bool, in_b: bool) {
+        let range = |i: usize| self.off[i]..self.off[i] + u64::from(self.len[i]);
+        change.a_range = in_a.then(|| range(0));
+        change.b_range = in_b.then(|| range(1));
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a record lies in a window, which stays below 4 GiB"
+)]
+fn record_len(rec: &Record<'_>) -> u32 {
+    rec.bytes.len() as u32
+}
 
 /// What a shard does after one record.
 enum Flow {
@@ -552,7 +672,7 @@ enum Flow {
 
 /// One shard of a pass, reused by the next pass.
 #[derive(Debug)]
-struct Pass<'b> {
+struct Pass<'b, X: Extra> {
     budget: &'b Budget,
     /// Open addressing, linear probing: `EMPTY`, a matched key's
     /// fingerprint, or `WAITING | index into kept`.
@@ -561,14 +681,14 @@ struct Pass<'b> {
     limit: usize,
     /// Skeleton half: the slots.
     _table: Reservation,
-    kept: Vec<Kept>,
+    kept: Vec<Kept<X>>,
     arena: Vec<u8>,
     /// Arena bytes and entries of `kept` no longer needed.
     garbage: usize,
     dead: usize,
     dups: Vec<Vec<u8>>,
     suspects: Vec<Suspect>,
-    change: KeyedChange,
+    change: X::Change,
     /// Refine half: `kept`, the arena, the duplicates, the suspects and
     /// the key of `change`.
     res: Reservation,
@@ -576,7 +696,7 @@ struct Pass<'b> {
     fault: Option<Error>,
 }
 
-impl<'b> Pass<'b> {
+impl<'b, X: Extra> Pass<'b, X> {
     /// A table for about `keys` keys, or as many as `share` bytes of the
     /// skeleton half hold. Too small an estimate costs passes, not
     /// correctness.
@@ -597,12 +717,12 @@ impl<'b> Pass<'b> {
             dead: 0,
             dups: Vec::new(),
             suspects: Vec::new(),
-            change: KeyedChange {
+            change: X::change(KeyedChange {
                 key: Vec::new(),
                 kind: ChangeKind::Changed,
                 a: None,
                 b: None,
-            },
+            }),
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
             overflow: None,
             fault: None,
@@ -644,7 +764,8 @@ impl<'b> Pass<'b> {
         A: Source + ?Sized,
         B: Source + ?Sized,
     {
-        let _ = self.feed(Side::A, k, n, ra.kept()) && self.feed(Side::B, k, n, rb.kept());
+        let _ = self.feed(Side::A, k, n, ra.kept(), |r| ra.offset(r))
+            && self.feed(Side::B, k, n, rb.kept(), |r| rb.offset(r));
     }
 
     fn feed<'r>(
@@ -653,9 +774,10 @@ impl<'b> Pass<'b> {
         k: usize,
         n: usize,
         recs: impl Iterator<Item = Record<'r>>,
+        offset: impl Fn(&Record<'_>) -> u64,
     ) -> bool {
         for rec in recs.filter(|r| shard(r.hash, n) == k) {
-            match self.take(side, &rec) {
+            match self.take(side, &rec, &offset) {
                 Ok(Flow::Next) => {}
                 Ok(Flow::Overflow(half)) => {
                     self.overflow = Some(half);
@@ -683,7 +805,7 @@ impl<'b> Pass<'b> {
         if i + 1 == self.slots.len() { 0 } else { i + 1 }
     }
 
-    fn key(&self, k: &Kept) -> &[u8] {
+    fn key(&self, k: &Kept<X>) -> &[u8] {
         &self.arena[k.start as usize + k.key_off as usize..][..k.key_len as usize]
     }
 
@@ -698,7 +820,12 @@ impl<'b> Pass<'b> {
     }
 
     /// Takes one record of `side`.
-    fn take(&mut self, side: Side, rec: &Record<'_>) -> Result<Flow> {
+    fn take(
+        &mut self,
+        side: Side,
+        rec: &Record<'_>,
+        offset: &impl Fn(&Record<'_>) -> u64,
+    ) -> Result<Flow> {
         let waiting = match side {
             Side::A => State::A,
             Side::B => State::B,
@@ -720,7 +847,7 @@ impl<'b> Pass<'b> {
                     if k.state == waiting {
                         self.duplicate(key);
                     } else {
-                        self.matched(index(v), i, side, rec);
+                        self.matched(index(v), i, side, rec, || offset(rec));
                     }
                     return Ok(Flow::Next);
                 }
@@ -752,6 +879,7 @@ impl<'b> Pass<'b> {
             key_len,
             table: rec.table,
             state: waiting,
+            extra: X::new(rec, || offset(rec)),
         });
         self.arena.extend_from_slice(rec.bytes);
         self.slots[i] = WAITING | slot_index(at);
@@ -779,7 +907,14 @@ impl<'b> Pass<'b> {
     }
 
     /// The other file's record for a waiting key: compare the bytes.
-    fn matched(&mut self, at: usize, slot: usize, side: Side, rec: &Record<'_>) {
+    fn matched(
+        &mut self,
+        at: usize,
+        slot: usize,
+        side: Side,
+        rec: &Record<'_>,
+        offset: impl FnOnce() -> u64,
+    ) {
         let k = &mut self.kept[at];
         let stored = &self.arena[k.start as usize..][..k.len as usize];
         if stored == rec.bytes {
@@ -792,6 +927,7 @@ impl<'b> Pass<'b> {
                 Side::A => k.line_a = rec.line,
                 Side::B => k.line_b = rec.line,
             }
+            k.extra.matched(side, rec, offset);
             self.garbage += (k.len - k.key_len) as usize;
         }
         self.slots[slot] = fingerprint(k.hash);
@@ -814,7 +950,12 @@ impl<'b> Pass<'b> {
             && u32::try_from(self.arena.len() + len).is_ok()
             && grow(&mut self.kept, &mut self.res, self.budget, 1)
             && grow(&mut self.arena, &mut self.res, self.budget, len)
-            && grow(&mut self.change.key, &mut self.res, self.budget, key)
+            && grow(
+                &mut X::base(&mut self.change).key,
+                &mut self.res,
+                self.budget,
+                key,
+            )
             && (!suspect
                 || (grow(&mut self.suspects, &mut self.res, self.budget, 1)
                     && self.res.grow(Bytes(key as u64)).is_ok()));
@@ -862,29 +1003,30 @@ impl<'b> Pass<'b> {
     fn emit_one(
         &mut self,
         i: usize,
-        on_change: &mut impl FnMut(&KeyedChange) -> io::Result<()>,
+        on_change: &mut impl FnMut(&X::Change) -> io::Result<()>,
     ) -> io::Result<()> {
         let k = self.kept[i];
-        let change = &mut self.change;
+        let change = X::base(&mut self.change);
         change.key.clear();
         change.key.extend_from_slice(
             &self.arena[k.start as usize + k.key_off as usize..][..k.key_len as usize],
         );
-        (change.kind, change.a, change.b) = match k.state {
-            State::A => (ChangeKind::Removed, Some(LineNo(k.line_a)), None),
-            State::B => (ChangeKind::Added, None, Some(LineNo(k.line_b))),
-            State::Changed | State::Dead => (
-                ChangeKind::Changed,
-                Some(LineNo(k.line_a)),
-                Some(LineNo(k.line_b)),
-            ),
+        change.kind = match k.state {
+            State::A => ChangeKind::Removed,
+            State::B => ChangeKind::Added,
+            State::Changed | State::Dead => ChangeKind::Changed,
         };
-        on_change(change)
+        let in_a = change.kind != ChangeKind::Added;
+        let in_b = change.kind != ChangeKind::Removed;
+        change.a = in_a.then_some(LineNo(k.line_a));
+        change.b = in_b.then_some(LineNo(k.line_b));
+        k.extra.fill(&mut self.change, in_a, in_b);
+        on_change(&self.change)
     }
 }
 
 /// Where a change sorts: by its line, in B for an added record.
-fn order(k: &Kept) -> (u64, State) {
+fn order<X>(k: &Kept<X>) -> (u64, State) {
     (
         if k.state == State::B {
             k.line_b
@@ -897,9 +1039,9 @@ fn order(k: &Kept) -> (u64, State) {
 
 /// Hands the pass's changes to `on_change`, ordered by line across the
 /// shards.
-fn emit(
-    shards: &mut [Pass<'_>],
-    on_change: &mut impl FnMut(&KeyedChange) -> io::Result<()>,
+fn emit<X: Extra>(
+    shards: &mut [Pass<'_, X>],
+    on_change: &mut impl FnMut(&X::Change) -> io::Result<()>,
 ) -> Result<u64> {
     for s in shards.iter_mut() {
         s.kept.retain(|k| k.state != State::Dead);
@@ -1125,6 +1267,58 @@ mod tests {
                 (ChangeKind::Added, "4".into(), None, Some(2)),
             ]
         );
+    }
+
+    type Records = Vec<(String, Option<Vec<u8>>, Option<Vec<u8>>)>;
+
+    /// Each change's key and the bytes its ranges cover in A and B.
+    fn records(a: &[u8], b: &[u8], mem: u64) -> Records {
+        let cut = |file: &[u8], r: &Option<std::ops::Range<u64>>| {
+            r.as_ref().map(|r| {
+                file[usize::try_from(r.start).unwrap()..usize::try_from(r.end).unwrap()].to_vec()
+            })
+        };
+        let spec: KeySpec = "csv:1".parse().unwrap();
+        let mut out = Vec::new();
+        compare_with_ranges(a, b, &spec, &Budget::new(Bytes(mem)), |c| {
+            let key = String::from_utf8_lossy(&c.change.key).into_owned();
+            out.push((key, cut(a, &c.a_range), cut(b, &c.b_range)));
+            Ok(())
+        })
+        .unwrap();
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn changes_carry_the_byte_ranges_of_their_records() {
+        let a = b"id,v\r\n1,x\r\n2,\"y\r\ny\"\r\n3,z\r\n";
+        let b = b"id,v\n3,z\n4,\"w\"\"\nw\"\n1,X";
+        let some = |s: &[u8]| Some(s.to_vec());
+        assert_eq!(
+            records(a, b, 1 << 20),
+            [
+                ("1".into(), some(b"1,x"), some(b"1,X")),
+                ("2".into(), some(b"2,\"y\r\ny\""), None),
+                ("4".into(), None, some(b"4,\"w\"\"\nw\"")),
+            ]
+        );
+    }
+
+    proptest! {
+        #[test]
+        #[cfg_attr(miri, ignore = "too slow under Miri")]
+        fn ranges_hold_their_records_under_any_budget(n in 1u32..1500, seed in any::<u64>(), mem in 16u64..256) {
+            let (a, b) = pair(n, seed);
+            let (fa, fb) = (csv(&a), csv(&b));
+            let line = |rows: &Rows, k: &str| {
+                rows.iter().find(|r| r.0.to_string() == k).map(|(k, v)| format!("{k},{v}").into_bytes())
+            };
+            for (key, ra, rb) in records(&fa, &fb, mem << 10) {
+                prop_assert_eq!(&ra, &line(&a, &key));
+                prop_assert_eq!(&rb, &line(&b, &key));
+            }
+        }
     }
 
     #[test]

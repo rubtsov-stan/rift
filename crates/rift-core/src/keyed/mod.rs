@@ -7,7 +7,7 @@
 mod pass;
 mod read;
 
-pub use pass::{Report, compare};
+pub use pass::{Report, compare, compare_with_ranges};
 
 /// Internals the fuzz targets drive directly; only in builds with
 /// `--cfg fuzzing`, so the public API is unchanged.
@@ -18,6 +18,7 @@ pub mod fuzz_access {
 }
 
 use std::fmt;
+use std::ops::Range;
 use std::str::FromStr;
 
 use crate::types::{Bytes, LineNo};
@@ -114,6 +115,18 @@ pub struct KeyedChange {
     pub a: Option<LineNo>,
     /// The record's first line in B.
     pub b: Option<LineNo>,
+}
+
+/// A [`KeyedChange`] with where its records are, from
+/// [`compare_with_ranges`]; a range is set when its line is.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RangedChange {
+    /// The key, its kind and its lines.
+    pub change: KeyedChange,
+    /// Where the record's bytes are in A, without its line terminator.
+    pub a_range: Option<Range<u64>>,
+    /// Where the record's bytes are in B, without its line terminator.
+    pub b_range: Option<Range<u64>>,
 }
 
 /// One of the two files.
