@@ -80,4 +80,6 @@ The same on NDJSON, by the `id` field. The key prints as the file has it, quotes
 
 Key mode writes no temporary files. When the keys do not fit `--mem`, Rift splits them by hash and reads both files once per part, so a smaller budget means more passes over the files. Each pass prints its changes sorted by line. `--stats` reports the number of passes.
 
+Key mode prints the same set of lines at any `--mem` and on any number of threads. Their order is not fixed. It depends on `--mem`, since the passes split the keys by budget. Once key mode runs on several threads, from a refine half of 8 MiB, about `--mem 16M`, it can also differ between two runs with the same files and limit: the threads share the refine half, and the one that runs out first sets where the pass starts over. Sort the output before you compare runs.
+
 `--show-records` takes 64 KiB of the budget for its read buffer, plus 24 bytes for each record that waits for its match or has changed, until the end of its pass. Under a tight `--mem` that can add passes.

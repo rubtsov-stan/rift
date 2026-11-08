@@ -537,8 +537,16 @@ a `COPY` header or terminator inside the window, makes the rest parse
 again from there. The pass's range is then split between shards, one
 per thread, by bits of the key hash the table does not use, and each
 shard takes its records with a table and waiting records of its own.
-Under 16 MiB of budget one thread does all of it. With more, the thread
+With a refine half under 8 MiB (`--mem` under about 16M once the process
+reserve is taken) one thread does all of it. With more, the thread
 pool's own heap is reserved from the refine half, 16 KiB per thread.
+
+Each pass prints its changes sorted by line, so the output holds the
+same set of lines at any budget and thread count, in an order that
+depends on how the passes split the keys. One thread splits them the
+same way every run. Several threads grow their lists from the shared
+refine half at the same time, and the shard that runs out first sets
+where the pass starts over, so the order can differ between runs.
 
 A fingerprint cannot tell which keys lie above a new top of the range,
 so when a shard's table or waiting records fill up the pass starts over
