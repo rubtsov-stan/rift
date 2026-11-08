@@ -53,6 +53,12 @@ pub struct Args {
     /// or copy:NAME (COPY column of a Postgres dump).
     #[arg(long, value_name = "SPEC", conflicts_with_all = ["summary", "interactive"])]
     pub key: Option<rift_core::keyed::KeySpec>,
+    /// With --key, print the records under each change: the one from A
+    /// behind "  - ", the one from B behind "  + ", each of their lines
+    /// behind the same prefix. Field-level output, which names the fields
+    /// that changed, is planned for 0.4.
+    #[arg(long, requires = "key")]
+    pub show_records: bool,
 }
 
 /// What Rift runs instead of a diff of two files.

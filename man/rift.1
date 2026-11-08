@@ -8,7 +8,7 @@ rift \- Diff large text files under a hard memory limit
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH SYNOPSIS
-\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> [\fIsubcommands\fR]
+\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-\-show\-records\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> [\fIsubcommands\fR]
 .SH DESCRIPTION
 \fBrift\fR compares two large text files under a heap limit set
 with \fB\-\-mem\fR. It writes a unified diff that \fBpatch\fR(1)
@@ -39,6 +39,9 @@ After a diff, print peak heap, time and approximate regions to standard error. W
 .TP
 \fB\-\-key\fR \fI<SPEC>\fR
 Compare records by key instead of lines, regardless of row order: csv:N (column, from 1), csv:NAME (header), json:PATH (dotted field) or copy:NAME (COPY column of a Postgres dump)
+.TP
+\fB\-\-show\-records\fR
+With \-\-key, print the records under each change: the one from A behind "  \- ", the one from B behind "  + ", each of their lines behind the same prefix. Field\-level output, which names the fields that changed, is planned for 0.4
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
@@ -137,6 +140,26 @@ equal. A key that occurs twice in one file stops the run with exit status
 then says the output is incomplete and must be discarded, so check the
 exit status before you use the output. \fB\-\-key\fR cannot be combined
 with \fB\-\-summary\fR or \fB\-\-interactive\fR.
+.TP
+\fB\-\-show\-records\fR
+With \fB\-\-key\fR, prints the records under each change line, the one
+from \fIA\fR behind two spaces and \fB\-\fR, the one from \fIB\fR behind
+two spaces and \fB+\fR, each followed by a space:
+.RS
+.nf
+~\fIKEY\fR	\fIA\fR	\fIB\fR
+  \- \fIrecord in A\fR
+  + \fIrecord in B\fR
+.fi
+.RE
+.IP
+A record that spans lines, such as a CSV record with a line break inside
+quotes, carries the prefix on each of its lines. Strip the prefixes and
+you get the record's bytes as the file has them, without its line
+terminator. Rift reads each record back from its file through a 64 KiB
+buffer, so a long record takes no more memory than a short one. Without
+\fB\-\-key\fR, Rift refuses the option. Field-level output, which names
+the fields that changed, is planned for 0.4.
 .TP
 \fB\-\-stats\fR
 After a diff, prints to standard error the peak heap, the time, the

@@ -88,6 +88,13 @@ fn key_output_into_a_closed_pipe_exits_141_without_a_message() {
 }
 
 #[test]
+fn key_records_into_a_closed_pipe_exit_141_without_a_message() {
+    let p = Pair::new();
+    let out = run_closed_with(&["--key", "csv:1", "--show-records"], &[&p.a(), &p.b()]);
+    assert_141_and_silent(&out);
+}
+
+#[test]
 fn stats_do_not_hide_a_closed_pipe() {
     let p = Pair::new();
     let out = run_closed_with(&["--stats"], &[&p.a(), &p.b()]);

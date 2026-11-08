@@ -32,6 +32,25 @@ Rift prints one line per key that differs, with tabs between the fields and line
 
 `A` and `B` are the lines where the record starts, or `-` when it is absent.
 
+## Print the records
+
+With `--show-records`, Rift prints the records under each change line. The record from the first file follows `  - `, the one from the second file follows `  + `:
+
+```
+~1	2	4
+  - 1,x
+  + 1,X
+-2	3	-
+  - 2,"two
+  - lines"
++4	-	3
+  + 4,"say ""hi"""
+```
+
+A record that spans lines carries the prefix on each line. Strip the prefixes and you get the record's bytes as the file has them, quotes and inner line breaks included, without the line terminator. Rift reads each record back from its file through a 64 KiB buffer, so a long record takes no more memory than a short one.
+
+`--show-records` prints whole records. Output that names the fields that changed is planned for 0.4, see the [roadmap](@/roadmap.md).
+
 {{ media(ready=true, mp4="key-mode.mp4", gif="key-mode.gif", poster="key-mode-poster.jpg", width=960, height=400, alt="rift --key csv:id on a pair of CSV files") }}
 
 This is a pair of generated CSV files, 32 MiB each, with the same keys in a different order and some rows added and removed:
@@ -55,8 +74,10 @@ The same on NDJSON, by the `id` field. The key prints as the file has it, quotes
 - In a `pg_dump`, only the rows of `COPY` blocks with the right column count take part, and the same key in two tables names two records.
 - A key that occurs twice in one file stops the run with exit status 2 and lists the first few. A run can stop after it printed some changes. The output is then incomplete: check the exit status before you use it.
 - A record too long for the budget stops the run with a budget error that names a `--mem` under which the record fits.
-- `--key` cannot be combined with `--summary`, `--interactive` or `--no-moves`.
+- `--key` cannot be combined with `--summary`, `--interactive` or `--no-moves`. `--show-records` needs `--key`, and `--stats` works with both.
 
 ## Memory
 
 Key mode writes no temporary files. When the keys do not fit `--mem`, Rift splits them by hash and reads both files once per part, so a smaller budget means more passes over the files. Each pass prints its changes sorted by line. `--stats` reports the number of passes.
+
+`--show-records` takes 64 KiB of the budget for its read buffer, plus 24 bytes for each record that waits for its match or has changed, until the end of its pass. Under a tight `--mem` that can add passes.

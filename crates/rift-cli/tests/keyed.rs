@@ -120,3 +120,71 @@ fn key_mode_does_not_combine_with_summary() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot be used with"));
 }
+
+#[test]
+fn show_records_prints_each_record_under_its_change() {
+    let out = rift_on(
+        b"id,v\r\n1,x\r\n2,\"two\r\nlines\"\n3,z\n",
+        b"id,v\n3,z\n4,\"say \"\"hi\"\"\"\n1,X",
+        &["--key", "csv:id", "--show-records"],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "~1\t2\t4\n  - 1,x\n  + 1,X\n\
+         -2\t3\t-\n  - 2,\"two\r\n  - lines\"\n\
+         +4\t-\t3\n  + 4,\"say \"\"hi\"\"\"\n"
+    );
+}
+
+#[test]
+fn show_records_needs_key() {
+    let out = rift(&["--show-records"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("--key <SPEC>"), "{stderr}");
+}
+
+/// Strips the record lines that follow each change line and checks them
+/// against the files: the A record behind `  - `, the B one behind `  + `.
+#[test]
+fn show_records_matches_the_files_on_a_generated_pair() {
+    let mut config = rift_gen::Config::new(7, 1 << 20, rift_gen::Profile::Shuffled);
+    config.change_ratio = 0.01;
+    let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+    rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+    let plain = rift_on(&a, &b, &["--key", "csv:id", "--mem", "1M"]);
+    let out = rift_on(
+        &a,
+        &b,
+        &["--key", "csv:id", "--show-records", "--mem", "1M"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let (la, lb): (Vec<&[u8]>, Vec<&[u8]>) = (
+        a.split(|&c| c == b'\n').collect(),
+        b.split(|&c| c == b'\n').collect(),
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    let mut changes = String::new();
+    let mut lines = text.lines().peekable();
+    while let Some(change) = lines.next() {
+        changes.push_str(change);
+        changes.push('\n');
+        let fields: Vec<&str> = change.split('\t').collect();
+        for (prefix, file, at) in [("  - ", &la, fields[1]), ("  + ", &lb, fields[2])] {
+            if at == "-" {
+                continue;
+            }
+            let record = lines.next().unwrap().strip_prefix(prefix).unwrap();
+            let at: usize = at.parse().unwrap();
+            assert_eq!(record.as_bytes(), file[at - 1], "{change}");
+        }
+    }
+    assert_eq!(changes, String::from_utf8(plain.stdout).unwrap());
+    assert!(changes.lines().count() > 50, "{changes}");
+}

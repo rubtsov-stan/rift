@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `rift --key --show-records` prints the records under each change: A's
+  behind `  - `, B's behind `  + `, with the prefix on each line of a
+  record that spans lines. Rift reads the records back from the files
+  through a 64 KiB buffer taken from the `--mem` budget.
+
 ### Fixed
 
 - Output closed early, as in `rift a b | head`, no longer prints an error.

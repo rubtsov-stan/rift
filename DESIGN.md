@@ -528,6 +528,19 @@ more passes. A record counts as unchanged only after its bytes compare
 equal. `shuffled` is the test bed: its manifest names every
 change, and a pair that is only reordered reports none.
 
+`--show-records` prints the records of each change. `compare_with_ranges`
+keeps the file offset and length of each record in A and in B, 24 bytes
+more per waiting or changed record (72 instead of 48), from the refine
+half, and hands out a `RangedChange` with both ranges. Plain `compare`
+keeps its 48 bytes and its `KeyedChange`, and runs the same passes as
+before. A key matched with equal bytes still leaves only its
+fingerprint, so the extra cost follows the waiting and changed records,
+not the key count. `RecordReader` reads each record back with `pread`
+through one 64 KiB buffer, reserved from the refine half before the
+first pass. A record longer than the buffer streams through it in
+pieces: cutting it short would lose bytes, and streaming costs no more
+memory.
+
 ### Moved blocks
 
 A block that moved shows up as a deletion and an insertion. Its lines
