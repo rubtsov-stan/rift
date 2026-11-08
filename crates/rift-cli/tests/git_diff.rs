@@ -377,3 +377,55 @@ fn identical_files_print_nothing_and_exit_zero() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(lossy(&out.stdout), "diff --git a/f b/f\n");
 }
+
+fn numbered(n: usize, suffix: &str) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    for i in 0..n {
+        writeln!(s, "{i}{suffix}").unwrap();
+    }
+    s
+}
+
+/// `git diff` of one changed file piped into `head -n 3`, which closes the
+/// pipe long before the diff, many megabytes, ends. Returns git's own exit
+/// status and its standard error.
+///
+/// One file only: with a second one git would write its header after `head`
+/// is gone and git itself would die of SIGPIPE, which says nothing about
+/// Rift.
+fn diff_into_head(repo: &Repo) -> (String, String) {
+    let err = repo.path().join("git.err");
+    let script =
+        r#"git --no-pager diff --ext-diff 2>"$1" | head -n 3 >/dev/null; echo "${PIPESTATUS[0]}""#;
+    let out = Command::new("bash")
+        .current_dir(repo.path())
+        .args(["-c", script, "bash"])
+        .arg(&err)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .output()
+        .unwrap();
+    (
+        lossy(&out.stdout).trim().to_owned(),
+        fs::read_to_string(err).unwrap(),
+    )
+}
+
+#[test]
+fn a_reader_that_quits_early_does_not_make_the_external_diff_die() {
+    need_git!();
+    if Command::new("bash").arg("-c").arg("true").output().is_err() {
+        eprintln!("skipped: bash is not on PATH");
+        return;
+    }
+    let repo = Repo::new("");
+    repo.write("big.txt", numbered(100_000, ""));
+    repo.commit("one");
+    repo.write("big.txt", numbered(100_000, " changed"));
+    let (status, stderr) = diff_into_head(&repo);
+    assert_eq!(stderr, "");
+    assert_eq!(status, "0");
+}

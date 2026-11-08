@@ -43,54 +43,62 @@ pub fn run<A: Source, B: Source>(
     };
     let elapsed = start.elapsed();
 
-    let segments = map.segments();
-    println!(
-        "a: {} lines, {} bytes",
-        scan_a.index().line_count(),
-        a.len()
-    );
-    println!(
-        "b: {} lines, {} bytes",
-        scan_b.index().line_count(),
-        b.len()
-    );
-    println!("stratum {}, {} anchors", map.level(), map.anchors());
-    for status in [
-        SegmentStatus::Equal,
-        SegmentStatus::Differs,
-        SegmentStatus::Approx,
-    ] {
-        let (count, lines_a, lines_b) = segments
+    let print = |out: &mut io::StdoutLock<'_>| -> io::Result<()> {
+        let segments = map.segments();
+        writeln!(
+            out,
+            "a: {} lines, {} bytes",
+            scan_a.index().line_count(),
+            a.len()
+        )?;
+        writeln!(
+            out,
+            "b: {} lines, {} bytes",
+            scan_b.index().line_count(),
+            b.len()
+        )?;
+        writeln!(out, "stratum {}, {} anchors", map.level(), map.anchors())?;
+        for status in [
+            SegmentStatus::Equal,
+            SegmentStatus::Differs,
+            SegmentStatus::Approx,
+        ] {
+            let (count, lines_a, lines_b) = segments
+                .iter()
+                .filter(|s| s.status == status)
+                .fold((0, 0, 0), |(n, a, b), s| {
+                    (n + 1, a + s.len_a(), b + s.len_b())
+                });
+            writeln!(
+                out,
+                "{:<8} {count} segments, {lines_a} lines in a, {lines_b} in b",
+                format!("{status:?}").to_lowercase(),
+            )?;
+        }
+        let mut differing = segments
             .iter()
-            .filter(|s| s.status == status)
-            .fold((0, 0, 0), |(n, a, b), s| {
-                (n + 1, a + s.len_a(), b + s.len_b())
-            });
-        println!(
-            "{:<8} {count} segments, {lines_a} lines in a, {lines_b} in b",
-            format!("{status:?}").to_lowercase(),
-        );
-    }
-    let mut differing = segments
-        .iter()
-        .filter(|s| s.status != SegmentStatus::Equal)
-        .peekable();
-    if differing.peek().is_some() {
-        println!("first differing ranges (0-based, end exclusive):");
-    }
-    for s in differing.by_ref().take(SHOWN_RANGES) {
-        println!(
-            "  a {}..{}  b {}..{}",
-            s.a.start, s.a.end, s.b.start, s.b.end
-        );
-    }
-    let more = differing.count();
-    if more > 0 {
-        println!("  ... and {more} more");
-    }
-    print_moves(&mut io::stdout().lock(), &moves, off_chain.dropped())?;
-    println!("{}", peak_heap(mem));
-    println!("time {:.2} s", elapsed.as_secs_f64());
+            .filter(|s| s.status != SegmentStatus::Equal)
+            .peekable();
+        if differing.peek().is_some() {
+            writeln!(out, "first differing ranges (0-based, end exclusive):")?;
+        }
+        for s in differing.by_ref().take(SHOWN_RANGES) {
+            writeln!(
+                out,
+                "  a {}..{}  b {}..{}",
+                s.a.start, s.a.end, s.b.start, s.b.end
+            )?;
+        }
+        let more = differing.count();
+        if more > 0 {
+            writeln!(out, "  ... and {more} more")?;
+        }
+        print_moves(out, &moves, off_chain.dropped())?;
+        writeln!(out, "{}", peak_heap(mem))?;
+        writeln!(out, "time {:.2} s", elapsed.as_secs_f64())?;
+        Ok(())
+    };
+    print(&mut io::stdout().lock()).map_err(rift_core::Error::Write)?;
     Ok(if map.is_identical() {
         ExitCode::SUCCESS
     } else {

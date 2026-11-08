@@ -67,6 +67,8 @@ fn main() -> ExitCode {
     }
     match run(&args) {
         Ok(code) => code,
+        // Exit as a shell reports a `diff` killed by SIGPIPE: 128 + 13.
+        Err(err) if broken_pipe(&err) => ExitCode::from(141),
         Err(err) => {
             match mem_advice(&err, args.mem) {
                 Some(advice) => eprintln!("rift: {err:#}; {advice}"),
@@ -75,6 +77,14 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// The output's reader went away, as in `rift a b | head`. Rust ignores
+/// SIGPIPE, so this arrives as a failed write, and every write to standard
+/// output reports it as [`rift_core::Error::Write`].
+fn broken_pipe(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|e| matches!(e.downcast_ref(), Some(rift_core::Error::Write(w)) if w.kind() == std::io::ErrorKind::BrokenPipe))
 }
 
 /// For a budget refusal, a `--mem` to rerun with; see
