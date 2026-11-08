@@ -17,6 +17,14 @@ fi
 "${PYTHON:-python3}" scripts/bench-data.py
 "${PYTHON:-python3}" scripts/render-man.py
 
+# The media below goes where Zola writes, --output-dir or -o if given.
+out=public prev=
+for a in "$@"; do
+  case $prev in -o | --output-dir) out=$a ;; esac
+  case $a in --output-dir=*) out=${a#*=} ;; esac
+  prev=$a
+done
+
 drafts=
 [ "${RIFT_SITE_VSCODE:-0}" = 1 ] && drafts=--drafts
 # shellcheck disable=SC2086
@@ -28,11 +36,11 @@ drafts=
 if [ "${RIFT_SITE_VSCODE:-0}" = 1 ]; then
   media=../editors/vscode/media
   for f in mp4 gif; do
-    [ -f "$media/rift-demo.$f" ] && cp "$media/rift-demo.$f" "public/vscode-demo.$f"
+    [ -f "$media/rift-demo.$f" ] && cp "$media/rift-demo.$f" "$out/vscode-demo.$f"
   done
   if [ -d "$media/screens" ]; then
-    mkdir -p public/vscode-screens
-    cp "$media"/screens/*.png public/vscode-screens/
+    mkdir -p "$out/vscode-screens"
+    cp "$media"/screens/*.png "$out/vscode-screens/"
   fi
 fi
 exit 0
