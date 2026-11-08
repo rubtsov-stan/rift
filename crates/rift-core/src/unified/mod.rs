@@ -23,7 +23,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, Range};
 
 use crate::edit::{Edit, Hunk};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::lines::{LineAccess, LineBuf};
 use crate::script::{Cursor, for_each_piece};
 use crate::types::{Bytes, LineNo};
@@ -98,8 +98,8 @@ pub fn exit_code<E>(result: &std::result::Result<Verdict, E>) -> i32 {
 ///
 /// # Errors
 ///
-/// `InvalidScript`, `LineOutOfRange` or `Io` from the sources, `Io` from
-/// `out`, and whatever `hunk` returns.
+/// `InvalidScript`, `LineOutOfRange` or `Io` from the sources, `Write`
+/// from `out`, and whatever `hunk` returns.
 pub fn write_diff<H: Deref<Target = Hunk>>(
     a: &impl LineAccess,
     b: &impl LineAccess,
@@ -169,7 +169,7 @@ pub fn write_diff<H: Deref<Target = Hunk>>(
         }
     }
     cursor.finish(a.line_count(), b.line_count())?;
-    w.out.flush()?;
+    w.out.flush().map_err(Error::Write)?;
     Ok(if w.wrote_header {
         Verdict::Different
     } else {
@@ -300,6 +300,10 @@ impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
     /// The file headers before the first hunk, then the `@@` line of a
     /// hunk from `start` to `end`.
     fn header(&mut self, start: Cursor, end: Cursor, approx: bool) -> Result<()> {
+        self.write_header(start, end, approx).map_err(Error::Write)
+    }
+
+    fn write_header(&mut self, start: Cursor, end: Cursor, approx: bool) -> io::Result<()> {
         if !self.wrote_header {
             write_label(&mut self.out, b"--- ", &self.opts.old)?;
             write_label(&mut self.out, b"+++ ", &self.opts.new)?;
@@ -310,8 +314,7 @@ impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
         self.out.write_all(b" +")?;
         write_range(&mut self.out, start.b, end.b - start.b)?;
         self.out
-            .write_all(if approx { b" @@ approx\n" } else { b" @@\n" })?;
-        Ok(())
+            .write_all(if approx { b" @@ approx\n" } else { b" @@\n" })
     }
 
     /// Second pass: the lines of the hunk from its first change at `first`
@@ -367,11 +370,12 @@ impl<A: LineAccess, B: LineAccess, W: Write> Writer<'_, A, B, W> {
             &mut self.buf,
             |piece, first, last| {
                 if first {
-                    out.write_all(prefix)?;
+                    out.write_all(prefix).map_err(Error::Write)?;
                 }
-                out.write_all(piece)?;
+                out.write_all(piece).map_err(Error::Write)?;
                 if last && piece.last() != Some(&b'\n') {
-                    out.write_all(b"\n\\ No newline at end of file\n")?;
+                    out.write_all(b"\n\\ No newline at end of file\n")
+                        .map_err(Error::Write)?;
                 }
                 Ok(())
             },

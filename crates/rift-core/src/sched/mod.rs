@@ -179,6 +179,7 @@ impl Failure {
         match self {
             Self::Panicked => io::Error::other(context(&"the job panicked")).into(),
             Self::Error(Error::Io(e)) => io::Error::new(e.kind(), context(e)).into(),
+            Self::Error(Error::Write(e)) => Error::Write(io::Error::new(e.kind(), context(e))),
             Self::Error(Error::Budget(b)) => Error::Budget(*b),
             Self::Error(Error::LineTooLong { line, cap }) => Error::LineTooLong {
                 line: *line,
