@@ -90,6 +90,9 @@ jobs:
       - run: cargo build --release -p rift-diff -p rift-gen
       - name: Summary and full diff of a 1 GiB pair stay under --mem
         run: bench/ci-mem.sh 1G 256M
+      # The heap no budget counts weighs most at the smallest budgets.
+      - name: Every mode stays under small --mem values, refusals included
+        run: for mem in 64K 1M 4M; do bench/ci-mem.sh 16M "$mem" small; done
 
   msrv:
     runs-on: ubuntu-latest

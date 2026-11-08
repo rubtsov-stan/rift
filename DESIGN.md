@@ -142,8 +142,10 @@ runs in the background.
   never treated as equality.
 - Peak heap stays under `--mem`. CI checks it on macOS and Linux with
   `bench/ci-mem.sh`, which asserts the counting allocator's peak heap
-  against `--mem` for `--summary`, the full diff and key mode. The script
-  prints peak RSS but does not assert it.
+  against `--mem` for `--summary`, the full diff, `rift git-diff` and key
+  mode, on a 1 GiB pair at 256M and on 16 MiB pairs at 64K, 1M and 4M,
+  where a budget refusal still has its peak checked. The script prints
+  peak RSS but does not assert it.
 - Approximate regions are marked explicitly in every output: terminal
   interface, unified diff and summary statistics. The unified diff,
   `--stats`, the terminal status line and `rift-mcp`'s hunk text also
