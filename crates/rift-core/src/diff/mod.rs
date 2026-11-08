@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
-use crate::edit::{Edit, Hunk};
+use crate::edit::{ApproxReason, Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::index::{IndexedLines, LineIndex};
 use crate::lines::{LineAccess, LineBuf};
@@ -129,6 +129,8 @@ pub struct Written {
     pub approx_segments: u64,
     /// Lines of A plus lines of B in those segments.
     pub approx_lines: u64,
+    /// Approximate segments by reason, indexed like [`ApproxReason::ALL`].
+    pub approx_reasons: [u64; ApproxReason::ALL.len()],
 }
 
 impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> Diff<A, B> {
@@ -356,6 +358,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         let front = Cell::new(None::<usize>);
         let window = Cell::new(None::<usize>);
         let approx = Cell::new((0u64, 0u64));
+        let reasons = Cell::new([0u64; ApproxReason::ALL.len()]);
         let hunk = |i: usize| -> Result<Option<Arc<Hunk>>> {
             if i >= n {
                 return Ok(None);
@@ -374,9 +377,12 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
                     .set_visible(LineNo(start)..LineNo(last.a.end.0.max(start + 1)));
             }
             let h = self.sched.wait_hunk(i)?;
-            if first_visit && h.approx {
+            if first_visit && let Some(reason) = h.approx {
                 let (s, l) = approx.get();
                 approx.set((s + 1, l + segs[i].len_a() + segs[i].len_b()));
+                let mut by_reason = reasons.get();
+                by_reason[reason as usize] += 1;
+                reasons.set(by_reason);
             }
             Ok(Some(h))
         };
@@ -398,6 +404,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             verdict,
             approx_segments,
             approx_lines,
+            approx_reasons: reasons.get(),
         })
     }
 }
@@ -732,7 +739,7 @@ fn whole_lines(lines: &impl LineAccess, range: Range<LineNo>, buf: &mut LineBuf)
 struct Out {
     edits: Vec<Edit>,
     cap: usize,
-    approx: bool,
+    approx: Option<ApproxReason>,
     /// End of what the edits cover so far.
     at_a: LineNo,
     at_b: LineNo,
@@ -755,7 +762,7 @@ impl Out {
         Ok(Self {
             edits: Vec::new(),
             cap,
-            approx: false,
+            approx: None,
             at_a: start.0,
             at_b: start.1,
             _reservation: reservation,
@@ -807,9 +814,16 @@ impl Out {
         Ok(true)
     }
 
-    /// Replaces A lines `ra` by B lines `rb`, marking the hunk approximate.
-    fn replace(&mut self, ra: Range<LineNo>, rb: Range<LineNo>, spare: usize) -> Result<bool> {
-        self.approx = true;
+    /// Replaces A lines `ra` by B lines `rb`, marking the hunk approximate
+    /// for `reason`.
+    fn replace(
+        &mut self,
+        ra: Range<LineNo>,
+        rb: Range<LineNo>,
+        spare: usize,
+        reason: ApproxReason,
+    ) -> Result<bool> {
+        self.approx = self.approx.max(Some(reason));
         if !ra.is_empty()
             && !self.add(
                 Edit::Delete {

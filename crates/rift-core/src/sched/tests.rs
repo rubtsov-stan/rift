@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::cache::hunk_bytes;
 use super::*;
+use crate::edit::ApproxReason;
 
 const LINES: u64 = 10;
 
@@ -47,7 +48,7 @@ fn script(segment: &Segment, approx: bool) -> Hunk {
                 len: segment.len_b(),
             },
         ],
-        approx,
+        approx: approx.then_some(ApproxReason::Budget),
     }
 }
 

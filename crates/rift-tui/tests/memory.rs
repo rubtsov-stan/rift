@@ -63,7 +63,7 @@ impl Big {
             segments,
             hunk: Arc::new(Hunk {
                 edits,
-                approx: false,
+                approx: None,
             }),
             len: at,
         }

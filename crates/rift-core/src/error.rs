@@ -103,7 +103,7 @@ mod tests {
                     len: 1,
                 },
             ],
-            approx: false,
+            approx: None,
         }]
     }
 

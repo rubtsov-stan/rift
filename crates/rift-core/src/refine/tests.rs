@@ -13,6 +13,7 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use super::*;
 use crate::budget::{Budget, Half};
+use crate::edit::ApproxReason;
 use crate::lines::MemLines;
 use crate::segment::SegmentStatus;
 use crate::types::LineNo;
@@ -219,7 +220,7 @@ fn runs_use_absolute_line_numbers() {
             },
         ]
     );
-    assert!(!hunk.approx);
+    assert!(hunk.approx.is_none());
 }
 
 #[test]
@@ -279,9 +280,9 @@ fn cutoff_marks_approx_and_keeps_the_script_valid() {
     let b: Vec<u8> = (0..300).map(|_| rng.below(3) as u8).collect();
     let mut r = Refiner::new(1);
     let hunk = check(&mut r, &text(&a), &text(&b), 0, xxh3_64);
-    assert!(hunk.approx);
+    assert_eq!(hunk.approx, Some(ApproxReason::Cutoff));
     let exact_hunk = check(&mut exact(), &text(&a), &text(&b), 0, xxh3_64);
-    assert!(!exact_hunk.approx);
+    assert!(exact_hunk.approx.is_none());
     assert_eq!(edit_count(&exact_hunk), lcs_edits(&a, &b));
     assert!(edit_count(&hunk) >= edit_count(&exact_hunk));
 }
@@ -293,14 +294,14 @@ fn sides_without_a_common_line_are_replaced_exactly() {
     let a: Vec<u8> = (0..300).map(|i| (i % 3) as u8).collect();
     let b: Vec<u8> = (0..280).map(|i| (10 + i % 4) as u8).collect();
     let hunk = check(&mut Refiner::new(1), &text(&a), &text(&b), 0, xxh3_64);
-    assert!(!hunk.approx);
+    assert!(hunk.approx.is_none());
     assert_eq!(edit_count(&hunk), 580);
     // One shared line anchors two gaps, each without a common line.
     let (mut a2, mut b2) = (a.clone(), b.clone());
     a2.insert(150, 99);
     b2.insert(100, 99);
     let hunk = check(&mut Refiner::new(1), &text(&a2), &text(&b2), 0, xxh3_64);
-    assert!(!hunk.approx);
+    assert!(hunk.approx.is_none());
     assert_eq!(edit_count(&hunk), 580);
 }
 
@@ -360,7 +361,7 @@ proptest! {
         r.patience = false;
         r.dp_max = dp;
         let hunk = check(&mut r, &text(&a), &text(&b), 0, xxh3_64);
-        prop_assert!(!hunk.approx);
+        prop_assert!(hunk.approx.is_none());
         let ours = edit_count(&hunk);
         prop_assert_eq!(ours, lcs_edits(&a, &b));
         prop_assert!(ours <= imara(&a, &b));
@@ -492,7 +493,7 @@ fn throughput_1m_lines() {
     let mut best = warm;
     for _ in 0..4 {
         let (t, hunk) = time_refine(&mut r, &a, &b);
-        assert!(!hunk.approx);
+        assert!(hunk.approx.is_none());
         best = best.min(t);
     }
     let (la, lb) = (lines(&a).len(), lines(&b).len());

@@ -38,7 +38,7 @@ fn one_huge_hunk_costs_the_writer_a_bounded_amount() {
                     len: 1,
                 },
             ],
-            approx: false,
+            approx: None,
         })
         .collect();
     let (la, lb) = (MemLines::new(&a), MemLines::new(&b));

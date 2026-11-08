@@ -31,7 +31,7 @@ pub mod strata;
 pub mod unified;
 
 pub use budget::{Budget, BudgetExceeded, Half, Reservation};
-pub use edit::{Edit, Hunk};
+pub use edit::{ApproxReason, Edit, Hunk};
 pub use error::{Error, Result};
 pub use lines::{LineAccess, LineBuf, MemLines};
 pub use sample::Sample;

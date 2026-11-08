@@ -22,7 +22,7 @@ mod tests;
 use std::ops::Range;
 
 use crate::budget::Reservation;
-use crate::edit::{Edit, Hunk};
+use crate::edit::{ApproxReason, Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::lines::{LineAccess, LineBuf};
 use crate::script::PIECE;
@@ -164,7 +164,7 @@ impl Refiner {
             patience: self.patience,
             limit: 0,
             spent: 0,
-            approx: false,
+            approx: None,
         };
         diff.solve(0..a.len(), 0..b.len(), 0);
         let approx = diff.approx;
@@ -252,7 +252,7 @@ struct Diff<'w> {
     /// Comparisons the current gap may spend in Myers, and spent so far.
     limit: u64,
     spent: u64,
-    approx: bool,
+    approx: Option<ApproxReason>,
 }
 
 impl Diff<'_> {

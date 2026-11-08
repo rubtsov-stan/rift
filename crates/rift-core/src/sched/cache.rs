@@ -216,7 +216,7 @@ mod tests {
                 };
                 n
             ],
-            approx: false,
+            approx: None,
         })
     }
 

@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use rift_core::moves::MovedBlock;
-use rift_core::{DiffView, Edit, Hunk, HunkState, LineNo, Progress, Segment, SegmentStatus};
+use rift_core::{
+    ApproxReason, DiffView, Edit, Hunk, HunkState, LineNo, Progress, Segment, SegmentStatus,
+};
 
 #[derive(Clone, Copy)]
 pub enum Spec {
@@ -111,7 +113,10 @@ impl Mock {
                             SegmentStatus::Differs
                         },
                     });
-                    let h = Arc::new(Hunk { edits, approx });
+                    let h = Arc::new(Hunk {
+                        edits,
+                        approx: approx.then_some(ApproxReason::Cutoff),
+                    });
                     truth.push(if approx {
                         HunkState::Approx(h)
                     } else {

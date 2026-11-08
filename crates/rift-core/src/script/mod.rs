@@ -179,7 +179,7 @@ pub(crate) fn for_each_piece(
 pub(crate) mod testgen {
     use proptest::prelude::*;
 
-    use crate::edit::{Edit, Hunk};
+    use crate::edit::{ApproxReason, Edit, Hunk};
     use crate::types::LineNo;
 
     /// A pair of files and a script that is valid for them by construction.
@@ -244,7 +244,8 @@ pub(crate) mod testgen {
             if new_hunk || hunks.is_empty() {
                 hunks.push(Hunk {
                     edits: Vec::new(),
-                    approx: approx && hunks.len().is_multiple_of(2),
+                    approx: (approx && hunks.len().is_multiple_of(2))
+                        .then_some(ApproxReason::Cutoff),
                 });
             }
             hunks.last_mut().expect("pushed above").edits.push(edit);
@@ -297,7 +298,7 @@ mod tests {
     fn hunk(edits: Vec<Edit>) -> Hunk {
         Hunk {
             edits,
-            approx: false,
+            approx: None,
         }
     }
 

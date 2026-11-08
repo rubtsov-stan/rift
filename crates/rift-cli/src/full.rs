@@ -12,7 +12,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::Context;
 use rift_core::diff::{Config, Diff};
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict};
-use rift_core::{Budget, Bytes};
+use rift_core::{ApproxReason, Budget, Bytes};
 
 use crate::source::FileSource;
 use crate::summary::{peak_heap, print_moves};
@@ -60,6 +60,11 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
             "approx {} segments, {} lines in a and b",
             written.approx_segments, written.approx_lines
         );
+        for (reason, n) in ApproxReason::ALL.iter().zip(written.approx_reasons) {
+            if n > 0 {
+                eprintln!("  {n} segments: {}", reason.describe());
+            }
+        }
         print_moves(
             &mut io::stderr().lock(),
             diff.moves(),

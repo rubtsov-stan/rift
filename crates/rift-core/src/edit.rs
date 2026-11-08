@@ -42,6 +42,38 @@ pub enum Edit {
 pub struct Hunk {
     /// The edits, in order.
     pub edits: Vec<Edit>,
-    /// The local diff hit its cost cutoff; the script is valid but not minimal.
-    pub approx: bool,
+    /// Why part of the script may not be minimal; `None` when it is.
+    pub approx: Option<ApproxReason>,
+}
+
+/// Why a hunk is approximate. When a hunk has several, it keeps the
+/// greatest, so the reason a larger `--mem` can fix wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ApproxReason {
+    /// A gap had lines on both sides but none once on each, and the Myers
+    /// search passed its cost cutoff.
+    Cutoff,
+    /// A segment too large for one job had no anchor among its samples,
+    /// and its two sides share a line hash.
+    NoAnchor,
+    /// The job ran out of its share of `--mem`: for samples, for the edits,
+    /// or for anything at all.
+    Budget,
+}
+
+impl ApproxReason {
+    /// Every reason, in order.
+    pub const ALL: [Self; 3] = [Self::Cutoff, Self::NoAnchor, Self::Budget];
+
+    /// The reason in plain words, for a person reading the diff.
+    #[must_use]
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Cutoff => "too many changes among repeated lines to align them exactly",
+            Self::NoAnchor => {
+                "found no line here that occurs once in each file, so there is nothing to align on"
+            }
+            Self::Budget => "too large to align within --mem; a larger --mem may help",
+        }
+    }
 }
