@@ -17,6 +17,10 @@ on:
         description: Release tag to attach the packages to, e.g. v0.3.0
         required: true
         type: string
+      ref:
+        description: Commit to package the extension from, if not the tag (the binaries still come from the tag's release)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -36,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.ref || inputs.tag || github.event.workflow_run.head_sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
