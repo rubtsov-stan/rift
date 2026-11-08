@@ -105,9 +105,6 @@ read by that process only, in fixed-size blocks, and are never copied.
 - [Rift home page](https://rubtsov-stan.github.io/rift/)
 - [Source and issues](https://github.com/rubtsov-stan/rift)
 
-## Status
-
-Not yet published to the Visual Studio Marketplace or Open VSX. The source
-is in [the Rift repository](https://github.com/rubtsov-stan/rift/tree/main/editors/vscode).
+## License
 
 Licensed under MIT or Apache 2.0, at your option.

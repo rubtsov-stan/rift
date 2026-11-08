@@ -18,8 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   framed as in LSP, for editors. `docs/protocol.md` specifies it.
 - `rift-session`, the crate that keeps the live diffs shared by
   `rift serve` and `rift-mcp`.
-- A VS Code extension in `editors/vscode`, built on `rift serve`. It is not
-  yet published.
+- A VS Code extension in `editors/vscode`, built on `rift serve`.
 
 ### Changed
 

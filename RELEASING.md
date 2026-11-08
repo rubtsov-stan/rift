@@ -1,7 +1,9 @@
 # Releasing
 
 1. Merge every change planned for the release and wait for main to go green
-   (CI, CodeQL, Site, supply chain).
+   (CI, CodeQL, Site, supply chain). Remove every "not yet published" line
+   from `editors/vscode/README.md` and `CHANGELOG.md` first: the README is
+   packaged into the VSIX files and becomes the store page.
 
 2. Run Miri on the exact commit you will tag and wait for it to pass:
 
