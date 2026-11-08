@@ -287,6 +287,24 @@ fn cutoff_marks_approx_and_keeps_the_script_valid() {
 }
 
 #[test]
+fn sides_without_a_common_line_are_replaced_exactly() {
+    // Repeated lines on each side, none shared: patience finds no anchor
+    // and Myers would pass any cutoff, yet the replacement is minimal.
+    let a: Vec<u8> = (0..300).map(|i| (i % 3) as u8).collect();
+    let b: Vec<u8> = (0..280).map(|i| (10 + i % 4) as u8).collect();
+    let hunk = check(&mut Refiner::new(1), &text(&a), &text(&b), 0, xxh3_64);
+    assert!(!hunk.approx);
+    assert_eq!(edit_count(&hunk), 580);
+    // One shared line anchors two gaps, each without a common line.
+    let (mut a2, mut b2) = (a.clone(), b.clone());
+    a2.insert(150, 99);
+    b2.insert(100, 99);
+    let hunk = check(&mut Refiner::new(1), &text(&a2), &text(&b2), 0, xxh3_64);
+    assert!(!hunk.approx);
+    assert_eq!(edit_count(&hunk), 580);
+}
+
+#[test]
 fn small_reservation_grows_or_fails_with_budget_error() {
     let a = text(&[1, 2, 3]);
     let m = MemLines::new(&a);
