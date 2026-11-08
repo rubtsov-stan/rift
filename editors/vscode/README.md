@@ -1,17 +1,37 @@
-# Rift for VS Code
+# Rift: Diff Huge Files
 
 Compare two large text files without opening them in an editor. The Rift
 side panel lists the differing segments and the moved blocks. Selecting one
 opens VS Code's own diff editor on just that excerpt, so the native diff UI
 works on files far beyond what VS Code can load.
 
-![The Rift panel on a 1 GiB pair: a list of differences, then a two-pane diff of one of them](media/rift-demo.gif)
+![The Rift panel on a 1 GiB pair: a list of differences, then a two-pane diff of one of them](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/rift-demo.gif)
 
 The recording is a generated 1 GiB pair on an Apple M1. A
-[higher-quality MP4](media/rift-demo.mp4) and the
-[poster frame](media/rift-demo-poster.png) are in the repository.
+[higher-quality MP4](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/rift-demo.mp4) and the
+[poster frame](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/rift-demo-poster.png) are in the repository.
 
-## Use
+## Screenshots
+
+The shots below show a generated 1 GiB SQL dump pair of about 13.3 million lines each.
+
+![The Rift view with the summary row and the list of differing segments](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/screens/1-tree.png)
+
+The summary row gives line counts and the number of differences. Each segment lists its line ranges in both files.
+
+![A difference open in VS Code's diff editor, with the original line ranges in the tab title](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/screens/2-hunk.png)
+
+A segment opens in the native diff editor. The tab title carries the original line ranges.
+
+![The moved blocks group expanded, with one moved block open in the diff editor](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/screens/3-moves.png)
+
+Moved blocks list both ends and their size. Select one to see it beside its new position.
+
+![A failed scan with the offer to rerun with a larger memory budget](https://raw.githubusercontent.com/rubtsov-stan/rift/99e800445644bd6966237d754d8d8d08243cf66c/editors/vscode/media/screens/4-rerun.png)
+
+When a scan does not fit its budget, the error offers a rerun with a larger one.
+
+## Features
 
 Select two files in the Explorer and choose **Compare with Rift**, or run
 **Rift: Compare Files…** from the command palette.
@@ -66,10 +86,11 @@ macOS too.
 
 ## Requirements
 
-The extension for darwin-arm64, darwin-x64, linux-x64 and linux-arm64 bundles
-the matching `rift` binary, so there is nothing to install. On another
-platform, install `rift` yourself and set `rift.path`. Windows is not
-supported.
+- VS Code 1.100 or newer.
+- macOS or Linux. The extension for darwin-arm64, darwin-x64, linux-x64 and
+  linux-arm64 bundles the matching `rift` binary, so there is nothing to
+  install. On another platform, install `rift` yourself and set `rift.path`.
+  Windows is not supported.
 
 ## Privacy
 
@@ -77,6 +98,12 @@ Everything stays on your machine. The extension starts one `rift serve`
 process per window and talks to it over standard input and output. It makes
 no network connections and sends no telemetry. The files you compare are
 read by that process only, in fixed-size blocks, and are never copied.
+
+## Links
+
+- [Guide: Rift in VS Code](https://rubtsov-stan.github.io/rift/guide/vscode/)
+- [Rift home page](https://rubtsov-stan.github.io/rift/)
+- [Source and issues](https://github.com/rubtsov-stan/rift)
 
 ## Status
 
