@@ -106,7 +106,7 @@ pub fn validate<'h>(
 /// # Errors
 ///
 /// [`Error::InvalidScript`] on a bad script, `LineOutOfRange` or `Io` from
-/// the sources, `Io` from `out`.
+/// the sources, `Write` from `out`.
 pub fn apply<'h>(
     a: &impl LineAccess,
     b: &impl LineAccess,
@@ -123,7 +123,7 @@ pub fn apply<'h>(
             Edit::Delete { .. } => continue,
         };
         for_each_piece(&src, start..start + len, &mut buf, |p, _, _| {
-            out.write_all(p)
+            out.write_all(p).map_err(Error::Write)
         })?;
     }
     cursor.finish(a.line_count(), b.line_count())
@@ -138,7 +138,7 @@ pub(crate) fn for_each_piece(
     src: &(impl LineAccess + ?Sized),
     range: Range<LineNo>,
     buf: &mut LineBuf,
-    mut f: impl FnMut(&[u8], bool, bool) -> std::io::Result<()>,
+    mut f: impl FnMut(&[u8], bool, bool) -> Result<()>,
 ) -> Result<()> {
     let mut at = range.start;
     while at < range.end {
