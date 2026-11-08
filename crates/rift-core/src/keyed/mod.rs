@@ -18,10 +18,14 @@ pub mod fuzz_access {
 }
 
 use std::fmt;
+use std::io;
 use std::ops::Range;
 use std::str::FromStr;
 
-use crate::types::{Bytes, LineNo};
+use crate::budget::{Budget, Half, Reservation};
+use crate::error::Result;
+use crate::source::Source;
+use crate::types::{ByteOffset, Bytes, LineNo};
 
 /// Where the key of a record is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -129,6 +133,57 @@ pub struct RangedChange {
     pub b_range: Option<Range<u64>>,
 }
 
+/// Reads records back by their [`RangedChange`] ranges through one buffer
+/// of fixed size, held in the refine half, so a record of any length
+/// costs the same memory.
+#[derive(Debug)]
+pub struct RecordReader {
+    buf: Vec<u8>,
+    _res: Reservation,
+}
+
+impl RecordReader {
+    /// A reader with a `size`-byte buffer, at least one byte, reserved
+    /// from the refine half of `budget` until it is dropped.
+    ///
+    /// # Errors
+    ///
+    /// A budget error when the refine half cannot hold the buffer.
+    pub fn new(budget: &Budget, size: usize) -> Result<Self> {
+        let size = size.max(1);
+        let res = budget.try_reserve(Half::Refine, Bytes(size as u64))?;
+        Ok(Self {
+            buf: vec![0; size],
+            _res: res,
+        })
+    }
+
+    /// Hands the bytes of `range` in `src` to `out` in order, at most one
+    /// buffer at a time.
+    ///
+    /// # Errors
+    ///
+    /// `UnexpectedEof` when `src` ends inside `range`, or an I/O error from
+    /// `src` or `out`.
+    pub fn read<S: Source + ?Sized>(
+        &mut self,
+        src: &S,
+        range: Range<u64>,
+        mut out: impl FnMut(&[u8]) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let mut at = range.start;
+        while at < range.end {
+            let n =
+                usize::try_from(range.end - at).map_or(self.buf.len(), |n| n.min(self.buf.len()));
+            let chunk = &mut self.buf[..n];
+            src.read_exact_at(chunk, ByteOffset(at))?;
+            out(chunk)?;
+            at += n as u64;
+        }
+        Ok(())
+    }
+}
+
 /// One of the two files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -204,6 +259,7 @@ impl fmt::Display for Keys<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::{Budget, Half};
 
     fn parse(s: &str) -> Result<KeySpec, ParseKeySpecError> {
         s.parse()
@@ -240,6 +296,52 @@ mod tests {
             parse("csv:99999999999"),
             Err(ParseKeySpecError::Column(_))
         ));
+    }
+
+    #[test]
+    fn records_read_back_byte_exact_through_a_small_buffer() {
+        let a: &[u8] = b"id,v\n1,\"x\r\nlonger than the buffer\"\n2,y\n";
+        let b: &[u8] = b"id,v\n3,z\n1,X\n";
+        let budget = Budget::new(Bytes(1 << 20));
+        let mut reader = RecordReader::new(&budget, 4).unwrap();
+        let mut got = Vec::new();
+        let spec = parse("csv:id").unwrap();
+        compare_with_ranges(a, b, &spec, &budget, |c| {
+            for (src, range) in [(a, &c.a_range), (b, &c.b_range)] {
+                let Some(range) = range else { continue };
+                let mut record = Vec::new();
+                reader.read(src, range.clone(), |chunk| {
+                    assert!(chunk.len() <= 4, "{chunk:?}");
+                    record.extend_from_slice(chunk);
+                    Ok(())
+                })?;
+                got.push(record);
+            }
+            Ok(())
+        })
+        .unwrap();
+        got.sort();
+        let want: [&[u8]; 4] = [b"1,\"x\r\nlonger than the buffer\"", b"1,X", b"2,y", b"3,z"];
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn the_read_buffer_comes_from_the_refine_half() {
+        let budget = Budget::new(Bytes(1 << 20));
+        let free = budget.available(Half::Refine).0;
+        let reader = RecordReader::new(&budget, 1000).unwrap();
+        assert_eq!(budget.available(Half::Refine).0, free - 1000);
+        drop(reader);
+        assert_eq!(budget.available(Half::Refine).0, free);
+        assert!(RecordReader::new(&budget, 1 << 20).is_err());
+    }
+
+    #[test]
+    fn a_file_that_ends_inside_a_record_is_an_error() {
+        let budget = Budget::new(Bytes(1 << 20));
+        let mut reader = RecordReader::new(&budget, 4).unwrap();
+        let err = reader.read(&b"abc"[..], 1..9, |_| Ok(())).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[test]
