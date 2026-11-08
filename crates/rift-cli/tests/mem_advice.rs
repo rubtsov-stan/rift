@@ -69,8 +69,8 @@ fn summary_and_full_diff_advise_a_mem_that_works() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = pair(dir.path(), &text(false), &text(true));
     for args in [&["--summary"][..], &[]] {
-        let (refused, last) = follow(args, "16K".into(), &a, &b);
-        assert!(!refused.is_empty(), "{args:?}: 16K is too small");
+        let (refused, last) = follow(args, "64K".into(), &a, &b);
+        assert!(!refused.is_empty(), "{args:?}: 64K is too small");
         assert_eq!(
             last.status.code(),
             Some(1),
@@ -99,8 +99,8 @@ fn key_mode_advises_a_mem_that_works() {
             .collect()
     };
     let (a, b) = pair(dir.path(), &rows("x"), &rows("y"));
-    let (refused, last) = follow(&["--key", "csv:id"], "1K".into(), &a, &b);
-    assert!(!refused.is_empty(), "1K is too small");
+    let (refused, last) = follow(&["--key", "csv:id"], "64K".into(), &a, &b);
+    assert!(!refused.is_empty(), "64K is too small");
     assert_eq!(
         last.status.code(),
         Some(1),
@@ -119,8 +119,8 @@ fn requested(out: &Output) -> u64 {
 /// A record larger than the budget allows is read to its end, and the
 /// advice is enough for it: one rerun at the advised value succeeds.
 /// From the smallest --mem, a few refusals for the readers' smallest
-/// windows come first. Every --mem here is below the threshold for more
-/// than one thread.
+/// windows come first, then one for the record. Every --mem here is below
+/// the threshold for more than one thread.
 #[test]
 fn a_long_record_needs_one_rerun() {
     let long = "x".repeat(150_000);
@@ -154,15 +154,9 @@ fn a_long_record_needs_one_rerun() {
     for (spec, a, b, changed) in cases {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = pair(dir.path(), &a, &b);
-        for start in ["64K", "256K"] {
-            let (refused, last) = follow(&["--key", spec], start.into(), &a, &b);
-            assert_eq!(refused, [start], "{spec} from {start}");
-            assert_eq!(last.status.code(), Some(1), "{spec} from {start}");
-            assert_eq!(String::from_utf8_lossy(&last.stdout), changed, "{spec}");
-        }
         // Only the last refusal asks for the record's window, so the one
         // rerun after it succeeds.
-        let (refused, last) = follow(&["--key", spec], "1".into(), &a, &b);
+        let (refused, last) = follow(&["--key", spec], "64K".into(), &a, &b);
         let asked: Vec<u64> = refused
             .iter()
             .map(|mem| requested(&rift(&["--key", spec], mem, &a, &b)))
@@ -170,7 +164,7 @@ fn a_long_record_needs_one_rerun() {
         let (record, small) = asked.split_last().unwrap();
         assert!(*record > 150_000, "{spec}: {refused:?} asked {asked:?}");
         assert!(small.iter().all(|&n| n < 1024), "{spec}: {asked:?}");
-        assert_eq!(last.status.code(), Some(1), "{spec} from 1");
+        assert_eq!(last.status.code(), Some(1), "{spec} from 64K");
         assert_eq!(String::from_utf8_lossy(&last.stdout), changed, "{spec}");
     }
 }

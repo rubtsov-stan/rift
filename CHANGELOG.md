@@ -16,8 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--stats` prints the peak heap after an error as well, and
   `rift git-diff --stats` prints it after the diff or the error.
 
+### Changed
+
+- `--mem` and `rift git-diff --mem` are at least 64K. Below that, parsing
+  the command line alone took more heap than the limit. The reserve
+  leaves key mode less room at a small `--mem`, so it takes more passes:
+  at 1M a 128 MiB CSV pair takes 145 passes instead of 122 and runs about
+  19% longer.
+- With the reserve below, a run that only just fit a small limit can now
+  stop with a budget error. `--summary` of a 32 MiB SQL dump at
+  `--mem 1M` did on 8 threads. The `rerun with --mem N` it prints names a
+  limit that gets past that point; here 1089K, which gives the same
+  summary as before.
+
 ### Fixed
 
+- Key mode at a small `--mem` peaked up to 10 KiB over the limit: its
+  output buffers and other heap outside the budget went uncounted, and in
+  the other modes so did the thread pool's heap. Rift now keeps 48 KiB
+  plus 12 KiB per pool thread (one per core, or `RAYON_NUM_THREADS`) of
+  `--mem` out of the budget for that heap, and
+  `rerun with --mem N` adds it to its advice.
 - Output closed early, as in `rift a b | head`, no longer prints an error.
   Rift exits 141 without a message, the status a shell reports for
   `diff` killed by SIGPIPE.

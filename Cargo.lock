@@ -1728,6 +1728,7 @@ dependencies = [
  "libc",
  "memchr",
  "ratatui",
+ "rayon",
  "rift-core",
  "rift-gen",
  "rift-session",

@@ -45,7 +45,7 @@ cap mem-error 'rift --summary --mem 512K a.sql b.sql'
 limit=$(sed -n 's/.*rerun with --mem \([0-9A-Za-z]*\).*/\1/p' "$out/mem-error.out")
 # The named limit can fail at a later stage and name a higher one.
 cap mem-rerun "rift --summary --mem $limit a.sql b.sql"
-cap mem-ok 'rift --summary --mem 1M a.sql b.sql | tail -n 2'
+cap mem-ok 'rift --summary --mem 2M a.sql b.sql | tail -n 2'
 cap exit-codes 'rift a.sql a.sql > /dev/null; echo "identical: exit $?"
 rift a.sql b.sql > /dev/null; echo "differ: exit $?"
 rift a.sql missing.sql > /dev/null; echo "missing file: exit $?"'

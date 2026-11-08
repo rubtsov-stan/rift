@@ -121,8 +121,8 @@ and the terminal view, which then say that it was off. It cannot be
 combined with \fB\-\-key\fR.
 .TP
 \fB\-\-mem\fR \fISIZE\fR
-Sets the heap limit. The default is 256M. The smallest limit that works
-depends on the files. Below it, Rift exits with status 2 and a budget
+Sets the heap limit, at least 64K. The default is 256M. The smallest
+limit that works depends on the files. Below it, Rift exits with status 2 and a budget
 error that ends with a limit to rerun with, such as
 \fBrerun with \-\-mem 10333K\fR. It is not a lower bound, and a run at
 that limit can still stop at a later stage and name a higher one. In key
@@ -145,8 +145,13 @@ When standard output closes before Rift finishes, as in
 \fBrift a b | head\fR, Rift stops without a message and exits 141, the
 status a shell reports for \fBdiff\fR(1) killed by SIGPIPE.
 .SH MEMORY
-The heap stays at or under \fB\-\-mem\fR. Rift reserves each allocation
-on the data path from the budget before it makes it, and reads files with
+The heap stays at or under \fB\-\-mem\fR. Rift keeps 48 KiB of it, plus
+12 KiB per thread of its thread pool (one per core, or
+\fBRAYON_NUM_THREADS\fR), for the heap no budget counts: the command line,
+output buffers, messages and the thread pool. The rest is the budget,
+half for the map of the files and half for refinement. Rift reserves
+each allocation on the data path from the budget before it makes it, and
+reads files with
 \fBpread\fR(2) into fixed buffers. It does not map files into memory. The
 test suite checks the peak with a counting allocator.
 .PP

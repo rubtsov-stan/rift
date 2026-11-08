@@ -185,6 +185,14 @@ fn show_records_matches_the_files_on_a_generated_pair() {
             assert_eq!(record.as_bytes(), file[at - 1], "{change}");
         }
     }
-    assert_eq!(changes, String::from_utf8(plain.stdout).unwrap());
+    // The records' buffer comes out of the budget, so the keys can split
+    // into other passes, and each pass prints in its own order.
+    let sorted = |text: &str| {
+        let mut lines: Vec<&str> = text.lines().collect();
+        lines.sort_unstable();
+        lines.join("\n")
+    };
+    let plain = String::from_utf8(plain.stdout).unwrap();
+    assert_eq!(sorted(&changes), sorted(&plain));
     assert!(changes.lines().count() > 50, "{changes}");
 }
