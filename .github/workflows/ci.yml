@@ -19,6 +19,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ruby -ryaml -e 'ARGV.each { |f| YAML.parse_file(f) }' .github/workflows/*.yml .github/dependabot.yml
 
+  # Exceptions for the generated release.yml are in .github/actionlint.yaml.
+  # Run scripts are checked with the runner's shellcheck.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint 1.7.12
+        env:
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -eu
+          curl -sSfL -o "$RUNNER_TEMP/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "$SHA256  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+      - run: shellcheck --version
+      - run: '"$RUNNER_TEMP/actionlint" -color'
+
   # The protocol's schemas, the fixture and the mock server the VS Code
   # extension is tested against; uses the runner's Node, no packages.
   protocol-mock:
