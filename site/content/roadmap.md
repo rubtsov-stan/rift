@@ -8,14 +8,25 @@ h1 = "Roadmap"
 lead = "What is built but not released, and what comes after. Nothing here has a date."
 +++
 
+{% vscode(on=false) %}
 Rift 0.2.0 is the current release. This page lists work that is not in it.
 
 ## 0.3
 
-{{ vscode_item() }}
-
 - **`rift serve`.** Rift's protocol for editors: JSON-RPC 2.0 on standard input and output, with a size bound on every answer. It is on `main`.
 - **`rift git-diff`.** Git's external diff for files git calls binary, with Git LFS pointers resolved. It is on `main`: see the [git guide](@/guide/git.md).
+{% end %}
+
+{% vscode() %}
+## Shipped
+
+- **VS Code extension.** Compares two huge files from VS Code and opens each difference in VS Code's own diff editor. See the [VS Code guide](@/guide/vscode.md).
+- **`rift serve`.** Rift's protocol for editors: JSON-RPC 2.0 on standard input and output, with a size bound on every answer. The extension runs it; [Clients and protocol](@/design/clients.md) explains how it works.
+
+## 0.3
+
+- **`rift git-diff`.** Git's external diff for files git calls binary, with Git LFS pointers resolved. It is on `main`: see the [git guide](@/guide/git.md).
+{% end %}
 
 ## After 0.3
 
