@@ -1,0 +1,51 @@
+name: Release provenance
+
+# Adds the Sigstore bundle and the SLSA provenance of each release archive as
+# release assets (<archive>.sigstore.json, <archive>.intoto.jsonl), taken from
+# the attestations the Release workflow's build jobs already made. Called by
+# the Release workflow once the release exists; run by hand with a tag to fill
+# in a release that was published without them.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: Passed by the Release workflow, not read here
+        required: false
+        type: string
+      tag:
+        description: Release tag; defaults to the tag that triggered the run
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to add the provenance files to, e.g. v0.3.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  attach:
+    runs-on: ubuntu-22.04
+    permissions:
+      # contents: write uploads the assets; attestations: read fetches the bundles.
+      contents: write
+      attestations: read
+    steps:
+      # The workflow's own commit: the tag when called, the branch it was
+      # started from when run by hand, so the script is always the current one.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/archives"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" --pattern '*.tar.xz'
+          .github/scripts/provenance-assets.sh "$dir" "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" "$dir"/*.sigstore.json "$dir"/*.intoto.jsonl --repo "$GITHUB_REPOSITORY" --clobber

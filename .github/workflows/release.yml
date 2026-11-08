@@ -302,3 +302,15 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  custom-provenance:
+    needs:
+      - plan
+      - announce
+    uses: $/.github/workflows/provenance.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "attestations": "read"
+      "contents": "write"
