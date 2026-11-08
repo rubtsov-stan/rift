@@ -130,7 +130,9 @@ runs in the background.
   against `--mem` for `--summary`, the full diff and key mode. The script
   prints peak RSS but does not assert it.
 - Approximate regions are marked explicitly in every output: terminal
-  interface, unified diff and summary statistics.
+  interface, unified diff and summary statistics. The unified diff,
+  `--stats`, the terminal status line and `rift-mcp`'s hunk text also
+  give the reason in plain words.
 - Exit codes follow `diff`: 0 identical, 1 different, 2 error.
 
 ## Non-guarantees
@@ -151,10 +153,28 @@ runs in the background.
   samples, in the gaps unique lines leave (see "Shingle anchors"). A
   segment too large to refine in one job is resampled inside itself at a
   lower stratum and cut at the anchors found there, recursively. A piece
-  becomes Approx only when no stratum below its parent's gives it an
-  anchor, when Myers on a piece that fits passes its cost cutoff, or
-  when the job's own budget runs out, which turns the rest of the
-  segment into one replacement.
+  whose two sides share no line hash is replaced whole and is not
+  Approx: different hashes prove different lines, so the longest common
+  subsequence is empty and the replacement is minimal. The refiner sees
+  this in the sort it already runs for unique lines. A piece too large
+  for one job is checked in the read that samples it: the shorter side
+  goes first, its hashes are kept and set two bits each in a filter of
+  16 bits per hash, and a line of the other side whose bits are all set
+  is kept as a candidate. After the read, every first-side hash is
+  looked up among the sorted candidates; none found proves the sides
+  disjoint. The hashes, the filter and room for candidates, 1 in 32 lines
+  of the longer side, take about 10 bytes per line from the skeleton
+  half of the job's own budget, and are released before the anchor
+  search, so the search sees the budget it would without them. A shared
+  hash, or more candidates than the room, keeps the piece on the anchor
+  path. A piece becomes Approx, and its hunk
+  keeps the reason, when Myers on a piece that fits passes its cost
+  cutoff (`Cutoff`), when no anchor turns up among its samples and the
+  sides share a hash (`NoAnchor`), or when the job's own budget runs
+  out: for the hashes of the check, for the samples, for the edits,
+  which turns the rest of the segment into one replacement, or for
+  anything at all (`Budget`). A hunk with several keeps the last of
+  these, the one a larger `--mem` can fix.
 - Lines longer than the read buffer are hashed in streaming mode. The
   unified diff writes them whole, in pieces of 64 KiB; only the terminal
   view and the excerpts of `rift-mcp` and `rift serve` cut them for
@@ -260,7 +280,8 @@ confirmed byte by byte, `Differs` means an exact local diff is possible,
 and contiguous: walking them visits every A line of the segment once
 through `Equal` and `Delete`, every B line once through `Equal` and
 `Insert`, both in increasing order. Replaying them against A yields B. An
-`approx` hunk is still exact in that sense, only not minimal.
+`approx` hunk is still exact in that sense, only not minimal, and names
+its `ApproxReason`.
 
 **`DiffView`, `HunkState`, `Progress`** (`view`). What a front end sees:
 line counts, the segment list, `hunk(i)` returning `Ready`, `Pending` or
