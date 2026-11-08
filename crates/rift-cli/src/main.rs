@@ -82,6 +82,9 @@ fn main() -> ExitCode {
                 Some(advice) => eprintln!("rift: {err:#}; {advice}"),
                 None => eprintln!("rift: {err:#}"),
             }
+            if args.stats {
+                eprintln!("{}", summary::peak_heap(args.mem));
+            }
             ExitCode::from(2)
         }
     }

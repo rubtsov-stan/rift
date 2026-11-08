@@ -44,8 +44,9 @@ pub struct Args {
     #[arg(long, conflicts_with = "key")]
     pub no_moves: bool,
     /// After a diff, print peak heap, time and approximate regions to
-    /// standard error. With --summary it adds nothing: the summary prints
-    /// the heap and the time, and refines nothing.
+    /// standard error, and after an error the peak heap. With --summary it
+    /// adds nothing: the summary prints the heap and the time, and refines
+    /// nothing.
     #[arg(long)]
     pub stats: bool,
     /// Compare records by key instead of lines, regardless of row order:
@@ -91,6 +92,9 @@ pub struct GitDiffArgs {
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
     #[arg(long, default_value = "256M", value_parser = Bytes::parse_budget)]
     pub mem: Bytes,
+    /// After the diff or an error, print the peak heap to standard error.
+    #[arg(long)]
+    pub stats: bool,
     /// `path old-file old-hex old-mode new-file new-hex new-mode`, and for a
     /// rename or copy `new-path` and the rename header.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

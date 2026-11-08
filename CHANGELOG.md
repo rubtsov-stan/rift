@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind `  - `, B's behind `  + `, with the prefix on each line of a
   record that spans lines. Rift reads the records back from the files
   through a 64 KiB buffer taken from the `--mem` budget.
+- `--stats` prints the peak heap after an error as well, and
+  `rift git-diff --stats` prints it after the diff or the error.
 
 ### Fixed
 

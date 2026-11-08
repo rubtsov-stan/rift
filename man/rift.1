@@ -35,7 +35,7 @@ Browse the diff in the terminal instead of printing it
 Skip the search for moved blocks. The diff is the same
 .TP
 \fB\-\-stats\fR
-After a diff, print peak heap, time and approximate regions to standard error. With \-\-summary it adds nothing: the summary prints the heap and the time, and refines nothing
+After a diff, print peak heap, time and approximate regions to standard error, and after an error the peak heap. With \-\-summary it adds nothing: the summary prints the heap and the time, and refines nothing
 .TP
 \fB\-\-key\fR \fI<SPEC>\fR
 Compare records by key instead of lines, regardless of row order: csv:N (column, from 1), csv:NAME (header), json:PATH (dotted field) or copy:NAME (COPY column of a Postgres dump)
@@ -64,7 +64,7 @@ Writes a unified diff to standard output, as \fBdiff \-u\fR does.
 Serves Rift's protocol to an editor or another program; see SERVE.
 Added in 0.3.
 .TP
-\fBrift git\-diff\fR [\fB\-\-mem\fR \fISIZE\fR] \fIpath old\-file old\-hex old\-mode new\-file new\-hex new\-mode\fR
+\fBrift git\-diff\fR [\fB\-\-mem\fR \fISIZE\fR] [\fB\-\-stats\fR] \fIpath old\-file old\-hex old\-mode new\-file new\-hex new\-mode\fR
 The command git runs for an external diff; see GIT. Added in 0.3.
 .IP
 \fBserve\fR and \fBgit\-diff\fR are subcommands, so a file of either name
@@ -166,8 +166,9 @@ the fields that changed, is planned for 0.4.
 After a diff, prints to standard error the peak heap, the time, the
 number of approximate regions and the moved blocks. With \fB\-\-key\fR it
 prints the peak heap, the time, the number of passes over the files and
-the number of records in each file. With \fB\-\-summary\fR it adds
-nothing, since the summary already prints the peak heap and the time.
+the number of records in each file. After an error it prints the peak
+heap. With \fB\-\-summary\fR it adds nothing, since the summary already
+prints the peak heap and the time.
 .TP
 \fB\-\-no\-moves\fR
 Skips the search for moved blocks. The unified diff is byte for byte the
@@ -253,7 +254,8 @@ status as a failure and stops with status 128. It also exits 0, without a
 message, when git's pager quits before the diff ends. The status of
 \fBgit diff\fR is git's own: 0, or 1 with \fB\-\-exit\-code\fR when there
 are differences. Rift exits 2 on an error. Options such as
-\fB\-\-mem\fR go before the arguments git adds.
+\fB\-\-mem\fR go before the arguments git adds. \fB\-\-stats\fR prints
+the peak heap to standard error when the diff or the error is done.
 .PP
 To use it for large files only, name them in \fB.gitattributes\fR and
 define the driver. Git runs the command through the shell, so a quoted
