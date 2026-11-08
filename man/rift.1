@@ -171,6 +171,10 @@ The files differ.
 An error: an unreadable file, a budget too small, a duplicate key, an
 invalid option or \fB\-i\fR in a build without the terminal view.
 The message goes to standard error.
+.PP
+When standard output closes before Rift finishes, as in
+\fBrift a b | head\fR, Rift stops without a message and exits 141, the
+status a shell reports for \fBdiff\fR(1) killed by SIGPIPE.
 .SH MEMORY
 The heap stays at or under \fB\-\-mem\fR. Rift reserves each allocation
 on the data path from the budget before it makes it, and reads files with
@@ -212,7 +216,8 @@ rename lines. Rift prints a unified diff with git's headers
 (\fBdiff \-\-git\fR, mode lines, \fBindex\fR, \fB\-\-\- a/\fIpath\fR,
 \fB+++ b/\fIpath\fR, and \fB/dev/null\fR for an added or deleted file)
 and exits 0 whether or not the files differ, because git treats any other
-status as a failure and stops with status 128. The status of
+status as a failure and stops with status 128. It also exits 0, without a
+message, when git's pager quits before the diff ends. The status of
 \fBgit diff\fR is git's own: 0, or 1 with \fB\-\-exit\-code\fR when there
 are differences. Rift exits 2 on an error. Options such as
 \fB\-\-mem\fR go before the arguments git adds.

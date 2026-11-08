@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Output closed early, as in `rift a b | head`, no longer prints an error.
+  Rift exits 141 without a message, the status a shell reports for
+  `diff` killed by SIGPIPE.
+- `rift git-diff` exits 0 without a message when git's pager quits early,
+  so `git diff` no longer reports "external diff died".
+- A failed write to standard output says "write failed", not "read failed".
+
 ## [0.3.0] - 2026-11-08
 
 ### Added
