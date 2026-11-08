@@ -36,8 +36,17 @@
    gh attestation verify <archive> --bundle <archive>.sigstore.json --repo rubtsov-stan/rift
    ```
 
-   If a release lacks the provenance files, run the `Release provenance`
-   workflow with its tag.
+   0.3.1 is the first release on this flow: the `custom-deb`,
+   `custom-vscode` and `custom-provenance` jobs have not run on a real tag
+   before it. They run after the release is published, so a failure leaves
+   the release without some of its files, not broken. Each can be run by
+   hand against the tag:
+
+   ```sh
+   gh workflow run deb.yml -f tag=vX.Y.Z
+   gh workflow run vscode.yml -f tag=vX.Y.Z
+   gh workflow run provenance.yml -f tag=vX.Y.Z
+   ```
 
 5. If the `host` job still gets 403, push the release branch at the tagged
    commit and rerun the failed jobs:
