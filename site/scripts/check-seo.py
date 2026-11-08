@@ -4,10 +4,9 @@
     site/scripts/check-seo.py [PUBLIC_DIR]     default site/public
 
 Every page needs a title under 60 characters, a description under 155, one h1,
-a canonical link and an alt text on every image. Unless RIFT_SITE_VSCODE=1,
-nothing about VS Code may appear in a page or in the sitemap.
+a canonical link and an alt text on every image.
 """
-import glob, html, os, re, sys
+import glob, html, os, sys
 from html.parser import HTMLParser
 
 public = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public')
@@ -31,12 +30,9 @@ class Page(HTMLParser):
 
 errors = []
 pages = sorted(glob.glob(os.path.join(public, '**', '*.html'), recursive=True))
-vscode = os.environ.get('RIFT_SITE_VSCODE') == '1'
 for f in pages:
     name = os.path.relpath(f, public)
     raw = open(f, encoding='utf-8').read()
-    if not vscode and re.search(r'vs ?code', raw, re.I):
-        errors.append(f'{name}: mentions VS Code while the flag is off')
     if name == '404.html':
         continue
     p = Page(); p.feed(raw)
@@ -45,9 +41,6 @@ for f in pages:
     if p.h1 != 1: errors.append(f'{name}: {p.h1} h1 elements')
     if not p.canonical: errors.append(f'{name}: no canonical link')
     if p.noalt: errors.append(f'{name}: {p.noalt} images without alt')
-sitemap = open(os.path.join(public, 'sitemap.xml'), encoding='utf-8').read()
-if not vscode and re.search(r'vs ?code', sitemap, re.I):
-    errors.append('sitemap.xml mentions VS Code while the flag is off')
 for e in errors: print(e, file=sys.stderr)
 print(f'{len(pages)} pages checked, {len(errors)} problems')
 sys.exit(1 if errors else 0)

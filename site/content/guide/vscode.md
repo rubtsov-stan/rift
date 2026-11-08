@@ -2,7 +2,6 @@
 title = "Rift for VS Code: compare two huge files in the editor"
 description = "Install the Rift extension, compare two large files from VS Code, open any difference in the native diff editor, and fix memory refusals."
 weight = 10
-draft = true
 [extra]
 nav = "VS Code"
 h1 = "Rift for VS Code"

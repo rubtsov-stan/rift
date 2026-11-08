@@ -26,7 +26,6 @@
 {% endblock head %}
 {% block main %}
 {%- set stats = load_data(path="data/stats.json") -%}
-{%- set vscode = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
 {%- set meta = load_data(path="data/captures/meta.txt", format="plain") | trim | split(pat="\n") -%}
 <div class="split">
 <svg class="fault" viewBox="0 0 40 72" preserveAspectRatio="none" aria-hidden="true"><path class="fr" d="M16 0 L2 28 L22 44 L8 72"/><path class="fg" d="M28 0 L14 28 L34 44 L20 72"/></svg>
@@ -60,7 +59,7 @@
 {%- set hunks = load_data(path="data/captures/sql-hunks.txt", format="plain") | trim -%}
 {%- set nsum = load_data(path="data/captures/sql-summary.out", format="plain") | trim | split(pat="\n") | length -%}
 <section id="what-it-does"><h2 class="cap-h">What it does</h2>
-<p class="prose-lite">{% if vscode %}Five{% else %}Four{% endif %} ways to run Rift. Every output on this page ran on files made by <code>rift-gen --seed 7</code>, and each box says where it shows selected lines of a longer output.</p>
+<p class="prose-lite">Five ways to run Rift. Every output on this page ran on files made by <code>rift-gen --seed 7</code>, and each box says where it shows selected lines of a longer output.</p>
 <h3 class="cap">Plain diff and --summary <span>unified diff, then the counts</span></h3>
 <p class="prose-lite"><code>rift a b</code> writes a unified diff that <code>patch</code> applies to the first file to get the second. <code>--summary</code> counts first, so you know how much differs before you write a diff.</p>
 {{ m::term(name="land-diff", kind="diff", title="the first hunk of " ~ hunks, caption="One hunk of the full diff. Timestamps dropped, lines cut at 70 columns.") }}
@@ -78,14 +77,12 @@
 <p class="prose-lite"><code>rift-mcp</code> lets an MCP client, such as an editor or a chat app, ask about the diff of two huge files without loading them. It has three tools, <code>summary</code>, <code>hunks_at</code> and <code>next_difference</code>, and every answer has a size limit.</p>
 {{ m::term(name="mcp-summary", title="rift-mcp, one tools/call", caption="Captured over standard input and output after the initialize handshake. The call is shown without its jsonrpc and id fields. The answer is cut: its text copy, the byte counts and all but two of the first 20 ranges are left out. rift-mcp builds its diff with a 64 MiB budget unless the call sets <code>mem</code>, so the counts differ from the CLI's.") }}
 <p class="note">Guide: <a href="{{ get_url(path='guide/mcp/') | safe }}">MCP server</a>.</p></section>
-{%- if vscode %}
 <section id="vscode"><h3 class="cap">VS Code <span>the extension</span></h3>
 <p class="prose-lite">Compare two huge files from VS Code and open any difference in VS Code's own diff editor.</p>
 {#- A video poster downloads with the page, so the demo is a lazy GIF instead. -#}
 <figure class="media" style="--ar:800/474"><img src="{{ get_url(path='vscode-demo.gif') | safe }}" width="800" height="474" alt="The Rift view in VS Code listing the differences of a 1 GiB pair, then one difference open in the diff editor" loading="lazy" decoding="async"><figcaption>A recording on a 1 GiB pair from <code>rift-gen --seed 7</code>, on an Apple M1. Also as an <a href="{{ get_url(path='vscode-demo.mp4') | safe }}">MP4</a>.</figcaption></figure>
 {{ m::vscode_install() }}
 <p class="note">Guide: <a href="{{ get_url(path='guide/vscode/') | safe }}">the VS Code extension</a>.</p></section>
-{%- endif %}
 <section class="plate band" id="scale"><h2>The file grows. The heap does not.</h2>
 <div class="ledhead"><span>Input size, to scale up to 2 GiB</span><span>Peak heap against the 256 MiB limit</span></div>
 {{ m::ledger() }}

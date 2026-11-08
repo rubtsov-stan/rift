@@ -1,5 +1,4 @@
 {%- set stats = load_data(path="data/stats.json") -%}
-{%- set vscode = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
 {%- if page -%}{%- set title = page.title -%}{%- set description = page.description | default(value=config.description) -%}
 {%- elif section -%}{%- set title = section.title -%}{%- set description = section.description | default(value=config.description) -%}
 {%- else -%}{%- set title = "Page not found: Rift" -%}{%- set description = config.description -%}{%- endif -%}

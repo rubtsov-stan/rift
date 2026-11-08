@@ -1,6 +1,5 @@
-{#- The diagram on design/clients. The client of rift serve is named only in builds with RIFT_SITE_VSCODE=1. -#}
-{%- set vscode = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
-{%- if vscode %}{% set c1 = "VS Code" %}{% set c2 = "extension" %}{% else %}{% set c1 = "editor" %}{% set c2 = "client" %}{% endif -%}
+{#- The diagram on design/clients. -#}
+{%- set c1 = "VS Code" %}{% set c2 = "extension" -%}
 <figure class="diagram">
 <svg viewBox="0 0 720 280" role="img" aria-labelledby="cl-t cl-d">
 <title id="cl-t">Two front ends over one session layer</title>

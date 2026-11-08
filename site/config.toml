@@ -22,6 +22,5 @@ repo_url = "https://github.com/rubtsov-stan/rift"
 # browser for stars.
 star_threshold = 50
 download_threshold = 500
-# The extension's id on the Marketplace and Open VSX. Pages that use it
-# appear only in builds with RIFT_SITE_VSCODE=1.
+# The extension's id on the Marketplace and Open VSX.
 vscode_ext = "rubtsov-stan.rift-diff"

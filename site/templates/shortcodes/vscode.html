@@ -1,4 +1,0 @@
-{#- Body shortcode: the body appears only when RIFT_SITE_VSCODE=1 matches `on` (default true). -#}
-{%- set flag = get_env(name="RIFT_SITE_VSCODE", default="0") == "1" -%}
-{%- set want = on | default(value=true) -%}
-{%- if flag == want %}{{ body | markdown | safe }}{% endif -%}

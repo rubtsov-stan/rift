@@ -5,8 +5,7 @@
 #
 # Fetches the GitHub numbers (keeps the last fetch if gh is unavailable),
 # computes the benchmark data, renders the man page, then runs Zola.
-# ZOLA names the binary, default zola. RIFT_SITE_VSCODE=1 includes the
-# VS Code pages and section, which stay out of the build until the 0.3 release.
+# ZOLA names the binary, default zola.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -25,22 +24,16 @@ for a in "$@"; do
   prev=$a
 done
 
-drafts=
-[ "${RIFT_SITE_VSCODE:-0}" = 1 ] && drafts=--drafts
-# shellcheck disable=SC2086
-"${ZOLA:-zola}" build $drafts "$@"
+"${ZOLA:-zola}" build "$@"
 
 # The extension demo and screenshots have one committed copy, in
-# editors/vscode/media. Only a build that links them (RIFT_SITE_VSCODE=1)
-# gets them.
-if [ "${RIFT_SITE_VSCODE:-0}" = 1 ]; then
-  media=../editors/vscode/media
-  for f in mp4 gif; do
-    [ -f "$media/rift-demo.$f" ] && cp "$media/rift-demo.$f" "$out/vscode-demo.$f"
-  done
-  if [ -d "$media/screens" ]; then
-    mkdir -p "$out/vscode-screens"
-    cp "$media"/screens/*.png "$out/vscode-screens/"
-  fi
+# editors/vscode/media.
+media=../editors/vscode/media
+for f in mp4 gif; do
+  [ -f "$media/rift-demo.$f" ] && cp "$media/rift-demo.$f" "$out/vscode-demo.$f"
+done
+if [ -d "$media/screens" ]; then
+  mkdir -p "$out/vscode-screens"
+  cp "$media"/screens/*.png "$out/vscode-screens/"
 fi
 exit 0

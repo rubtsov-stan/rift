@@ -9,13 +9,7 @@ lead = "A client in another process asks about a diff many times while you read 
 summary = "rift serve, the session layer it shares with rift-mcp, excerpts instead of files, and the bound on every answer."
 +++
 
-{% vscode(on=false) %}
-`rift serve` shipped in 0.3. `rift-mcp` shipped in 0.2. The contract is [docs/protocol.md](https://github.com/rubtsov-stan/rift/blob/main/docs/protocol.md), with a JSON schema per message under `docs/protocol/`.
-{% end %}
-
-{% vscode() %}
 `rift serve` shipped in 0.3, with the [VS Code extension](@/guide/vscode.md) as its first client. `rift-mcp` shipped in 0.2. The contract is [docs/protocol.md](https://github.com/rubtsov-stan/rift/blob/main/docs/protocol.md), with a JSON schema per message under `docs/protocol/`.
-{% end %}
 
 ## Why rift serve exists
 
@@ -35,9 +29,7 @@ A pair counts as unchanged while both files keep their device, inode, length and
 
 The two front ends use the layer differently. `rift serve` calls `Sessions::open`, which starts the scan on a thread and returns at once, and never drops a session for being idle. `rift-mcp` calls `Sessions::get`, which blocks until the scan is done, and keeps its own limits: 64 MiB per diff unless the call asks for more, at most 256 MiB per diff and 512 MiB in all, and diffs idle for five minutes dropped. Its MCP library runs on tokio, so it calls the layer from `spawn_blocking`.
 
-{% vscode() %}
 The VS Code extension is a `rift serve` client. It starts one server per window, lists segments and moved blocks in a tree, and opens VS Code's own diff editor on the two excerpts of a segment.
-{% end %}
 
 Sources: `crates/rift-session/src/lib.rs`, crate docs; `sessions.rs`, `Sessions::open`, `Sessions::get`, `Limits::default`; `file.rs`, `FileId`, `FileSource::open`; `crates/rift-mcp/src/lib.rs`, `Server::session`; `crates/rift-mcp/src/main.rs`, `REAP_EVERY`.
 
