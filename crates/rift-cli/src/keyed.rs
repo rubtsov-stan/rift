@@ -30,11 +30,18 @@ pub fn run(
     let start = Instant::now();
     let mut out = BufWriter::new(io::stdout().lock());
     let mut printed = 0u64;
+    // The core reports an error from the callback as a failed read; keep
+    // the real one to report it as a failed write.
+    let mut write_error = None;
     let result = compare(a, b, spec, &Budget::new(mem), |c| {
         printed += 1;
-        write_change(&mut out, c)
+        write_change(&mut out, c).inspect_err(|e| {
+            write_error = Some(io::Error::new(e.kind(), e.to_string()));
+        })
     });
-    out.flush()?;
+    if let Some(e) = write_error.or(out.flush().err()) {
+        return Err(Error::Write(e).into());
+    }
     let report = result.map_err(|e| incomplete(with_path(e, paths), printed))?;
     if stats {
         eprintln!("{}", peak_heap(mem));

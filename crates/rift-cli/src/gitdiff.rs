@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
+use rift_core::Error;
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options};
 use rift_diff::GitDiffArgs;
 
@@ -185,16 +186,20 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
         },
     };
     let mut out = io::stdout().lock();
-    out.write_all(&call.header())?;
+    out.write_all(&call.header()).map_err(Error::Write)?;
     diff.write_unified(&opts, &mut out)?;
-    out.flush()?;
+    out.flush().map_err(Error::Write)?;
     Ok(())
 }
 
 /// Runs `rift git-diff` with `cli`.
+///
+/// A reader that quit early (git's pager) is not a failure: any nonzero
+/// exit makes git report a dead external diff, so it exits 0 silently.
 pub fn main(cli: &GitDiffArgs) -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(err) if crate::broken_pipe(&err) => ExitCode::SUCCESS,
         Err(err) => {
             match crate::mem_advice(&err, cli.mem) {
                 Some(advice) => eprintln!("rift: {err:#}; {advice}"),
