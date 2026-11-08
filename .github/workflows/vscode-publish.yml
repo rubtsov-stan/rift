@@ -2,7 +2,8 @@ name: VS Code publish
 
 # Publishes the four VSIX packages attached to a release to the Marketplace
 # and Open VSX. Manual only: a published version cannot be replaced, so the
-# owner starts it after checking the release page.
+# owner starts it after checking the release page. --skip-duplicate lets a
+# rerun after a partial failure publish the targets still missing.
 on:
   workflow_dispatch:
     inputs:
@@ -45,11 +46,11 @@ jobs:
         working-directory: editors/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx vsce publish --packagePath "$RUNNER_TEMP"/vsix/*.vsix
+        run: npx vsce publish --skip-duplicate --packagePath "$RUNNER_TEMP"/vsix/*.vsix
       - name: Open VSX
         working-directory: editors/vscode
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           set -eu
-          for f in "$RUNNER_TEMP"/vsix/*.vsix; do npx ovsx publish "$f"; done
+          for f in "$RUNNER_TEMP"/vsix/*.vsix; do npx ovsx publish --skip-duplicate "$f"; done
