@@ -88,12 +88,12 @@ async function launch({ work, names, riftBin }, { theme = 'Default Dark Modern',
     }),
   );
 
-  // The native context menu of macOS cannot be driven, so the demo selects the two
-  // files in the Explorer and runs the command with both paths from a keybinding.
+  // The native context menu of macOS cannot be driven, so the demo runs the command
+  // with both paths from a keybinding. Clicking a file would open it, and VS Code
+  // refuses to show a 1 GiB file.
   fs.writeFileSync(
     path.join(userData, 'User', 'keybindings.json'),
-    JSON.stringify([{ key: 'f9', command: 'rift.compareFiles', args: { a: path.join(work, names[0]), b: path.join(work, names[1]) } },
-      { key: 'f10', command: 'workbench.action.closeAllEditors' }]),
+    JSON.stringify([{ key: 'f9', command: 'rift.compareFiles', args: { a: path.join(work, names[0]), b: path.join(work, names[1]) } }]),
   );
 
   const executablePath = await downloadAndUnzipVSCode();
@@ -123,21 +123,20 @@ async function launch({ work, names, riftBin }, { theme = 'Default Dark Modern',
     w.center();
   });
   const pause = (ms) => page.waitForTimeout(ms);
-  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   const row = (name) => page.locator(`.monaco-list-row[aria-label="${name}"]`).first();
-  return { app, page, launched, pause, mod, row };
+  return { app, page, launched, pause, row };
 }
 
 async function record(env) {
   const { names, work } = env;
-  const { app, page, launched, pause, mod, row } = await launch(env, { video: true });
+  const { app, page, launched, pause, row } = await launch(env, { video: true });
 
   await row(names[0]).waitFor({ timeout: 60000 });
   await pause(1500);
+  // The title bar names the Extension Development Host; the cut below drops it.
+  const top = Math.ceil(await page.evaluate(() => document.querySelector('.part.titlebar')?.getBoundingClientRect().bottom ?? 0));
   // The first seconds of the recording are an empty window; the cut skips them.
   const trim = Math.max(0, (Date.now() - launched) / 1000 - 0.3);
-  await row(names[0]).click();
-  await row(names[1]).click({ modifiers: [mod] });
   await pause(800);
   await pause(800);
   await page.keyboard.press('F9');
@@ -183,8 +182,8 @@ async function record(env) {
   const webm = await video.path();
 
   fs.mkdirSync(opts.out, { recursive: true });
-  // The capture has a few grey rows below the window; cut them and restore 1280x800.
-  const fit = 'crop=1280:794:0:0,scale=1280:800';
+  // The capture has a few grey rows below the window and the title bar above it; cut both.
+  const fit = `crop=1280:${794 - top}:0:${top}`;
   const mp4 = path.join(opts.out, 'rift-demo.mp4');
   sh('ffmpeg', ['-y', '-v', 'error', '-ss', String(trim), '-i', webm, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '26', '-vf', fit, '-movflags', '+faststart', mp4]);
 
@@ -220,12 +219,8 @@ async function shots(env) {
     const compare = async (s) => {
       await s.row(names[0]).waitFor({ timeout: 60000 });
       await s.pause(1500);
-      await s.row(names[0]).click();
-      await s.row(names[1]).click({ modifiers: [s.mod] });
       await s.page.keyboard.press('F9');
       await s.pause(1500);
-      // Selecting the pair opened file A, which VS Code refuses to show at 1 GiB.
-      await s.page.keyboard.press('F10');
       await s.page.locator('.activitybar [aria-label^="Rift"]').first().click();
     };
     // The sash sits at x=350; wide enough for the summary row, but the diff goes inline.
