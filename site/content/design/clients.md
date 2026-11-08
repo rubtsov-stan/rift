@@ -10,7 +10,7 @@ summary = "rift serve, the session layer it shares with rift-mcp, excerpts inste
 +++
 
 {% vscode(on=false) %}
-`rift serve` is on `main` and not released yet; it is planned for 0.3. `rift-mcp` shipped in 0.2. The contract is [docs/protocol.md](https://github.com/rubtsov-stan/rift/blob/main/docs/protocol.md), with a JSON schema per message under `docs/protocol/`.
+`rift serve` shipped in 0.3. `rift-mcp` shipped in 0.2. The contract is [docs/protocol.md](https://github.com/rubtsov-stan/rift/blob/main/docs/protocol.md), with a JSON schema per message under `docs/protocol/`.
 {% end %}
 
 {% vscode() %}

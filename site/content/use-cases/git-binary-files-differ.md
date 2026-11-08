@@ -9,7 +9,7 @@ lead = "The file is plain text. Git still refuses to show a diff once it passes 
 summary = "Give git a diff for large text files with rift git-diff."
 +++
 
-**Not in v0.2.0.** `rift git-diff` is on `main` and planned for 0.3. To use it now, build from source: `cargo install --git https://github.com/rubtsov-stan/rift rift-diff`.
+`rift git-diff` ships in 0.3.0.
 
 Git decides a file is binary when it is larger than 512 MiB. It prints one line and no diff. This is a 640 MiB pair of generated SQL dumps:
 

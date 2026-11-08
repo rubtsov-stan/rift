@@ -35,4 +35,4 @@ A run in [key mode](@/guide/key-mode.md) can stop with status 2 after it printed
 
 ## Git
 
-`rift git-diff`, not in v0.2.0 and planned for 0.3, is the one exception: it exits 0 whether or not the files differ, because git treats any other status as a failure. See [git integration](@/guide/git.md).
+`rift git-diff`, new in 0.3.0, is the one exception: it exits 0 whether or not the files differ, because git treats any other status as a failure. See [git integration](@/guide/git.md).

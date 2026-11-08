@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-08
+
 ### Added
 
 - `rift git-diff`, the command git runs for an external diff. It takes
@@ -150,6 +152,7 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rubtsov-stan/rift/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rubtsov-stan/rift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rubtsov-stan/rift/releases/tag/v0.1.0
