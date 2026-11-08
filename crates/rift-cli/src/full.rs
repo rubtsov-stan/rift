@@ -12,7 +12,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::Context;
 use rift_core::diff::{Config, Diff};
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict};
-use rift_core::{ApproxReason, Budget, Bytes};
+use rift_core::{ApproxReason, Bytes};
 
 use crate::source::FileSource;
 use crate::summary::{peak_heap, print_moves};
@@ -27,12 +27,12 @@ pub struct Files<'p> {
     pub moves: bool,
 }
 
-fn threads() -> usize {
+pub fn threads() -> usize {
     thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
 pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
-    let budget = Budget::new(mem);
+    let budget = crate::budget(mem);
     Ok(Diff::with_config(
         Arc::clone(&files.a),
         Arc::clone(&files.b),

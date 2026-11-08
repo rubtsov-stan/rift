@@ -219,7 +219,7 @@ fn git_sees_exit_zero_on_differences_and_still_reports_them() {
 #[test]
 fn a_budget_too_small_fails_the_git_diff() {
     need_git!();
-    let repo = Repo::new("--mem 1K");
+    let repo = Repo::new("--mem 64K");
     repo.write("m.txt", lines(5000, None));
     repo.commit("base");
     repo.write("m.txt", lines(5000, Some(100)));

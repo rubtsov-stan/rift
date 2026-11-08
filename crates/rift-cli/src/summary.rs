@@ -7,7 +7,7 @@ use std::time::Instant;
 use rift_core::index::IndexedLines;
 use rift_core::moves::Moves;
 use rift_core::skeleton::build_pair;
-use rift_core::{Budget, Bytes, Half, SegmentStatus, Source, alloc};
+use rift_core::{Bytes, Half, SegmentStatus, Source, alloc};
 
 /// Differing ranges, and moved blocks, listed before the rest are only
 /// counted.
@@ -24,7 +24,7 @@ pub fn run<A: Source, B: Source>(
     find_moves: bool,
 ) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
-    let budget = Budget::new(mem);
+    let budget = crate::budget(mem);
     let (scan_a, scan_b, map) = build_pair(a, b, &budget)?;
     let off_chain = map.off_chain();
     let moves = if find_moves {

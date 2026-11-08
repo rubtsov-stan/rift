@@ -79,10 +79,25 @@ The skeleton keeps to its half by choosing the stratum adaptively. Refinements
 take memory through a semaphore counted in bytes. A region whose estimated
 working set does not fit is split at a lower stratum, or marked approximate.
 
+`B` is `--mem` less a process reserve `R`: 48 KiB plus 12 KiB per thread
+of rayon's global pool, counted by rayon's rule (the cores, or
+`RAYON_NUM_THREADS`) without starting the pool (`RESERVE` and
+`pool_threads` in `rift-cli`'s `main.rs`). It pays for the heap that no
+reservation covers: parsing the command line, standard output's buffers,
+error and advice messages, thread records, and rayon's global pool, the
+one part that grows with the thread count. A trace of every allocation
+at small budgets in every mode, refusals and error exits included, found
+at most 30 KiB outside the pool and 7.5 KiB per pool thread (macOS, 1 to
+32 threads); `R` is 1.5 times that, rounded up. `--mem` is at least 64K,
+since parsing the command line takes about 28 KiB before any budget
+exists. The advice `rerun with --mem N` adds `R` to what the halves
+need. `rift serve` keeps its own 8 MiB for the protocol out of
+`--max-total-mem` and takes no further reserve per session.
+
 The budget covers the heap. Files are read through `pread` into fixed-size
 buffers, never through `mmap`, so resident memory does not grow with file
 pages. A counting global allocator tracks current and peak heap, and tests
-assert the peak against `--mem`.
+assert the peak of the whole process against `--mem`.
 
 ## Architecture
 

@@ -183,11 +183,20 @@ fn summary_and_stats_list_the_blocks() {
 
 #[test]
 fn summary_says_when_the_budget_skips_moves() {
-    // Small enough for the skeleton half of 256 KiB; the refine half has
-    // no room for the comparison buffers next to the two readers.
+    // The first limit that the advice leads to fits the skeleton; the
+    // refine half, no larger, has no room for the comparison buffers next
+    // to the two readers.
     let p = shuffled_of(64 << 10, Rows::Csv, 7);
     let (_dir, a, b) = files(&p);
-    let out = rift(&["--summary", "--mem", "512K"], &a, &b);
+    let mut mem = "64K".to_owned();
+    let out = loop {
+        let out = rift(&["--summary", "--mem", &mem], &a, &b);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        match stderr.split_once("; rerun with --mem ") {
+            Some((_, next)) => mem = next.trim_end().to_owned(),
+            None => break out,
+        }
+    };
     let text = String::from_utf8(out.stdout).unwrap();
     assert_eq!(out.status.code(), Some(1), "{text}");
     assert!(

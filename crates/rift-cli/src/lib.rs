@@ -6,6 +6,28 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use rift_core::Bytes;
 
+/// The smallest `--mem`. Parsing the command line already takes about
+/// 28 KiB of heap, before any budget exists, so a smaller limit could not
+/// be kept.
+pub const MIN_MEM: Bytes = Bytes(64 << 10);
+
+/// Parses `--mem`: a size as [`Bytes::parse_budget`] reads it, at least
+/// [`MIN_MEM`].
+///
+/// # Errors
+///
+/// The parse error, or the value is below [`MIN_MEM`].
+pub fn parse_mem(s: &str) -> Result<Bytes, String> {
+    let mem = Bytes::parse_budget(s).map_err(|e| e.to_string())?;
+    if mem < MIN_MEM {
+        return Err(format!(
+            "size {s:?} must be at least {}",
+            MIN_MEM.to_mem_arg()
+        ));
+    }
+    Ok(mem)
+}
+
 /// Diff large text files under a hard memory limit.
 #[derive(Debug, Parser)]
 #[allow(
@@ -34,8 +56,9 @@ pub struct Args {
     /// diff.
     #[arg(long)]
     pub summary: bool,
-    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
-    #[arg(long, default_value = "256M", value_parser = rift_core::Bytes::parse_budget)]
+    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),
+    /// at least 64K.
+    #[arg(long, default_value = "256M", value_parser = parse_mem)]
     pub mem: Bytes,
     /// Browse the diff in the terminal instead of printing it.
     #[arg(short, long, conflicts_with = "summary")]
@@ -89,8 +112,9 @@ pub struct ServeArgs {
 /// Arguments of `rift git-diff`: options, then what git passes.
 #[derive(Debug, clap::Args)]
 pub struct GitDiffArgs {
-    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024).
-    #[arg(long, default_value = "256M", value_parser = Bytes::parse_budget)]
+    /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),
+    /// at least 64K.
+    #[arg(long, default_value = "256M", value_parser = parse_mem)]
     pub mem: Bytes,
     /// After the diff or an error, print the peak heap to standard error.
     #[arg(long)]

@@ -32,6 +32,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rayon.workspace = true
 rift-gen = { path = "../rift-gen" }
 
 [lints]

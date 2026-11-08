@@ -9,7 +9,7 @@ use rift_core::keyed::{
     ChangeKind, KeyError, KeySpec, KeyedChange, RangedChange, RecordReader, Side, compare,
     compare_with_ranges,
 };
-use rift_core::{Budget, Bytes, Error, LineNo, Source};
+use rift_core::{Bytes, Error, LineNo, Source};
 
 use crate::source::FileSource;
 use crate::summary::peak_heap;
@@ -41,7 +41,7 @@ pub fn run(
         failed: None,
     });
     let mut printed = 0u64;
-    let budget = Budget::new(mem);
+    let budget = crate::budget(mem);
     let result = if show_records {
         let mut reader = RecordReader::new(&budget, RECORD_BUF)?;
         compare_with_ranges(a, b, spec, &budget, |c| {
@@ -190,6 +190,7 @@ fn write_records<S: Source + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rift_core::Budget;
 
     #[test]
     fn an_error_after_printed_changes_says_to_discard_them() {
