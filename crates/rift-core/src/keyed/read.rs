@@ -634,6 +634,15 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
         })
     }
 
+    /// File offset of a record that [`kept`](Self::kept) handed out from
+    /// the last window, found from where its bytes lie in the window so
+    /// that only a caller that asks pays for it.
+    pub(crate) fn offset(&self, rec: &Record<'_>) -> u64 {
+        let at = rec.bytes.as_ptr() as usize - self.buf.as_ptr() as usize;
+        debug_assert!(at + rec.bytes.len() <= self.end, "a record of this window");
+        self.pos - self.end as u64 + at as u64
+    }
+
     /// Reads and splits the next window, keeping the records `filter`
     /// keeps; `false` at the end of the file.
     ///
