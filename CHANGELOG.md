@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its check and its `open`. The open does not block, refuses a file that
   is not regular and never follows a symbolic link.
 
+- A source that returns short reads could make the line reader return the
+  tail of a long line as a whole line instead of refusing it as too long.
+  The reader now keeps the line's start across short reads.
+
 ## [0.3.1] - 2026-11-09
 
 ### Added
