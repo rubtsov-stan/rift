@@ -73,7 +73,10 @@ patch a.sql changes.patch            # a.sql is now b.sql
 ```
 
 Exit codes follow `diff`: 0 when the files are identical, 1 when they
-differ, 2 on an error.
+differ, 2 on an error. Both operands must be regular files (symbolic links
+are followed): Rift reads at offsets, so a pipe, a FIFO or `<(command)` is
+refused with exit 2. Write the input to a file first. `-` is a file name, not
+standard input.
 
 ## Documentation
 

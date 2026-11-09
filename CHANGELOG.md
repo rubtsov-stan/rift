@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Earlier versions read FIFOs and process substitution (for example
+  `rift <(cmd) file`) as empty files and printed a wrong diff with no
+  error. Rift now refuses any operand that is not a regular file, with the
+  path and a message to write the input to a file first. A directory names
+  its path too, and `-` is documented as a file name.
+
 ## [0.3.1] - 2026-11-09
 
 ### Added

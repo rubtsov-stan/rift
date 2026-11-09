@@ -50,10 +50,10 @@ Print help
 Print version
 .TP
 <\fIA\fR>
-First file
+First file. It must be a regular file: Rift reads at offsets, so a pipe, FIFO or `<(command)` is refused. `\-` is a file name, not standard input
 .TP
 <\fIB\fR>
-Second file
+Second file, under the same rules as the first
 .SH MODES
 .TP
 \fBrift\fR [\fIoptions\fR] \fIA\fR \fIB\fR
@@ -197,7 +197,8 @@ The files are identical.
 The files differ.
 .TP
 \fB2\fR
-An error: an unreadable file, a budget too small, a duplicate key, an
+An error: an unreadable file, an operand that is not a regular file
+(a pipe, FIFO or directory), a budget too small, a duplicate key, an
 invalid option or \fB\-i\fR in a build without the terminal view.
 The message goes to standard error.
 .PP
