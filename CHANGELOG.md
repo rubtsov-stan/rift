@@ -103,6 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--mem` while it is resampled. Two million copies of one line against
   two million and one took 154 MB of heap at `--mem 12M`; they now take
   3.8 MB.
+- Asking for a hunk no longer takes heap outside `--mem`. Each segment
+  a front end asked for and was not yet refined held about 20 bytes, so
+  a `rift serve` or `rift-mcp` client asking for every segment of a
+  large diff could add tens of megabytes.
 
 ## [0.3.2] - 2026-11-10
 

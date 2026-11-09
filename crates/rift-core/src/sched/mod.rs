@@ -16,8 +16,9 @@
 //! holds by construction, a job whose estimate exceeds `work_cap` can never
 //! run as is (it gets [`Job::too_large`] instead, with `work_cap` as its
 //! limit), and the cache can hold any hunk a job is allowed to return.
-//! Bookkeeping that grows with threads and pending requests (`running`,
-//! `wanted`) is not charged. A hunk handed out through [`DiffView::hunk`]
+//! A request for a hunk is a flag in the row table, so asking for every
+//! segment adds no heap. `running`, which grows with the thread count, is
+//! not charged. A hunk handed out through [`DiffView::hunk`]
 //! or [`Scheduler::wait_hunk`] stays allocated while the front end holds
 //! the `Arc`, after its charge was released by eviction; the terminal
 //! interface keeps hunks only for the frame it draws, and the unified
@@ -30,7 +31,6 @@ mod cache;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
 use std::io;
 use std::ops::Range;
 use std::panic::{self, AssertUnwindSafe};
@@ -150,8 +150,9 @@ struct Queue {
     _cache_block: Reservation,
     /// Segment indices overlapping the visible lines.
     visible: Range<usize>,
-    /// Asked for through `hunk()` and not cached: served before background.
-    wanted: BTreeSet<usize>,
+    /// No row below it is flagged as asked for through `hunk()`. Flagged
+    /// rows are served before background, lowest index first.
+    wanted_from: usize,
     /// Background scan position in file order: nothing below it is fresh.
     cursor: usize,
     /// Whether idle workers refine segments nobody asked for.
@@ -247,7 +248,7 @@ impl<J: Job> Scheduler<J> {
                 cache,
                 _cache_block: reservation,
                 visible: 0..0,
-                wanted: BTreeSet::new(),
+                wanted_from: 0,
                 cursor: 0,
                 background: true,
                 running: Vec::with_capacity(threads),
@@ -444,7 +445,7 @@ impl<J: Job> Shared<J> {
             ));
         }
         let hunk = q.cache.get(segment);
-        if hunk.is_none() && q.cache.state(segment) == State::Idle && q.wanted.insert(segment) {
+        if hunk.is_none() && q.cache.state(segment) == State::Idle && q.want(segment) {
             self.work.notify_one();
         }
         Ok(hunk)
@@ -466,8 +467,15 @@ impl Queue {
         v.chain(after).chain(before.rev())
     }
 
+    /// Queues `segment` for [`pick`](Self::pick), ahead of background work.
+    /// Returns whether it was not queued yet.
+    fn want(&mut self, segment: usize) -> bool {
+        self.wanted_from = self.wanted_from.min(segment);
+        self.cache.want(segment)
+    }
+
     /// The next segment to refine and whether it is a prefetch. Reads only,
-    /// except for dropping stale `wanted` entries and advancing the cursor
+    /// except for clearing stale `wanted` flags and advancing the cursors
     /// over segments that need no job.
     ///
     /// Prefetch and the cursor refine each segment once; an evicted hunk
@@ -477,12 +485,14 @@ impl Queue {
         if let Some(i) = self.near().find(|&i| self.cache.fresh(i)) {
             return Some((i, true));
         }
-        while let Some(&i) = self.wanted.first() {
+        while let Some(i) = self.cache.next_wanted(self.wanted_from) {
+            self.wanted_from = i;
             if self.cache.state(i) == State::Idle {
                 return Some((i, false));
             }
-            self.wanted.pop_first();
+            self.cache.unwant(i);
         }
+        self.wanted_from = self.cache.len();
         while self.background && self.cursor < self.cache.len() {
             if self.cache.fresh(self.cursor) {
                 return Some((self.cursor, false));

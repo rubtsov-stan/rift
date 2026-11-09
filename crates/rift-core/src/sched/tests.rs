@@ -252,6 +252,45 @@ fn requested_hunk_is_served_before_background() {
     assert!(ready(&s.hunk(6)).is_some());
 }
 
+/// A guard on the order `pick` serves requests in; it passes on the
+/// ordered set this replaced as well.
+#[test]
+fn requests_are_served_lowest_segment_first() {
+    let n = 10;
+    let (started, starts) = channel();
+    let (release, gate) = channel();
+    let job = Fake {
+        started: Some(started),
+        gate: Some(Mutex::new(gate)),
+        ..Fake::new()
+    };
+    let s = Scheduler::new(job, segments(n, |_| false), &budget(n, 64), 1).unwrap();
+    assert_eq!(starts.recv().unwrap(), 0);
+    s.set_background(false);
+    for i in [7, 3, 5] {
+        assert!(matches!(s.hunk(i), HunkState::Pending));
+    }
+    release.send(()).unwrap();
+    assert_eq!(starts.recv().unwrap(), 3);
+    // Below the one running, and past the last one asked for.
+    for i in [9, 1, 7] {
+        assert!(matches!(s.hunk(i), HunkState::Pending));
+    }
+    let mut order = Vec::new();
+    for _ in 0..4 {
+        release.send(()).unwrap();
+        order.push(starts.recv().unwrap());
+    }
+    assert_eq!(order, [1, 5, 7, 9]);
+    release.send(()).unwrap();
+    assert!(
+        starts
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "each request ran once"
+    );
+}
+
 #[test]
 fn prefetch_that_left_the_window_is_cancelled_and_redone() {
     let n = 20;
@@ -313,7 +352,7 @@ fn queue_rewinds_cursor_after_a_cancel() {
         cache: Cache::new(n, |i| i >= 3, Bytes(512)),
         _cache_block: b.try_reserve(Half::Refine, Bytes(0)).unwrap(),
         visible: 2..3,
-        wanted: BTreeSet::new(),
+        wanted_from: 0,
         cursor: 0,
         background: true,
         running: Vec::new(),
@@ -334,6 +373,43 @@ fn queue_rewinds_cursor_after_a_cancel() {
     q.complete(2, seg, Hunk::default(), true);
     assert_eq!(q.pick(), Some((2, false)), "cursor came back for it");
     assert_eq!(q.cache.done(), 2);
+}
+
+#[test]
+fn a_far_request_does_not_make_every_pick_walk_to_it() {
+    let n = 1 << 21;
+    let b = Budget::new(Bytes(1024));
+    let mut q = Queue {
+        cache: Cache::new(n, |_| false, Bytes(u64::MAX)),
+        _cache_block: b.try_reserve(Half::Refine, Bytes(0)).unwrap(),
+        visible: 0..0,
+        wanted_from: 0,
+        cursor: 0,
+        background: false,
+        running: Vec::new(),
+        failures: Vec::new(),
+        approx: ApproxTally::default(),
+        stop: false,
+    };
+    let seg = &segments(1, |_| false)[0];
+    q.want(n - 1);
+    let mut worst = 0;
+    for k in 0..300 {
+        q.want(k);
+        q.cache.visits.set(0);
+        assert_eq!(q.pick(), Some((k, false)));
+        q.start(k, false);
+        // The worker peeks once more after starting a job.
+        assert_eq!(q.pick(), Some((n - 1, false)));
+        worst = worst.max(q.cache.visits.get());
+        q.complete(k, seg, Hunk::default(), false);
+    }
+    // A word per 4096 rows, and two groups of 64 rows.
+    let bound = (n / 4096 + 2 * 64) as u64 * 2;
+    assert!(
+        worst <= bound,
+        "{worst} rows and words looked at in one pick, bound {bound}"
+    );
 }
 
 #[test]
@@ -406,7 +482,7 @@ fn asking_whether_a_segment_is_approx_queues_nothing() {
     for i in 0..n {
         let _ = s.refined_approx(i);
     }
-    assert!(s.shared.lock().wanted.is_empty());
+    assert!(s.shared.lock().cache.next_wanted(0).is_none());
 }
 
 #[test]
