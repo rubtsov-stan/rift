@@ -25,6 +25,11 @@ use crate::source::FileSource;
 /// Git writes this for the side of an added or deleted file.
 const DEV_NULL: &str = "/dev/null";
 
+/// A hash git gives for a side it has not hashed.
+fn null_hex(hex: &str) -> bool {
+    hex.bytes().all(|b| b == b'0' || b == b'.')
+}
+
 /// One side of the comparison.
 #[derive(Debug)]
 struct Side {
@@ -107,22 +112,29 @@ impl Call {
             // Git's text for a rename already ends with the index line.
             out.extend_from_slice(rename);
         } else if self.old.hex != self.new.hex {
-            let abbrev = |hex: &str| {
-                if hex.bytes().all(|b| b == b'0' || b == b'.') {
-                    "0".repeat(7)
-                } else {
-                    hex.chars().take(7).collect()
+            let unknown = |side: &Side| side.mode.is_some() && null_hex(&side.hex);
+            // Git hashes a work tree file for its own diff but gives the
+            // driver a null hash. Printing it would make `patch` think the
+            // file is deleted.
+            if !unknown(&self.old) && !unknown(&self.new) {
+                let abbrev = |hex: &str| -> String {
+                    if null_hex(hex) {
+                        "0".repeat(7)
+                    } else {
+                        hex.chars().take(7).collect()
+                    }
+                };
+                let mut index =
+                    format!("index {}..{}", abbrev(&self.old.hex), abbrev(&self.new.hex));
+                if let (Some(o), Some(n)) = (old_mode, new_mode)
+                    && o == n
+                {
+                    index.push(' ');
+                    index.push_str(o);
                 }
-            };
-            let mut index = format!("index {}..{}", abbrev(&self.old.hex), abbrev(&self.new.hex));
-            if let (Some(o), Some(n)) = (old_mode, new_mode)
-                && o == n
-            {
-                index.push(' ');
-                index.push_str(o);
+                out.extend_from_slice(index.as_bytes());
+                out.push(b'\n');
             }
-            out.extend_from_slice(index.as_bytes());
-            out.push(b'\n');
         }
         out
     }
@@ -283,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mode_change_lists_both_modes_and_leaves_the_mode_off_the_index() {
+    fn a_mode_change_lists_both_modes_and_an_unknown_side_drops_the_index_line() {
         let h = header(&[
             "f",
             "/t/f",
@@ -293,10 +305,7 @@ mod tests {
             &"0".repeat(40),
             "100755",
         ]);
-        assert_eq!(
-            h,
-            "diff --git a/f b/f\nold mode 100644\nnew mode 100755\nindex aaaaaaa..0000000\n"
-        );
+        assert_eq!(h, "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n");
         let same = header(&[
             "f",
             "/t/f",
