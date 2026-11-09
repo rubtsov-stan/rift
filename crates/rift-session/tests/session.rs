@@ -412,6 +412,12 @@ fn a_session_that_is_not_ready_has_its_own_code() {
         "session 4 is scanning; wait for it to be ready"
     );
     assert_eq!(SessionState::Failed.name(), "failed");
+    // Waiting does not help a failed session; opening the pair again does.
+    let err = Error::NotReady {
+        session: SessionId(4),
+        state: SessionState::Failed,
+    };
+    assert_eq!(err.to_string(), "session 4 failed; open the files again");
 }
 
 #[test]

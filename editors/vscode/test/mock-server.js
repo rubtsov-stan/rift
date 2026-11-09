@@ -332,7 +332,7 @@ function readySession(p) {
     });
   }
   if (s.state === 'failed') {
-    throw new RpcError(CODE.not_ready, `session ${id} is failed; wait for it to be ready`, {
+    throw new RpcError(CODE.not_ready, `session ${id} failed; open the files again`, {
       session: id,
       state: 'failed',
       error: s.error,
