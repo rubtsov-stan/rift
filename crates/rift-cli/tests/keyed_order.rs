@@ -1,5 +1,5 @@
-//! Key mode prints the same bytes on every run: where a pass ends depends
-//! on the input and `--mem`, never on how the threads interleave.
+//! Key mode prints the same bytes on every run and on any number of
+//! threads: where a pass ends depends on the input and `--mem` only.
 //!
 //! Each run reads its peak heap from `--stats`, so no test here reads a
 //! counter of this process.
@@ -63,35 +63,45 @@ fn run(pair: &Pair, mem: &str, threads: &str, records: bool) -> Vec<u8> {
     out.stdout
 }
 
-/// Runs every budget and thread count `runs` times, with and without
-/// `--show-records`, and checks that each row prints one output and that
-/// every budget prints the same lines in some order.
+/// Runs every budget on every thread count `runs` times, with and
+/// without `--show-records`, and checks that each budget prints one output
+/// whatever the run and the threads, and that every budget prints the
+/// same lines in some order.
 fn same_bytes_every_run(pair: &Pair, budgets: &[&str], runs: usize) {
     for records in [false, true] {
         let mut lines: Option<Vec<Vec<u8>>> = None;
         for &mem in budgets {
+            let first = run(pair, mem, THREADS[0], records);
             for threads in THREADS {
-                let first = run(pair, mem, threads, records);
-                for i in 1..runs {
+                for i in 0..runs {
                     assert!(
                         run(pair, mem, threads, records) == first,
-                        "--mem {mem}, {threads} threads, records {records}: run {i} differs from run 0"
+                        "--mem {mem}, records {records}: run {i} on {threads} threads differs from {} thread",
+                        THREADS[0]
                     );
                 }
-                let mut sorted: Vec<Vec<u8>> =
-                    first.split(|&c| c == b'\n').map(<[u8]>::to_vec).collect();
-                sorted.sort_unstable();
-                match &lines {
-                    None => lines = Some(sorted),
-                    Some(want) => assert!(
-                        *want == sorted,
-                        "--mem {mem}, {threads} threads, records {records}: other lines than --mem {}",
-                        budgets[0]
-                    ),
-                }
+            }
+            let mut sorted: Vec<Vec<u8>> =
+                first.split(|&c| c == b'\n').map(<[u8]>::to_vec).collect();
+            sorted.sort_unstable();
+            match &lines {
+                None => lines = Some(sorted),
+                Some(want) => assert!(
+                    *want == sorted,
+                    "--mem {mem}, records {records}: other lines than --mem {}",
+                    budgets[0]
+                ),
             }
         }
     }
+}
+
+/// A 16 MiB pair takes two passes at both budgets, on 3 shards at 8M and
+/// on 8 at 17M; on 0.3.1 it printed two orders at 17M, by thread count.
+#[test]
+fn the_output_does_not_depend_on_the_thread_count() {
+    let pair = shuffled(16 << 20);
+    same_bytes_every_run(&pair, &["8M", "17M"], 1);
 }
 
 #[test]

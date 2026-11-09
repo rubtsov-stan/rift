@@ -41,7 +41,7 @@ pub fn run(
         failed: None,
     });
     let mut printed = 0u64;
-    let budget = crate::budget(mem);
+    let budget = crate::budget(mem, false);
     let result = if show_records {
         let mut reader = RecordReader::new(&budget, RECORD_BUF)?;
         compare_with_ranges(a, b, spec, &budget, |c| {

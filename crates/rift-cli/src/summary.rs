@@ -24,7 +24,7 @@ pub fn run<A: Source, B: Source>(
     find_moves: bool,
 ) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
-    let budget = crate::budget(mem);
+    let budget = crate::budget(mem, true);
     let (scan_a, scan_b, map) = build_pair(a, b, &budget)?;
     let off_chain = map.off_chain();
     let moves = if find_moves {

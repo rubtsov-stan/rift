@@ -32,7 +32,7 @@ pub fn threads() -> usize {
 }
 
 pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
-    let budget = crate::budget(mem);
+    let budget = crate::budget(mem, true);
     Ok(Diff::with_config(
         Arc::clone(&files.a),
         Arc::clone(&files.b),
