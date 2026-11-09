@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The protocol document says that an `open` right after closing a
+  scanning session can answer `busy` until the scan has stopped, and
+  that the client retries.
 - A `not_ready` error on a failed session says "session 1 failed; open
   the files again" instead of asking the client to wait for it.
 - `rift serve` answered `busy` to an `open` that needed a ready session's

@@ -184,9 +184,15 @@ session is closed or replaced, so a client that missed the notification
 still finds it.
 
 Closing a scanning session answers `{"closed": true}` without waiting for
-the scan. The id is unknown to every later request at once, no further
-notification names it, and the scan stops at its next chunk (at most a
-few MiB of reading later) and releases the session's memory then.
+the scan. The id is unknown to every later request at once and no further
+notification names it. The scan stops at its next check, which is between
+reads while it scans and once more before the move search; what follows
+the last check, setting up the workers and starting the scheduler, runs to
+the end. The session's memory is released only then, and the window grows
+with the size of the input. Until it is, that memory still counts against
+`max_total_mem`, so an `open` right after the `close` can answer `busy`
+when it needs that room. A client that gets `busy` there retries with a
+short backoff, for a bounded time; the server does not wait for the scan.
 
 ### `summary`
 
