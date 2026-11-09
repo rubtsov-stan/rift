@@ -74,7 +74,7 @@ The same on NDJSON, by the `id` field. The key prints as the file has it, quotes
 - Blank lines are not records, and in NDJSON neither are lines of only spaces or tabs.
 - In a `pg_dump`, only the rows of `COPY` blocks with the right column count take part, and the same key in two tables names two records.
 - A key that occurs twice in one file stops the run with exit status 2 and lists the first few. A run can stop after it printed some changes. The output is then incomplete: check the exit status before you use it.
-- A record too long for the budget stops the run with a budget error that names a `--mem` under which the record fits.
+- A budget too small stops the run with a budget error that names a `--mem` to rerun with: one under which a long record fits, and otherwise about twice the limit. Following the advice reaches a limit that works in a few reruns.
 - `--key` cannot be combined with `--summary`, `--interactive` or `--no-moves`. `--show-records` needs `--key`, and `--stats` works with both.
 
 ## Memory

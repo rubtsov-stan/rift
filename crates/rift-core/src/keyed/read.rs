@@ -71,8 +71,11 @@ pub fn key_hash(key: &[u8], seed: u64) -> u64 {
 /// gets the same id in each.
 #[derive(Debug)]
 pub struct Tables {
-    /// Each name, its hash seed, and whether A and B have paid for it.
-    names: Vec<(Box<[u8]>, u64, [bool; 2])>,
+    /// Each name, its hash seed, and the round in which A and B paid for
+    /// it, 0 before.
+    names: Vec<(Box<[u8]>, u64, [u64; 2])>,
+    /// Rounds A and B have begun.
+    rounds: [u64; 2],
     /// Refine half: the names and the list.
     res: Reservation,
 }
@@ -86,54 +89,53 @@ impl Tables {
     pub fn new(budget: &Budget) -> Result<Self> {
         Ok(Self {
             names: Vec::new(),
+            rounds: [0; 2],
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
         })
     }
 
-    /// The id and hash seed of a table name, if `side` named it already.
-    /// A name the other file gave counts only once this one gives it too,
-    /// so where a chunk stops does not depend on the other reader's pace.
+    /// Starts a round of `side`.
+    fn begin(&mut self, side: Side) {
+        self.rounds[side as usize] += 1;
+    }
+
+    /// The id and hash seed of a table name, if `side` named it in an
+    /// earlier round. A name the other file gave counts only once this one
+    /// gives it too, and one named this round only from the next, so where
+    /// a chunk stops depends neither on the other reader's pace nor on how
+    /// far the first chunk got.
     fn find(&self, name: &[u8], side: Side) -> Option<(u32, u64)> {
+        let s = side as usize;
         let i = self
             .names
             .iter()
-            .position(|(n, _, paid)| **n == *name && paid[side as usize])?;
+            .position(|(n, _, paid)| **n == *name && paid[s] != 0 && paid[s] < self.rounds[s])?;
         Some((id(i), self.names[i].1))
     }
 
     /// The id and hash seed of a table name, added if new, paid from
-    /// `credit`.
+    /// `credit`; `None` when the credit cannot pay.
     ///
     /// A and B can name the same table at once, so each side pays for a
     /// name the first time it asks: what a side pays then depends only on
     /// its own file, not on which side asked first.
-    fn id(
-        &mut self,
-        name: &[u8],
-        side: Side,
-        budget: &Budget,
-        credit: &mut u64,
-    ) -> Result<(u32, u64)> {
+    fn id(&mut self, name: &[u8], side: Side, credit: &mut u64) -> Option<(u32, u64)> {
+        let s = side as usize;
         let i = match self.names.iter().position(|(n, ..)| **n == *name) {
-            Some(i) if self.names[i].2[side as usize] => return Ok((id(i), self.names[i].1)),
+            Some(i) if self.names[i].2[s] != 0 => return Some((id(i), self.names[i].1)),
             Some(i) => i,
             None => self.names.len(),
         };
         // The list doubles, so two slots per name cover its capacity.
-        let slot = size_of::<(Box<[u8]>, u64, [bool; 2])>() as u64;
-        let cost = name.len() as u64 + 2 * slot;
-        if !spend(&mut self.res, credit, cost) {
-            return Err(Error::Budget(BudgetExceeded {
-                half: Half::Refine,
-                requested: Bytes(cost),
-                available: budget.available(Half::Refine),
-            }));
+        let slot = size_of::<(Box<[u8]>, u64, [u64; 2])>() as u64;
+        if !spend(&mut self.res, credit, name.len() as u64 + 2 * slot) {
+            return None;
         }
         if i == self.names.len() {
-            self.names.push((name.into(), xxh3_64(name), [false; 2]));
+            self.names.push((name.into(), xxh3_64(name), [0; 2]));
         }
-        self.names[i].2[side as usize] = true;
-        Ok((id(i), self.names[i].1))
+        self.names[i].2[s] = self.rounds[s];
+        Some((id(i), self.names[i].1))
     }
 }
 
@@ -252,7 +254,7 @@ enum Stop {
     Done,
     /// A record runs past the bytes read so far.
     Short,
-    /// Its list could not grow.
+    /// Its list, or the table names, could not grow.
     Full,
     /// A record has no key, or a read failed.
     Failed,
@@ -275,7 +277,9 @@ enum Miss {
     NoKey,
     /// A `COPY` header names a table this chunk may not name.
     NewTable,
-    /// The header lacks the named column, or a budget error.
+    /// The chunk's credit cannot pay for a new table name.
+    Full,
+    /// The header lacks the named column.
     Error(Error),
 }
 
@@ -361,6 +365,10 @@ impl Chunk {
                 Ok(found) => found,
                 Err(Miss::NewTable) => {
                     self.stop = Stop::NewTable;
+                    break;
+                }
+                Err(Miss::Full) => {
+                    self.stop = Stop::Full;
                     break;
                 }
                 Err(Miss::NoKey) => {
@@ -464,9 +472,7 @@ impl Ctx<'_> {
                                 let mut tables =
                                     self.tables.lock().unwrap_or_else(PoisonError::into_inner);
                                 let (id, seed) = if may_name {
-                                    tables
-                                        .id(table, self.side, self.budget, credit)
-                                        .map_err(Miss::Error)?
+                                    tables.id(table, self.side, credit).ok_or(Miss::Full)?
                                 } else {
                                     tables.find(table, self.side).ok_or(Miss::NewTable)?
                                 };
@@ -751,6 +757,14 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             c.credit = self.share;
             at = next;
             k += 1;
+        }
+        // Only `COPY` names tables; the lock's first use allocates on some
+        // systems, outside the budget.
+        if matches!(self.kind, Kind::Copy { .. }) {
+            tables
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .begin(self.side);
         }
         let ctx = Ctx {
             kind: &self.kind,
@@ -1449,6 +1463,34 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    /// A table named twice, the second header where the window's second
+    /// chunk starts. Run in order on one thread, the first chunk names the
+    /// table before the second looks; were the second to use that name,
+    /// the round would keep its rows on one thread and not on others.
+    #[test]
+    fn a_chunk_does_not_use_a_name_given_in_its_own_round() {
+        let dump = b"COPY t (id) FROM stdin;\n100\n\\.\nCOPY t (id) FROM stdin;\n2\n\\.\n";
+        let budget = Budget::new(Bytes::mib(1));
+        let spec: KeySpec = "copy:id".parse().unwrap();
+        let tables = Mutex::new(Tables::new(&budget).unwrap());
+        let filter = Filter::new(0, u64::MAX, &[]);
+        let mut r = Reader::new(&dump[..], Side::A, &spec, &budget, 256, 2).unwrap();
+        let one = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let mut rounds = Vec::new();
+        while one.install(|| r.advance(&tables, &filter)).unwrap() {
+            let keys: Vec<String> = r
+                .kept()
+                .map(|rec| String::from_utf8_lossy(&rec.bytes[rec.key.clone()]).into_owned())
+                .collect();
+            rounds.push(keys);
+        }
+        assert_eq!(rounds[0], ["100"], "{rounds:?}");
+        assert_eq!(rounds.concat(), ["100", "2"]);
     }
 
     #[test]

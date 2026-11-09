@@ -555,9 +555,11 @@ credits: one per chunk list of the two windows before they are parsed,
 one per shard before the shards take their records. A list grows only
 within its credit (`grow` in `read.rs`). A window that must grow for a
 long record grows before the round, A then B. Each file pays for a
-`COPY` table name the first time it gives it and sees only the names it
-gave, so a chunk stops at the same header whatever the other reader has
-named. Whether a list runs out then depends on its own records only.
+`COPY` table name the first time it gives it, from the first chunk's
+credit, and a later chunk sees only the names its file gave in earlier
+rounds, so a chunk stops at the same header whatever the other reader,
+or its own first chunk, has named meanwhile. Whether a list runs out
+then depends on its own records only.
 
 Each pass prints its changes sorted by line, so the output holds the
 same set of lines at any budget, in an order that depends on how the
@@ -575,7 +577,14 @@ at the end: `0.9 × progress / fill` of the old one. Waiting records do
 not pile up that way, so when they overflow the refine half the new
 range keeps the smaller of that share and one half: it is at least
 halved and can shrink further. That overflow also sets a ceiling of 90%
-of the range that overflowed. A pass that ends with its tables under
+of the range that overflowed. A window that cannot keep its first
+record or pay for a table name is short of what the shards hold: the
+shards free their lists and the pass starts over on a range at least
+halved, like a refine overflow. A shard that overflows on a record
+larger than half its credit cannot be helped by a narrower range; from
+then on the shards take their turns, in order, each from the whole
+refine half, which is as deterministic and only slower. A pass that
+ends with its tables under
 90% full widens the next one toward 90%, at most twofold and never
 above the ceiling. On the 10 GiB `shuffled` CSV pair (seed 7,
 `--mem 256M`, Apple M1, files larger than the page cache) this takes
@@ -594,6 +603,15 @@ by key hash would, costs about 28 times more memory per record on
 more passes. A record counts as unchanged only after its bytes compare
 equal. `shuffled` is the test bed: its manifest names every
 change, and a pair that is only reordered reports none.
+
+When a range of width 1 still overflows, or a window cannot grow for a
+record, key mode refuses the budget. Where the passes end moves with
+`--mem`, so no refusal can say what a rerun needs; it asks for a half
+at least twice the size, or the size `sized_for_record` finds for a
+long record when that is more (`doubled`). Following the advice takes
+a few reruns and overshoots at most about twofold. The refusal is built
+after the run has dropped its reservations, so its text is the same on
+every run.
 
 `--show-records` prints the records of each change. `compare_with_ranges`
 keeps the file offset and length of each record in A and in B, 24 bytes

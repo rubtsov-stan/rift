@@ -88,7 +88,9 @@ pub struct Report {
 ///
 /// [`KeyError`] for duplicate or missing keys or a record longer than
 /// key mode holds, a budget error when not even a single key or record
-/// fits, an I/O error from a source or from `on_change`.
+/// fits, an I/O error from a source or from `on_change`. A budget error
+/// asks for at least twice the half it ran out of, and its numbers are
+/// the same on every run.
 pub fn compare<A, B>(
     a: &A,
     b: &B,
@@ -100,7 +102,7 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    run::<A, B, ()>(a, b, spec, budget, on_change)
+    run::<A, B, ()>(a, b, spec, budget, on_change).map_err(|e| doubled(e, budget))
 }
 
 /// [`compare`], handing out each change with the byte ranges of its
@@ -124,9 +126,36 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    run::<A, B, Ranges>(a, b, spec, budget, on_change)
+    run::<A, B, Ranges>(a, b, spec, budget, on_change).map_err(|e| doubled(e, budget))
 }
 
+/// A budget refusal that asks for a half at least twice the size, built
+/// once the run has given back what it held.
+///
+/// Where a pass ends moves with the budget, so a refusal cannot say what a
+/// rerun will need. Doubling gets there in a few reruns and overshoots by
+/// less than twice the least budget that works. Read after every thread
+/// has stopped, the numbers are the same on every run.
+#[cold]
+fn doubled(err: Error, budget: &Budget) -> Error {
+    let Error::Budget(refusal) = err else {
+        return err;
+    };
+    let cap = budget.capacity(refusal.half).0;
+    let asked = cap - refusal.available.0.min(cap) + refusal.requested.0;
+    let need = asked.max(2 * cap);
+    let available = budget.available(refusal.half);
+    Error::Budget(BudgetExceeded {
+        half: refusal.half,
+        requested: Bytes(need - (cap - available.0.min(cap))),
+        available,
+    })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the pass loop and the three ways a read ends, kept in one place"
+)]
 fn run<A, B, X: Extra>(
     a: &A,
     b: &B,
@@ -154,35 +183,50 @@ where
     let (mut lo, mut width) = (0, END);
     // Below the narrowest range that ran out of waiting room.
     let mut ceiling = END;
+    // The shards take their turns on the whole refine half.
+    let mut solo = false;
     loop {
         let hi = lo + width.min(END - lo);
         let mut readers = (&mut ra, &mut rb, &tables);
         let read = on(workers.as_ref(), || {
-            read_pass(&mut readers, &mut shards, lo, hi, &pending.list)
+            read_pass(&mut readers, &mut shards, lo, hi, &pending.list, solo)
         });
         let read = read.map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens));
         match read? {
-            Outcome::Overflow(half, progress) => {
+            Outcome::Overflow(half, progress, alone) => {
                 let w = hi - lo;
-                if w <= 1 {
-                    return Err(Error::Budget(BudgetExceeded {
-                        half,
-                        requested: Bytes(8),
-                        available: budget.available(half),
-                    }));
-                }
-                width = narrowed(half, w, progress, fill(&shards), &mut ceiling);
                 ra.shrink_lists();
                 rb.shrink_lists();
+                if alone && !solo {
+                    // A narrower range cannot help a record that its
+                    // shard's share does not hold.
+                    solo = true;
+                } else if w <= 1 {
+                    return Err(Error::Budget(BudgetExceeded {
+                        half,
+                        requested: Bytes(1),
+                        available: budget.available(half),
+                    }));
+                } else {
+                    width = narrowed(half, w, progress, fill(&shards), &mut ceiling);
+                }
             }
             Outcome::Stop => {
                 let mut dups = collect_dups(&mut shards);
                 if dups.is_empty() {
-                    // Too many suspects: settle the first of them now.
+                    // Too many suspects: settle the first of them now, in
+                    // room the records no longer need.
+                    for s in &mut shards {
+                        s.release();
+                    }
                     pending.replace(&mut shards)?;
+                    for s in &mut shards {
+                        s.release();
+                    }
+
                     let mut readers = (&mut ra, &mut rb, &tables);
                     on(workers.as_ref(), || {
-                        read_pass(&mut readers, &mut shards, END, END, &pending.list)
+                        read_pass(&mut readers, &mut shards, END, END, &pending.list, solo)
                     })
                     .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
                     dups = pending.duplicates(&ra, &rb);
@@ -447,8 +491,9 @@ fn on<R: Send>(workers: Option<&rayon::ThreadPool>, op: impl FnOnce() -> R + Sen
 enum Outcome {
     /// Both files were read to the end.
     Done,
-    /// A shard ran out of the half named, this far through the files.
-    Overflow(Half, f64),
+    /// A shard ran out of the half named, this far through the files;
+    /// `true` if a shard's share could not hold one of its records.
+    Overflow(Half, f64, bool),
     /// Enough duplicates, or too many suspects, to stop.
     Stop,
 }
@@ -460,13 +505,16 @@ type Readers<'r, 's, A, B> = (
 );
 
 /// Reads both files once, the shards taking the records in `lo..hi`, and
-/// counts `pending` on the way. An empty range only counts.
+/// counts `pending` on the way. An empty range only counts. The shards
+/// take their records in parallel, each from its share of the refine
+/// half, unless `solo`: then in turn, from all of it.
 fn read_pass<A, B, X: Extra>(
     (ra, rb, tables): &mut Readers<'_, '_, A, B>,
     shards: &mut [Pass<'_, X>],
     lo: u64,
     hi: u64,
     pending: &[Suspect],
+    solo: bool,
 ) -> Result<Outcome>
 where
     A: Source + ?Sized,
@@ -505,7 +553,22 @@ where
                 || rb.advance(tables, &filter),
             )
         };
-        let (ga, gb) = (ga?, gb?);
+        #[allow(clippy::cast_precision_loss, reason = "an estimate")]
+        let progress = (ra.consumed() + rb.consumed()) as f64 / total.max(1) as f64;
+        let (ga, gb) = match both(ga, gb) {
+            Ok(g) => g,
+            // A window that cannot keep one record or name one table is
+            // short of what the shards hold: give it back and narrow the
+            // range.
+            Err(Error::Budget(_)) if lo < hi => {
+                for s in shards.iter_mut() {
+                    s.release();
+                }
+                return Ok(Outcome::Overflow(Half::Refine, progress, false));
+            }
+            Err(e) => return Err(e),
+        };
+
         if !ga && !gb {
             return Ok(Outcome::Done);
         }
@@ -513,12 +576,14 @@ where
             continue;
         }
         let (ra, rb) = (&**ra, &**rb);
-        let credit = share(n);
+        let credit = if solo { u64::MAX } else { share(n) };
         for s in shards.iter_mut() {
-            s.credit = credit;
+            (s.credit, s.share) = (credit, credit);
         }
-        if n == 1 {
-            shards[0].round(0, 1, ra, rb);
+        if n == 1 || solo {
+            for (k, s) in shards.iter_mut().enumerate() {
+                s.round(k, n, ra, rb);
+            }
         } else {
             shards
                 .par_iter_mut()
@@ -531,15 +596,24 @@ where
             }
         }
         if let Some(half) = shards.iter().find_map(|s| s.overflow) {
-            #[allow(clippy::cast_precision_loss, reason = "an estimate")]
-            let progress = (ra.consumed() + rb.consumed()) as f64 / total.max(1) as f64;
-            return Ok(Outcome::Overflow(half, progress));
+            let alone = shards.iter().any(|s| s.alone);
+            return Ok(Outcome::Overflow(half, progress, alone));
         }
         let dups: usize = shards.iter().map(|s| s.dups.len()).sum();
         let suspects: usize = shards.iter().map(|s| s.suspects.len()).sum();
         if dups >= FEW || suspects >= SUSPECTS {
             return Ok(Outcome::Stop);
         }
+    }
+}
+
+/// Both readers' results, or the error to act on: an error in the data,
+/// such as a record without a key, before a window short of room, which
+/// a narrower pass could get past.
+fn both(a: Result<bool>, b: Result<bool>) -> Result<(bool, bool)> {
+    match (a, b) {
+        (Ok(a), Ok(b)) => Ok((a, b)),
+        (Err(Error::Budget(_)) | Ok(_), Err(e)) | (Err(e), _) => Err(e),
     }
 }
 
@@ -763,7 +837,11 @@ struct Pass<'b, X: Extra> {
     res: Reservation,
     /// Refine-half bytes `res` may still grow by this round, see [`grow`].
     credit: u64,
+    /// `credit` when the round began.
+    share: u64,
     overflow: Option<Half>,
+    /// The overflow came from a record that more than half fills `share`.
+    alone: bool,
     fault: Option<Error>,
 }
 
@@ -796,7 +874,9 @@ impl<'b, X: Extra> Pass<'b, X> {
             }),
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
             credit: u64::MAX,
+            share: u64::MAX,
             overflow: None,
+            alone: false,
             fault: None,
         })
     }
@@ -826,8 +906,35 @@ impl<'b, X: Extra> Pass<'b, X> {
         for s in self.suspects.drain(..) {
             self.res.shrink(Bytes(s.key.len() as u64));
         }
+        // Emptied, so the next record's key fits the capacity a key as
+        // long took before.
+        X::base(&mut self.change).key.clear();
         self.overflow = None;
+        self.alone = false;
         self.fault = None;
+    }
+
+    /// Frees the lists, which keep their largest size otherwise, for a
+    /// read that needs their bytes elsewhere: a pass that starts over
+    /// because a window could not keep a record or name a table, or the
+    /// read that counts suspects. A pass that starts over because a shard
+    /// ran out keeps them, since a narrower range needs no more.
+    ///
+    /// Suspects stay until something takes them, since the read that
+    /// counts them needs them; with none left, their list goes too.
+    fn release(&mut self) {
+        if self.suspects.is_empty() {
+            self.suspects = Vec::new();
+        }
+        let keep = self.suspects.capacity() * size_of::<Suspect>()
+            + self.suspects.iter().map(|s| s.key.len()).sum::<usize>();
+        self.kept = Vec::new();
+        self.arena = Vec::new();
+        self.dups = Vec::new();
+        X::base(&mut self.change).key = Vec::new();
+        (self.garbage, self.dead) = (0, 0);
+        self.res
+            .shrink(Bytes(self.res.bytes().0.saturating_sub(keep as u64)));
     }
 
     /// Takes this shard's records of the readers' last windows.
@@ -925,6 +1032,10 @@ impl<'b, X: Extra> Pass<'b, X> {
                 }
             }
             i = self.next_slot(i);
+        }
+        #[cfg(test)]
+        {
+            seen |= tests::COLLIDES.with(std::cell::Cell::get)(key);
         }
         if let Some(half) = self.room(rec.bytes.len(), key.len(), seen) {
             return Ok(Flow::Overflow(half));
@@ -1055,7 +1166,11 @@ impl<'b, X: Extra> Pass<'b, X> {
                     &mut self.credit,
                     1,
                 ) && spend(&mut self.res, &mut self.credit, key as u64)));
-        (!fits).then_some(Half::Refine)
+        if fits {
+            return None;
+        }
+        self.alone = (len + key) as u64 > self.share / 2;
+        Some(Half::Refine)
     }
 
     /// Whether a quarter of the kept bytes or entries are dead: the lists
@@ -1204,6 +1319,14 @@ mod tests {
 
     use super::*;
     use crate::keyed::KeySpec;
+    use crate::keyed::read::key_hash;
+
+    thread_local! {
+        /// Keys this thread's shards take for suspects, as if their
+        /// fingerprint matched a matched key's: collisions on demand.
+        pub(super) static COLLIDES: std::cell::Cell<fn(&[u8]) -> bool> =
+            const { std::cell::Cell::new(|_| false) };
+    }
 
     type Change = (ChangeKind, String, Option<u64>, Option<u64>);
     type Rows = Vec<(u32, u32)>;
@@ -1436,6 +1559,183 @@ mod tests {
     fn a_tiny_budget_is_a_budget_error() {
         let err = run(b"1,a\n", b"1,b\n", "csv:1", 64).unwrap_err();
         assert!(matches!(err, Error::Budget(_)), "{err}");
+    }
+
+    /// A `pg_dump` keyed by `id`: `tables` tables of `rows` rows, in
+    /// reverse table order with every 7th row changed if `b`.
+    fn dump(tables: usize, rows: usize, b: bool) -> Vec<u8> {
+        let mut blocks: Vec<String> = (0..tables)
+            .map(|t| {
+                let mut s = format!("COPY public.t{t} (id, v) FROM stdin;\n");
+                for id in 0..rows {
+                    let v = if b && id % 7 == 0 { "changed" } else { "same" };
+                    writeln!(
+                        s,
+                        "{id}\t{v} padding padding padding padding padding padding padding padding"
+                    )
+                    .unwrap();
+                }
+                s + "\\.\n\nSELECT 1;\n\n"
+            })
+            .collect();
+        if b {
+            blocks.reverse();
+        }
+        blocks.concat().into_bytes()
+    }
+
+    /// Budgets as the command line gives them, 48 KiB below `--mem`.
+    fn cli(mib: u64) -> u64 {
+        (mib << 20) - (48 << 10)
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn table_names_never_refuse_a_budget_that_holds_the_pass() {
+        let (a, b) = (dump(1200, 15, false), dump(1200, 15, true));
+        for mib in [4, 5, 6, 8] {
+            let (changes, _) =
+                run(&a, &b, "copy:id", cli(mib)).unwrap_or_else(|e| panic!("{mib}M: {e}"));
+            assert_eq!(changes.len(), 1200 * 3, "{mib}M");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn a_record_longer_than_a_shard_share_still_fits_the_half() {
+        let long = "y".repeat(400_000);
+        let (mut a, mut b) = (String::from("id,v\n"), String::from("id,v\n"));
+        for j in 0..3 {
+            writeln!(a, "long{j},{long}").unwrap();
+        }
+        for i in 0..4000 {
+            writeln!(a, "{i},short").unwrap();
+            writeln!(b, "{i},short").unwrap();
+        }
+        for j in 0..3 {
+            writeln!(b, "long{j},{long}z").unwrap();
+        }
+        for mib in [4, 5, 6] {
+            let (changes, _) = run(a.as_bytes(), b.as_bytes(), "csv:id", cli(mib))
+                .unwrap_or_else(|e| panic!("{mib}M: {e}"));
+            assert_eq!(changes.len(), 3, "{mib}M");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn long_changed_keys_take_more_passes_not_an_error() {
+        let rows = |v: &str| -> String {
+            let mut s = String::from("id,v\n");
+            for i in 0..40 {
+                writeln!(s, "{i:08}{},{v}", "k".repeat(50_000 - 8)).unwrap();
+            }
+            s
+        };
+        let (a, b) = (rows("x"), rows("y"));
+        for mib in [1, 2, 4] {
+            let (changes, _) = run(a.as_bytes(), b.as_bytes(), "csv:1", cli(mib))
+                .unwrap_or_else(|e| panic!("{mib}M: {e}"));
+            assert_eq!(changes.len(), 40, "{mib}M");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn every_budget_refusal_asks_for_twice_the_budget() {
+        let long = format!("1,{}\n", "x".repeat(300_000));
+        let (a, b) = (dump(1200, 15, false), dump(1200, 15, true));
+        let small: &[u64] = &[64, 4 << 10, 64 << 10, 200 << 10];
+        let cases = [
+            (long.as_bytes(), &b"1,b\n"[..], "csv:1", small),
+            (&a, &b, "copy:id", &[cli(2), cli(3)]),
+        ];
+        for (a, b, spec, budgets) in cases {
+            for &mem in budgets {
+                let Err(Error::Budget(refusal)) = run(a, b, spec, mem) else {
+                    continue;
+                };
+                let advice = refusal.mem_advice(Bytes(mem));
+                assert!(
+                    advice.is_some_and(|m| m.0 >= 2 * mem),
+                    "{spec} at {mem}: {refusal} advises {advice:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_error_in_the_data_wins_over_a_window_short_of_room() {
+        let short = || {
+            Err(Error::Budget(BudgetExceeded {
+                half: Half::Refine,
+                requested: Bytes(32),
+                available: Bytes(0),
+            }))
+        };
+        let no_key = || {
+            Err(Error::Keyed(KeyError::NoKey {
+                side: Side::B,
+                line: LineNo(3),
+            }))
+        };
+        for (a, b) in [
+            (short(), no_key()),
+            (no_key(), short()),
+            (Ok(true), no_key()),
+        ] {
+            assert!(matches!(
+                both(a, b),
+                Err(Error::Keyed(KeyError::NoKey { .. }))
+            ));
+        }
+        assert!(matches!(both(Ok(true), short()), Err(Error::Budget(_))));
+        assert!(matches!(both(Ok(true), Ok(false)), Ok((true, false))));
+    }
+
+    /// The pass before a stop leaves suspects that are not duplicates,
+    /// and the stopped pass's 63rd suspect is a real duplicate. Counting
+    /// the old suspects first left no room for it, and the run reported
+    /// collisions. Where the passes split moves the bands across them, so
+    /// several positions are tried.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn a_duplicate_after_a_stop_is_named_not_taken_for_collisions() {
+        // Single shard at this budget, so the shards run on this thread.
+        let mem = 128 << 10;
+        let band = |from: u64, width: u64, prefix: &str, n: usize| -> Vec<String> {
+            (0..)
+                .map(|j| format!("{prefix}{j}"))
+                .filter(|k| (from..from + width).contains(&key_hash(k.as_bytes(), 0)))
+                .take(n)
+                .collect()
+        };
+        COLLIDES.with(|c| c.set(|key| key.first().is_some_and(|b| b"cs".contains(b))));
+        let mut fill = String::new();
+        for i in 0..20_000 {
+            writeln!(fill, "k{i},v").unwrap();
+        }
+        for at in 1..8 {
+            let from = END / 8 * at;
+            let suspects = band(from, END >> 10, &format!("c{at}_"), 70);
+            let dup = band(from, END >> 10, &format!("e{at}_"), 1).remove(0);
+            let stale = band(from - END / 10, END / 10, &format!("s{at}_"), 12);
+            let mut a = fill.clone();
+            writeln!(a, "{dup},v").unwrap();
+            for key in &suspects[..62] {
+                writeln!(a, "{key},v").unwrap();
+            }
+            writeln!(a, "{dup},v").unwrap();
+            for key in suspects[62..].iter().chain(&stale) {
+                writeln!(a, "{key},v").unwrap();
+            }
+            let b = format!("{dup},v\n{fill}");
+            let err = run(a.as_bytes(), b.as_bytes(), "csv:1", mem).unwrap_err();
+            let named = matches!(&err, Error::Keyed(KeyError::Duplicate(keys))
+                if keys.iter().any(|k| *k == dup.as_bytes()));
+            assert!(named, "band {at}: {err}");
+        }
+        COLLIDES.with(|c| c.set(|_| false));
     }
 
     #[test]

@@ -68,6 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   side, so `patch` no longer reads a work tree file as deleted.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
+- Key mode no longer refuses budgets between ones that work: `COPY`
+  dumps with many tables failed at 5M to 10M with a budget error, and
+  inputs with records of hundreds of KB or keys of tens of KB failed at
+  budgets where a smaller one worked.
+- Every key-mode budget error names a `--mem` to rerun with, about twice
+  the one refused or more, so following it takes a few reruns. Before,
+  some errors named none, and others named a limit 1 KiB higher that
+  failed again.
+- A key-mode error prints the same text on every run and thread count.
 - Key mode ignores a UTF-8 byte order mark before a CSV header, and
   NDJSON lines of only spaces or tabs, as it ignores blank lines.
 - After a pass stopped on too many suspect keys, key mode could count
