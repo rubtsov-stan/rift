@@ -71,7 +71,8 @@ pub fn key_hash(key: &[u8], seed: u64) -> u64 {
 /// gets the same id in each.
 #[derive(Debug)]
 pub struct Tables {
-    names: Vec<(Box<[u8]>, u64)>,
+    /// Each name, its hash seed, and whether A and B have paid for it.
+    names: Vec<(Box<[u8]>, u64, [bool; 2])>,
     /// Refine half: the names and the list.
     res: Reservation,
 }
@@ -89,23 +90,50 @@ impl Tables {
         })
     }
 
-    /// The id and hash seed of a table name, if it is named already.
-    fn find(&self, name: &[u8]) -> Option<(u32, u64)> {
-        let i = self.names.iter().position(|(n, _)| **n == *name)?;
+    /// The id and hash seed of a table name, if `side` named it already.
+    /// A name the other file gave counts only once this one gives it too,
+    /// so where a chunk stops does not depend on the other reader's pace.
+    fn find(&self, name: &[u8], side: Side) -> Option<(u32, u64)> {
+        let i = self
+            .names
+            .iter()
+            .position(|(n, _, paid)| **n == *name && paid[side as usize])?;
         Some((id(i), self.names[i].1))
     }
 
-    /// The id and hash seed of a table name, added if new.
-    fn id(&mut self, name: &[u8]) -> Result<(u32, u64)> {
-        if let Some(found) = self.find(name) {
-            return Ok(found);
-        }
+    /// The id and hash seed of a table name, added if new, paid from
+    /// `credit`.
+    ///
+    /// A and B can name the same table at once, so each side pays for a
+    /// name the first time it asks: what a side pays then depends only on
+    /// its own file, not on which side asked first.
+    fn id(
+        &mut self,
+        name: &[u8],
+        side: Side,
+        budget: &Budget,
+        credit: &mut u64,
+    ) -> Result<(u32, u64)> {
+        let i = match self.names.iter().position(|(n, ..)| **n == *name) {
+            Some(i) if self.names[i].2[side as usize] => return Ok((id(i), self.names[i].1)),
+            Some(i) => i,
+            None => self.names.len(),
+        };
         // The list doubles, so two slots per name cover its capacity.
-        let slot = size_of::<(Box<[u8]>, u64)>() as u64;
-        self.res.grow(Bytes(name.len() as u64 + 2 * slot))?;
-        self.names.push((name.into(), xxh3_64(name)));
-        let last = self.names.len() - 1;
-        Ok((id(last), self.names[last].1))
+        let slot = size_of::<(Box<[u8]>, u64, [bool; 2])>() as u64;
+        let cost = name.len() as u64 + 2 * slot;
+        if !spend(&mut self.res, credit, cost) {
+            return Err(Error::Budget(BudgetExceeded {
+                half: Half::Refine,
+                requested: Bytes(cost),
+                available: budget.available(Half::Refine),
+            }));
+        }
+        if i == self.names.len() {
+            self.names.push((name.into(), xxh3_64(name), [false; 2]));
+        }
+        self.names[i].2[side as usize] = true;
+        Ok((id(i), self.names[i].1))
     }
 }
 
@@ -258,6 +286,9 @@ struct Chunk {
     recs: Vec<Rec>,
     /// Refine half: `recs`.
     res: Reservation,
+    /// Refine-half bytes `recs` may still grow by this round, see
+    /// [`grow`].
+    credit: u64,
     start: usize,
     until: usize,
     end: usize,
@@ -292,7 +323,13 @@ impl Chunk {
         let mut pos = self.start;
         while pos < self.until {
             if self.recs.len() == self.recs.capacity()
-                && !grow(&mut self.recs, &mut self.res, ctx.budget, 1)
+                && !grow(
+                    &mut self.recs,
+                    &mut self.res,
+                    ctx.budget,
+                    &mut self.credit,
+                    1,
+                )
             {
                 self.stop = Stop::Full;
                 break;
@@ -311,7 +348,14 @@ impl Chunk {
             let found = if rec.is_empty() {
                 Ok(None)
             } else {
-                ctx.key_of(&mut state, rec, split.key, may_name, &mut self.blocks)
+                ctx.key_of(
+                    &mut state,
+                    rec,
+                    split.key,
+                    may_name,
+                    &mut self.blocks,
+                    &mut self.credit,
+                )
             };
             let found = match found {
                 Ok(found) => found,
@@ -374,6 +418,11 @@ impl Ctx<'_> {
     /// The key, table and seed of a record, `None` for a line that is not
     /// a record. A `COPY` header of a table not yet named is
     /// [`Miss::NewTable`] unless `may_name`, and leaves `state` as it was.
+    #[allow(
+        clippy::inline_always,
+        reason = "called for every record; out of line once it took the credit, it slowed Chunk::parse by 1.4% on a 64 MiB SQL pair"
+    )]
+    #[inline(always)]
     fn key_of(
         &self,
         state: &mut State,
@@ -381,6 +430,7 @@ impl Ctx<'_> {
         csv_key: Option<Range<usize>>,
         may_name: bool,
         blocks: &mut u64,
+        credit: &mut u64,
     ) -> std::result::Result<Found, Miss> {
         match self.kind {
             Kind::Csv { name } => {
@@ -411,9 +461,11 @@ impl Ctx<'_> {
                                 let mut tables =
                                     self.tables.lock().unwrap_or_else(PoisonError::into_inner);
                                 let (id, seed) = if may_name {
-                                    tables.id(table).map_err(Miss::Error)?
+                                    tables
+                                        .id(table, self.side, self.budget, credit)
+                                        .map_err(Miss::Error)?
                                 } else {
-                                    tables.find(table).ok_or(Miss::NewTable)?
+                                    tables.find(table, self.side).ok_or(Miss::NewTable)?
                                 };
                                 *blocks += 1;
                                 Some((col, id, seed))
@@ -465,6 +517,8 @@ pub struct Reader<'s, S: ?Sized> {
     seen: [u32; SUSPECTS],
     /// The buffer could not grow to hold one record.
     oversized: bool,
+    /// Credit of each chunk's list per round, see [`grow`].
+    share: u64,
 }
 
 /// Refine-half bytes a reader holds for a `buf`-byte window cut into
@@ -518,6 +572,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             list.push(Chunk {
                 recs: Vec::new(),
                 res: budget.try_reserve(Half::Refine, Bytes(0))?,
+                credit: u64::MAX,
                 start: 0,
                 until: 0,
                 end: 0,
@@ -551,6 +606,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             valid: 0,
             seen: [0; SUSPECTS],
             oversized: false,
+            share: u64::MAX,
         })
     }
 
@@ -585,6 +641,12 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
                 .shrink(Bytes((c.recs.capacity() * size_of::<Rec>()) as u64));
             c.recs = Vec::new();
         }
+    }
+
+    /// Gives each chunk's list `share` bytes of credit per round, for a
+    /// reader that runs beside another; see [`grow`].
+    pub(crate) fn set_share(&mut self, share: u64) {
+        self.share = share;
     }
 
     /// Bytes in the file.
@@ -676,6 +738,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             };
             let c = &mut self.chunks[k];
             (c.start, c.until, c.state0) = (at, next, self.state);
+            c.credit = self.share;
             at = next;
             k += 1;
         }
@@ -734,9 +797,43 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
     }
 
     /// Moves the unread bytes to the front and reads until the buffer is
-    /// full, growing it when one record fills it. The buffer stays below
-    /// 4 GiB so a record's offsets fit `u32`.
+    /// full, growing it when one record fills it.
     fn refill(&mut self) -> Result<()> {
+        self.make_room()?;
+        while self.end < self.buf.len() {
+            match self
+                .src
+                .read_at(&mut self.buf[self.end..], ByteOffset(self.pos))
+            {
+                Ok(0) => {
+                    self.eof = true;
+                    break;
+                }
+                Ok(n) => {
+                    self.end += n;
+                    self.pos += n as u64;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// The first half of [`refill`](Self::refill): moves the unread bytes
+    /// to the front and doubles the buffer when one record fills it. A
+    /// second call before the read changes nothing, so a caller can grow
+    /// both windows one after the other before they are read side by side,
+    /// and neither growth depends on the other's lists. The buffer stays
+    /// below 4 GiB so a record's offsets fit `u32`.
+    ///
+    /// # Errors
+    ///
+    /// A record too long for key mode, or a budget error.
+    pub(crate) fn make_room(&mut self) -> Result<()> {
+        if self.eof {
+            return Ok(());
+        }
         if self.start > 0 {
             self.buf.copy_within(self.start..self.end, 0);
             self.end -= self.start;
@@ -760,23 +857,6 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
                 return Err(io::Error::from(io::ErrorKind::OutOfMemory).into());
             }
             self.buf.resize(self.buf.len() + more, 0);
-        }
-        while self.end < self.buf.len() {
-            match self
-                .src
-                .read_at(&mut self.buf[self.end..], ByteOffset(self.pos))
-            {
-                Ok(0) => {
-                    self.eof = true;
-                    break;
-                }
-                Ok(n) => {
-                    self.end += n;
-                    self.pos += n as u64;
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e.into()),
-            }
         }
         Ok(())
     }
@@ -860,24 +940,51 @@ impl<S: Source + ?Sized> Reader<'_, S> {
     }
 }
 
-/// Makes room for `need` more elements in `v`, paid from `res`: double
-/// the capacity when half of what the half has free allows, so the other
-/// lists keep room to grow, else exactly `need`.
-pub(crate) fn grow<T>(v: &mut Vec<T>, res: &mut Reservation, budget: &Budget, need: usize) -> bool {
+/// Makes room for `need` more elements in `v`, paid from `res` and
+/// `credit`: double the capacity when half of what is free allows, so the
+/// other lists keep room to grow, else exactly `need`. What is free is the
+/// smaller of `credit` and what the refine half has free.
+///
+/// Lists that grow at the same time on several threads each get a credit,
+/// their share of the half as it was before they started, so whether one
+/// can grow depends on its own records only and not on what the others
+/// took first. A list that grows alone takes `u64::MAX`.
+// Out of line: a list grows a few times per pass, and inlined into
+// `Chunk::parse` it slowed the per-record loop.
+#[inline(never)]
+pub(crate) fn grow<T>(
+    v: &mut Vec<T>,
+    res: &mut Reservation,
+    budget: &Budget,
+    credit: &mut u64,
+    need: usize,
+) -> bool {
     if v.capacity() - v.len() >= need {
         return true;
     }
     let size = size_of::<T>().max(1);
-    let free = usize::try_from(budget.available(Half::Refine).0).unwrap_or(usize::MAX) / size;
+    let free = budget.available(Half::Refine).0.min(*credit);
+    let free = usize::try_from(free).unwrap_or(usize::MAX) / size;
     let missing = need - (v.capacity() - v.len());
     let add = missing.max(v.capacity().max(64).min(free / 2));
-    if res.grow(Bytes((add * size) as u64)).is_err() {
+    let bytes = (add * size) as u64;
+    if !spend(res, credit, bytes) {
         return false;
     }
     if v.try_reserve_exact(v.capacity() + add - v.len()).is_err() {
-        res.shrink(Bytes((add * size) as u64));
+        res.shrink(Bytes(bytes));
+        *credit += bytes;
         return false;
     }
+    true
+}
+
+/// Moves `bytes` of `credit` into `res`, if both have them.
+pub(crate) fn spend(res: &mut Reservation, credit: &mut u64, bytes: u64) -> bool {
+    if bytes > *credit || res.grow(Bytes(bytes)).is_err() {
+        return false;
+    }
+    *credit -= bytes;
     true
 }
 

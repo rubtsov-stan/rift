@@ -11,7 +11,11 @@
 //! The range is split between shards, one per thread, by bits of the key
 //! hash the table does not use; each shard owns a table, its waiting
 //! records and its duplicates, and they take the records of a window in
-//! parallel. When a shard's table or waiting records outgrow the budget,
+//! parallel. Each shard grows its lists from its own share of what the
+//! refine half had free when the round began, so whether a shard runs out
+//! depends on its records alone, never on which thread grew first, and a
+//! pass ends at the same place on every run. When a shard's table or
+//! waiting records outgrow the budget,
 //! the pass starts over on a narrower range, sized from how far it had
 //! read: a fingerprint cannot say which keys lie above a new top, so the
 //! table cannot be thinned in place. Nothing is ever written to disk.
@@ -26,7 +30,7 @@ use std::sync::Mutex;
 
 use rayon::prelude::*;
 
-use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow, reader_bytes};
+use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow, reader_bytes, spend};
 use super::{ChangeKind, KeyError, KeyedChange, RangedChange, Side};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
@@ -438,7 +442,23 @@ where
     let filter = Filter::new(lo, hi, pending);
     let total = ra.len() + rb.len();
     let n = shards.len();
+    let budget = shards[0].budget;
+    // Lists that grow side by side split what is free between them, so
+    // where a pass ends depends on the files and the budget, not on which
+    // thread grew first. One shard runs everything on one thread.
+    let share = |parts: usize| {
+        if n == 1 {
+            u64::MAX
+        } else {
+            budget.available(Half::Refine).0 / parts as u64
+        }
+    };
     loop {
+        ra.make_room()?;
+        rb.make_room()?;
+        let chunks = share(2 * n);
+        ra.set_share(chunks);
+        rb.set_share(chunks);
         let (ga, gb) = if n == 1 {
             (ra.advance(tables, &filter), rb.advance(tables, &filter))
         } else {
@@ -455,6 +475,10 @@ where
             continue;
         }
         let (ra, rb) = (&**ra, &**rb);
+        let credit = share(n);
+        for s in shards.iter_mut() {
+            s.credit = credit;
+        }
         if n == 1 {
             shards[0].round(0, 1, ra, rb);
         } else {
@@ -522,7 +546,8 @@ impl Pending {
             shard.res.shrink(bytes);
             if self.list.len() < SUSPECTS {
                 let budget = shard.budget;
-                if !grow(&mut self.list, &mut self.res, budget, 1) {
+                let mut alone = u64::MAX;
+                if !grow(&mut self.list, &mut self.res, budget, &mut alone, 1) {
                     return Err(Error::Budget(BudgetExceeded {
                         half: Half::Refine,
                         requested: Bytes(size_of::<Suspect>() as u64),
@@ -692,6 +717,8 @@ struct Pass<'b, X: Extra> {
     /// Refine half: `kept`, the arena, the duplicates, the suspects and
     /// the key of `change`.
     res: Reservation,
+    /// Refine-half bytes `res` may still grow by this round, see [`grow`].
+    credit: u64,
     overflow: Option<Half>,
     fault: Option<Error>,
 }
@@ -724,6 +751,7 @@ impl<'b, X: Extra> Pass<'b, X> {
                 b: None,
             }),
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
+            credit: u64::MAX,
             overflow: None,
             fault: None,
         })
@@ -899,8 +927,14 @@ impl<'b, X: Extra> Pass<'b, X> {
     fn duplicate(&mut self, key: &[u8]) {
         if self.dups.len() < FEW
             && !self.dups.iter().any(|d| d == key)
-            && grow(&mut self.dups, &mut self.res, self.budget, 1)
-            && self.res.grow(Bytes(key.len() as u64)).is_ok()
+            && grow(
+                &mut self.dups,
+                &mut self.res,
+                self.budget,
+                &mut self.credit,
+                1,
+            )
+            && spend(&mut self.res, &mut self.credit, key.len() as u64)
         {
             self.dups.push(key.to_vec());
         }
@@ -948,17 +982,35 @@ impl<'b, X: Extra> Pass<'b, X> {
         }
         let fits = self.kept.len() < (WAITING - 1) as usize
             && u32::try_from(self.arena.len() + len).is_ok()
-            && grow(&mut self.kept, &mut self.res, self.budget, 1)
-            && grow(&mut self.arena, &mut self.res, self.budget, len)
+            && grow(
+                &mut self.kept,
+                &mut self.res,
+                self.budget,
+                &mut self.credit,
+                1,
+            )
+            && grow(
+                &mut self.arena,
+                &mut self.res,
+                self.budget,
+                &mut self.credit,
+                len,
+            )
             && grow(
                 &mut X::base(&mut self.change).key,
                 &mut self.res,
                 self.budget,
+                &mut self.credit,
                 key,
             )
             && (!suspect
-                || (grow(&mut self.suspects, &mut self.res, self.budget, 1)
-                    && self.res.grow(Bytes(key as u64)).is_ok()));
+                || (grow(
+                    &mut self.suspects,
+                    &mut self.res,
+                    self.budget,
+                    &mut self.credit,
+                    1,
+                ) && spend(&mut self.res, &mut self.credit, key as u64)));
         (!fits).then_some(Half::Refine)
     }
 
