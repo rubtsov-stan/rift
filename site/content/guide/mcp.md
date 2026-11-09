@@ -104,7 +104,7 @@ The table comes from the server's own `tools/list` answer. A `?` marks an option
 
 {{ mcp_tools() }}
 
-`mem` is a memory budget like `--mem`: `64M` by default, at most `256M`. A live diff keeps the budget it was built with. In the answer of `summary`, `approx` counts the refined segments that came out approximate and `differs` counts the other differing segments.
+`mem` is a memory budget like `--mem`: `64M` by default, at most `256M`. A live diff keeps the budget it was built with. In the answer of `summary`, `approx` counts the refined segments that came out approximate and `differs` counts the other differing segments. Its `mem_reserved_bytes` is the memory the session holds. That includes a response pool of 1/16 of the refine half, at most 8 MiB, which every session reserves before the diff is built. The MCP tools do not use it, so refinement gets that much less of `mem`.
 
 ## A session on a 1 GiB pair
 

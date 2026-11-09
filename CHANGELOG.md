@@ -99,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a front end asked for and was not yet refined held about 20 bytes, so
   a `rift serve` or `rift-mcp` client asking for every segment of a
   large diff could add tens of megabytes.
+- `Session::excerpt` on a session from `Sessions::get` no longer takes
+  bytes from the diff's refine half, which could leave a refinement
+  waiting for them forever. Such sessions now hold a response pool, as
+  `rift serve` sessions do: 1/16 of the refine half, at most 8 MiB.
+  `rift-mcp` does not use the pool, so it refines with that much less of
+  its `mem`, and `mem_reserved_bytes` in its summary counts the pool.
 
 ## [0.3.2] - 2026-11-10
 

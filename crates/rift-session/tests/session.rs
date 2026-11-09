@@ -377,6 +377,25 @@ fn excerpts_share_the_response_pool_and_return_it() {
 }
 
 #[test]
+fn an_excerpt_of_a_session_from_get_leaves_the_diff_budget_alone() {
+    // Bytes taken from the diff's Refine half after its scheduler was
+    // built make a worker wait for them with nothing running to wake it.
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let file = |p: &str| rift_session::file::FileSource::open(p).unwrap();
+    let session = sessions().get(file(&a), file(&b), MEM).unwrap();
+    for i in 0..session.diff().unwrap().segments().len() {
+        refined(&session, i);
+    }
+    let before = session.summary().unwrap().reserved;
+    let excerpt = session
+        .excerpt(&ExcerptRequest::new(At::Segment(1)))
+        .unwrap();
+    assert_eq!(session.summary().unwrap().reserved, before);
+    drop(excerpt);
+}
+
+#[test]
 fn core_errors_map_to_their_codes() {
     let mem = Bytes::mib(1);
     let build = |error| Error::Build { mem, error };

@@ -81,7 +81,7 @@ pub struct Summary {
     pub moved_blocks: u64,
     /// The session's budget.
     pub mem: Bytes,
-    /// Bytes of it reserved now, both halves.
+    /// Bytes of it reserved now, both halves, the response pool included.
     pub reserved: Bytes,
     /// Refinement so far.
     pub progress: Progress,
@@ -350,13 +350,10 @@ impl Session {
     /// reached through [`At::LineA`] from that line, since its lines match
     /// one for one. Each side shows at most `max_lines` lines of at most
     /// `max_line_bytes` bytes, and both sides together fit what the
-    /// response pool (or, for a session from [`Sessions::get`], the free
-    /// Refine half) had free when the call began. Memory: the lines, their
+    /// response pool had free when the call began. Memory: the lines, their
     /// text and one line buffer, held by the returned excerpt until it is
     /// dropped. Time: one positional read per line shown, two for a
     /// truncated one, plus `O(moved blocks)`.
-    ///
-    /// [`Sessions::get`]: crate::Sessions::get
     ///
     /// # Errors
     ///
@@ -407,7 +404,7 @@ impl Session {
         let window_a = first_a - pre..seg.a.end.0 + post;
         let window_b = first_b - pre..seg.b.end.0 + post;
 
-        let pool = built.pool.as_ref().map_or(&built.budget, |p| &p.budget);
+        let pool = &built.pool.budget;
         let cap = pool.capacity(Half::Refine).0;
         // One line on each side and the line buffer must fit an empty
         // pool, so a small budget narrows lines instead of refusing them.

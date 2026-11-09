@@ -133,7 +133,8 @@ pub struct Summary {
     pub more_differences: u64,
     /// Memory budget of this diff, in bytes.
     pub mem_budget_bytes: u64,
-    /// Bytes of that budget the diff holds now.
+    /// Bytes of that budget the session holds now: the diff and the
+    /// response pool, which these tools leave unused.
     pub mem_reserved_bytes: u64,
 }
 

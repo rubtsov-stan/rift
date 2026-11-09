@@ -34,7 +34,7 @@ pub const MAX_TOTAL_MEM: Bytes = Bytes::mib(512);
 pub const MAX_SESSIONS: usize = 4;
 /// A session unused for this long is dropped.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-/// The response pool of a session opened by path is this fraction,
+/// The response pool of a session is this fraction,
 /// `1 / RESPONSE_SHARE`, of its Refine half, and at most
 /// [`MAX_RESPONSE_POOL`].
 pub const RESPONSE_SHARE: u64 = 16;
@@ -120,7 +120,7 @@ pub(crate) struct Pool {
 pub(crate) struct Built {
     pub(crate) diff: Diff<FileSource, FileSource>,
     pub(crate) budget: Budget,
-    pub(crate) pool: Option<Pool>,
+    pub(crate) pool: Pool,
 }
 
 /// A session's share of [`Limits::total_mem`], given back once: when the
@@ -215,25 +215,22 @@ impl Session {
     }
 
     /// Scans `a` and `b` and builds the diff within the session's budget,
-    /// with a response pool when `pool` is set.
-    fn build(&self, a: FileSource, b: FileSource, pool: bool) -> Result<Built, Error> {
+    /// with a response pool.
+    fn build(&self, a: FileSource, b: FileSource) -> Result<Built, Error> {
         let mem = self.mem;
         let budget = Budget::new(mem);
         let build = |error| Error::Build { mem, error };
         // Taken before the diff, which sizes its workers and cache from
-        // what the Refine half has left.
-        let pool = if pool {
-            let share =
-                Bytes((budget.capacity(Half::Refine).0 / RESPONSE_SHARE).min(MAX_RESPONSE_POOL.0));
-            let held = budget
-                .try_reserve(Half::Refine, share)
-                .map_err(|e| build(e.into()))?;
-            Some(Pool {
-                budget: Budget::new(Bytes(2 * share.0)),
-                _held: held,
-            })
-        } else {
-            None
+        // what the Refine half has left. Bytes the scheduler did not see
+        // at construction would make its workers wait for them.
+        let share =
+            Bytes((budget.capacity(Half::Refine).0 / RESPONSE_SHARE).min(MAX_RESPONSE_POOL.0));
+        let held = budget
+            .try_reserve(Half::Refine, share)
+            .map_err(|e| build(e.into()))?;
+        let pool = Pool {
+            budget: Budget::new(Bytes(2 * share.0)),
+            _held: held,
         };
         let threads = std::thread::available_parallelism()
             .map_or(1, std::num::NonZero::get)
@@ -443,10 +440,8 @@ impl Sessions {
     /// for the scan, its own or that of a session [`open`](Self::open)
     /// started for the pair.
     ///
-    /// A session built here has no response pool: an
-    /// [`excerpt`](Session::excerpt) of it is paid from whatever its Refine
-    /// half has free. A scan that fails leaves no session behind.
-    /// `rift-mcp` renders its answers itself and uses this.
+    /// A scan that fails leaves no session behind. `rift-mcp` renders its
+    /// answers itself and uses this.
     ///
     /// # Errors
     ///
@@ -490,7 +485,7 @@ impl Sessions {
             let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
             break (session, Building { sessions: self });
         };
-        let built = session.build(a, b, false)?;
+        let built = session.build(a, b)?;
         // Never set before: the session was made by this call and is not
         // in the table yet.
         let _ = session.built.set(Ok(built));
@@ -509,8 +504,7 @@ impl Sessions {
         Ok(session)
     }
 
-    /// Opens the files at `a` and `b` and returns their session, with a
-    /// response pool for [`excerpt`](Session::excerpt).
+    /// Opens the files at `a` and `b` and returns their session.
     ///
     /// A live session of the pair is returned as it is, scanning or ready;
     /// a failed one is replaced. A new one is built with `mem` (the default
@@ -561,7 +555,7 @@ impl Sessions {
         let spawned = std::thread::Builder::new()
             .name("rift-scan".into())
             .spawn(move || {
-                let result = scan.build(a, b, true);
+                let result = scan.build(a, b);
                 if result.is_err() {
                     scan.held.release();
                 }

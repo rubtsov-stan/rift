@@ -475,7 +475,7 @@
             "type": "integer"
            },
            "mem_reserved_bytes": {
-            "description": "Bytes of that budget the diff holds now.",
+            "description": "Bytes of that budget the session holds now: the diff and the\nresponse pool, which these tools leave unused.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -514,7 +514,7 @@
        ]
       }
      },
-     "response_bytes": 7889
+     "response_bytes": 7957
     },
     {
      "note": "How different are the two dumps?",
@@ -537,7 +537,7 @@
        "content": [
         {
          "type": "text",
-         "text": "{\"a_bytes\":1073741876,\"a_lines\":13327101,\"approx\":{\"a_lines\":0,\"b_lines\":0,\"segments\":0},\"b_bytes\":1074747414,\"b_lines\":13337797,\"differs\":{\"a_lines\":969786,\"b_lines\":980482,\"segments\":6753},\"equal\":{\"a_lines\":12357315,\"b_lines\":12357315,\"segments\":6512},\"first_differences\":[{\"a\":{\"count\":131,\"start\":279},\"b\":{\"count\":130,\"start\":279},\"status\":\"differs\"},{\"a\":{\"count\":139,\"start\":905},\"b\":{\"count\":139,\"start\":904},\"status\":\"differs\"},{\"a\":{\"count\":55,\"start\":1232},\"b\":{\"count\":56,\"start\":1231},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":8096},\"b\":{\"count\":31,\"start\":8096},\"status\":\"differs\"},{\"a\":{\"count\":13,\"start\":9609},\"b\":{\"count\":21,\"start\":9600},\"status\":\"differs\"},{\"a\":{\"count\":49,\"start\":11781},\"b\":{\"count\":57,\"start\":11780},\"status\":\"differs\"},{\"a\":{\"count\":430,\"start\":17446},\"b\":{\"count\":110,\"start\":17453},\"status\":\"differs\"},{\"a\":{\"count\":19,\"start\":21544},\"b\":{\"count\":16,\"start\":21231},\"status\":\"differs\"},{\"a\":{\"count\":316,\"start\":22520},\"b\":{\"count\":319,\"start\":22204},\"status\":\"differs\"},{\"a\":{\"count\":75,\"start\":24979},\"b\":{\"count\":65,\"start\":24666},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":26662},\"b\":{\"count\":77,\"start\":26339},\"status\":\"differs\"},{\"a\":{\"count\":138,\"start\":26923},\"b\":{\"count\":141,\"start\":26610},\"status\":\"differs\"},{\"a\":{\"count\":352,\"start\":27606},\"b\":{\"count\":27,\"start\":27296},\"status\":\"differs\"},{\"a\":{\"count\":190,\"start\":28686},\"b\":{\"count\":520,\"start\":28051},\"status\":\"differs\"},{\"a\":{\"count\":203,\"start\":30592},\"b\":{\"count\":203,\"start\":30287},\"status\":\"differs\"},{\"a\":{\"count\":182,\"start\":31085},\"b\":{\"count\":172,\"start\":30780},\"status\":\"differs\"},{\"a\":{\"count\":197,\"start\":36787},\"b\":{\"count\":187,\"start\":36472},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":36984},\"b\":{\"count\":59,\"start\":36659},\"status\":\"differs\"},{\"a\":{\"count\":142,\"start\":37727},\"b\":{\"count\":133,\"start\":37421},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":38498},\"b\":{\"count\":57,\"start\":38183},\"status\":\"differs\"}],\"identical\":false,\"mem_budget_bytes\":67108864,\"mem_reserved_bytes\":25194913,\"more_differences\":6733,\"refined_segments\":0}"
+         "text": "{\"a_bytes\":1073741876,\"a_lines\":13327101,\"approx\":{\"a_lines\":0,\"b_lines\":0,\"segments\":0},\"b_bytes\":1074747414,\"b_lines\":13337797,\"differs\":{\"a_lines\":969786,\"b_lines\":980482,\"segments\":6753},\"equal\":{\"a_lines\":12357315,\"b_lines\":12357315,\"segments\":6512},\"first_differences\":[{\"a\":{\"count\":131,\"start\":279},\"b\":{\"count\":130,\"start\":279},\"status\":\"differs\"},{\"a\":{\"count\":139,\"start\":905},\"b\":{\"count\":139,\"start\":904},\"status\":\"differs\"},{\"a\":{\"count\":55,\"start\":1232},\"b\":{\"count\":56,\"start\":1231},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":8096},\"b\":{\"count\":31,\"start\":8096},\"status\":\"differs\"},{\"a\":{\"count\":13,\"start\":9609},\"b\":{\"count\":21,\"start\":9600},\"status\":\"differs\"},{\"a\":{\"count\":49,\"start\":11781},\"b\":{\"count\":57,\"start\":11780},\"status\":\"differs\"},{\"a\":{\"count\":430,\"start\":17446},\"b\":{\"count\":110,\"start\":17453},\"status\":\"differs\"},{\"a\":{\"count\":19,\"start\":21544},\"b\":{\"count\":16,\"start\":21231},\"status\":\"differs\"},{\"a\":{\"count\":316,\"start\":22520},\"b\":{\"count\":319,\"start\":22204},\"status\":\"differs\"},{\"a\":{\"count\":75,\"start\":24979},\"b\":{\"count\":65,\"start\":24666},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":26662},\"b\":{\"count\":77,\"start\":26339},\"status\":\"differs\"},{\"a\":{\"count\":138,\"start\":26923},\"b\":{\"count\":141,\"start\":26610},\"status\":\"differs\"},{\"a\":{\"count\":352,\"start\":27606},\"b\":{\"count\":27,\"start\":27296},\"status\":\"differs\"},{\"a\":{\"count\":190,\"start\":28686},\"b\":{\"count\":520,\"start\":28051},\"status\":\"differs\"},{\"a\":{\"count\":203,\"start\":30592},\"b\":{\"count\":203,\"start\":30287},\"status\":\"differs\"},{\"a\":{\"count\":182,\"start\":31085},\"b\":{\"count\":172,\"start\":30780},\"status\":\"differs\"},{\"a\":{\"count\":197,\"start\":36787},\"b\":{\"count\":187,\"start\":36472},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":36984},\"b\":{\"count\":59,\"start\":36659},\"status\":\"differs\"},{\"a\":{\"count\":142,\"start\":37727},\"b\":{\"count\":133,\"start\":37421},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":38498},\"b\":{\"count\":57,\"start\":38183},\"status\":\"differs\"}],\"identical\":false,\"mem_budget_bytes\":67108864,\"mem_reserved_bytes\":26268942,\"more_differences\":6733,\"refined_segments\":0}"
         }
        ],
        "structuredContent": {
@@ -784,7 +784,7 @@
         ],
         "identical": false,
         "mem_budget_bytes": 67108864,
-        "mem_reserved_bytes": 25194913,
+        "mem_reserved_bytes": 26268942,
         "more_differences": 6733,
         "refined_segments": 0
        },
