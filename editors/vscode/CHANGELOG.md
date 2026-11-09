@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.1] - 2026-11-09
+
+- Bundles `rift` 0.3.1.
+- The summary row's approx count now counts the segments that came out
+  approximate once refined. It read 0 before.
+
 ## [0.3.0] - 2026-11-08
 
 First release.

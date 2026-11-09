@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-09
+
 ### Added
 
 - `rift --key --show-records` prints the records under each change: A's
@@ -28,15 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--mem 1M` did on 8 threads. The `rerun with --mem N` it prints names a
   limit that gets past that point; here 1089K, which gives the same
   summary as before.
-
-### Known issues
-
-- Key mode at exactly `--mem 16M` runs on one thread: the reserve takes
-  the refine half just under the 8 MiB key mode needs for several. On a
-  128 MiB CSV pair it takes 2.21 s instead of 1.25 s in 0.3.0, about 77%
-  longer. `--mem 16528K` or more restores the old time.
-- Key mode's line order can differ between runs once it uses several
-  threads. The set of lines is always the same.
+- An approximate hunk says why in plain words: the unified diff writes
+  `@@ ... @@ approx: <reason>`, `--stats` counts the segments for each
+  reason, the terminal view shows the reason in the status line when it
+  fits, and `rift-mcp` adds it to the hunk header. `Hunk::approx` in
+  `rift-core` is now an `Option<ApproxReason>`.
 
 ### Fixed
 
@@ -65,13 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rift-mcp` adds `refined_segments`; in `rift serve`, `progress.done` is
   that count.
 
-### Changed
+### Known issues
 
-- An approximate hunk says why in plain words: the unified diff writes
-  `@@ ... @@ approx: <reason>`, `--stats` counts the segments for each
-  reason, the terminal view shows the reason in the status line when it
-  fits, and `rift-mcp` adds it to the hunk header. `Hunk::approx` in
-  `rift-core` is now an `Option<ApproxReason>`.
+- Key mode at exactly `--mem 16M` runs on one thread: the reserve takes
+  the refine half just under the 8 MiB key mode needs for several. On a
+  128 MiB CSV pair it takes 2.21 s instead of 1.25 s in 0.3.0, about 77%
+  longer. `--mem 16528K` or more restores the old time.
+- Key mode's line order can differ between runs once it uses several
+  threads. The set of lines is always the same.
 
 ## [0.3.0] - 2026-11-08
 
@@ -217,7 +216,8 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/rubtsov-stan/rift/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rubtsov-stan/rift/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rubtsov-stan/rift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rubtsov-stan/rift/releases/tag/v0.1.0
