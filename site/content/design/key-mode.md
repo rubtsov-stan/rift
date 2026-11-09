@@ -76,17 +76,21 @@ On a 256 MiB pair from `rift-gen --seed 7 --size 256M --profile shuffled --rows 
 | 256M | 1 | 74.3 MiB | 0.41 s |
 | 1G | 1 | 74.3 MiB | 0.41 s |
 
-Every run reported the same 100,154 changed keys; the order of the lines differs between pass counts, since each pass prints its own changes, and sorted outputs are identical. Times are single runs with a warm page cache; three more runs at 8M took 2.00 to 2.68 s, and at 64M 0.39 to 0.53 s. Below 16 MiB of `--mem` one thread does all the work, which accounts for part of the jump from 16M to 8M. Measured 2026-11-07 on an Apple M1, 16 GiB, macOS 27.0.1.
+Every run reported the same 100,154 changed keys; the order of the lines differs between pass counts, since each pass prints its own changes, and sorted outputs are identical. Times are single runs with a warm page cache; three more runs at 8M took 2.00 to 2.68 s, and at 64M 0.39 to 0.53 s. In 0.3.0, below 16 MiB of `--mem` one thread did all the work, which accounts for part of the jump from 16M to 8M. Measured 2026-11-07 on an Apple M1, 16 GiB, macOS 27.0.1.
 
 DESIGN.md records the large case: the 10 GiB `shuffled` CSV pair at `--mem 256M` takes 6 passes and about 41 s on the M1 with files larger than the page cache, each pass at about the speed of the disk.
 
-Sources: `pass.rs`, `Pass::new`, `Pass::shards`, `threads`, `PARALLEL_REFINE`.
+Sources: `pass.rs`, `Pass::new`, `Pass::shards`, `plan`.
 
 ## Threads
 
-The work is spread twice. A window is cut into chunks at line breaks, and every chunk is split into records on its own thread, assuming a record starts at its first byte and the parser is in the state the window started in. A chunk counts only if the one before it ended where it starts, in that state. A quoted line break at a cut, or a `COPY` header inside the window, makes the rest parse again; plain rows never do. Then the pass's range is split between shards, one per thread, by bits of the key hash the table does not use, and each shard has a table and waiting records of its own.
+The work is spread twice. A window is cut into chunks at line breaks, and every chunk is split into records on its own thread, assuming a record starts at its first byte and the parser is in the state the window started in. A chunk counts only if the one before it ended where it starts, in that state. A quoted line break at a cut, or a `COPY` header inside the window, makes the rest parse again; plain rows never do. Then the pass's range is split between shards by bits of the key hash the table does not use, and each shard has a table and waiting records of its own.
 
-Sources: `read.rs`, module docs; `pass.rs`, `shard`.
+The shard count comes from `--mem` alone: one per MiB of the refine half, from 1 to 8. The shards run on a thread pool of their own, one thread per shard, at most one per core or `RAYON_NUM_THREADS`; its heap, 16 KiB per shard, comes from the refine half. The threads decide only who runs which shard, so a machine with fewer cores runs the same passes, more slowly.
+
+Lists that grow at the same time never race for the refine half. Before each round, what the half has free is split into equal credits, one per chunk list of the two windows and one per shard, and a list grows only within its own. Whether a shard runs out, and so where a pass starts over, depends on its records alone. The same files under the same `--mem` print the same bytes on every run, on any machine.
+
+Sources: `read.rs`, module docs, `grow`; `pass.rs`, `shard`, `plan`, `workers`, `read_pass`.
 
 ## Duplicate keys
 

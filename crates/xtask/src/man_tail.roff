@@ -152,7 +152,9 @@ status a shell reports for \fBdiff\fR(1) killed by SIGPIPE.
 The heap stays at or under \fB\-\-mem\fR. Rift keeps 48 KiB of it, plus
 12 KiB per thread of its thread pool (one per core, or
 \fBRAYON_NUM_THREADS\fR), for the heap no budget counts: the command line,
-output buffers, messages and the thread pool. The rest is the budget,
+output buffers, messages and the thread pool. Key mode keeps only the
+48 KiB: it runs on threads of its own and takes their heap from the
+budget. The rest is the budget,
 half for the map of the files and half for refinement. Rift reserves
 each allocation on the data path from the budget before it makes it, and
 reads files with
