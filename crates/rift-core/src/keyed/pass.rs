@@ -179,9 +179,7 @@ where
                 let mut dups = collect_dups(&mut shards);
                 if dups.is_empty() {
                     // Too many suspects: settle the first of them now.
-                    for s in &mut shards {
-                        pending.take_from(s)?;
-                    }
+                    pending.replace(&mut shards)?;
                     let mut readers = (&mut ra, &mut rb, &tables);
                     on(workers.as_ref(), || {
                         read_pass(&mut readers, &mut shards, END, END, &pending.list)
@@ -224,10 +222,7 @@ where
                 }
                 report.changes += emit(&mut shards, &mut on_change)?;
                 report.passes += 1;
-                pending.clear();
-                for s in &mut shards {
-                    pending.take_from(s)?;
-                }
+                pending.replace(&mut shards)?;
                 // A range cut short by waiting records may leave the
                 // tables half empty; widen the next pass toward 90%.
                 let grown = scale(hi - lo, (0.9 / fill(&shards).max(f64::EPSILON)).min(2.0));
@@ -576,10 +571,16 @@ impl Pending {
         })
     }
 
-    fn clear(&mut self) {
+    /// Drops the suspects the last read counted and takes the shards'
+    /// suspects for the next read to count.
+    fn replace<X: Extra>(&mut self, shards: &mut [Pass<'_, X>]) -> Result<()> {
         for s in self.list.drain(..) {
             self.res.shrink(Bytes(s.key.len() as u64));
         }
+        for s in shards {
+            self.take_from(s)?;
+        }
+        Ok(())
     }
 
     /// Moves a shard's suspects here, as many as are counted at once.
@@ -1435,6 +1436,28 @@ mod tests {
     fn a_tiny_budget_is_a_budget_error() {
         let err = run(b"1,a\n", b"1,b\n", "csv:1", 64).unwrap_err();
         assert!(matches!(err, Error::Budget(_)), "{err}");
+    }
+
+    #[test]
+    fn a_stopped_read_counts_its_own_suspects() {
+        // The last pass left suspects the stopped read already counted;
+        // the read that settles the stop must count the new ones instead.
+        let budget = Budget::new(Bytes(1 << 20));
+        let suspect = |key: &[u8]| Suspect {
+            side: Side::A,
+            table: 0,
+            hash: 1,
+            key: key.to_vec(),
+        };
+        let mut pending = Pending::new(&budget).unwrap();
+        for i in 0..SUSPECTS {
+            pending.list.push(suspect(format!("old{i}").as_bytes()));
+        }
+        let (mut shards, _list) = Pass::<()>::shards(&budget, 10, 1).unwrap();
+        shards[0].suspects.push(suspect(b"d2"));
+        pending.replace(&mut shards).unwrap();
+        let keys: Vec<&[u8]> = pending.list.iter().map(|s| &s.key[..]).collect();
+        assert_eq!(keys, [b"d2"]);
     }
 
     #[test]
