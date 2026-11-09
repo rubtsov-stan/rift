@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tail of a long line as a whole line instead of refusing it as too long.
   The reader now keeps the line's start across short reads.
 
+- A file that grows while Rift reads it no longer yields bytes past the
+  length taken at open, which could mix two versions of the file in one
+  diff. Reads stop at that length.
+
 ## [0.3.1] - 2026-11-09
 
 ### Added

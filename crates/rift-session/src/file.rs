@@ -165,7 +165,9 @@ impl Source for FileSource {
     }
 
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
-        self.file.read_at(buf, offset.0)
+        let left = self.len.saturating_sub(offset.0);
+        let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+        self.file.read_at(&mut buf[..n], offset.0)
     }
 }
 
@@ -191,6 +193,18 @@ mod tests {
         let mut buf = [0u8; 3];
         assert_eq!(src.read_at(&mut buf, ByteOffset(4)).unwrap(), 3);
         assert_eq!(&buf, b"two");
+    }
+
+    #[test]
+    fn reads_stop_at_the_length_taken_at_open() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"x\ny\n").unwrap();
+        let (src, _) = FileSource::open(tmp.path().to_str().unwrap()).unwrap();
+        tmp.write_all(b"ZZ\n").unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(src.read_at(&mut buf, ByteOffset(0)).unwrap(), 4);
+        assert_eq!(&buf[..4], b"x\ny\n");
+        assert_eq!(src.read_at(&mut buf, ByteOffset(4)).unwrap(), 0);
     }
 
     #[test]
