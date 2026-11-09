@@ -320,6 +320,10 @@ async function main() {
   const lastProgress = () => notes.filter((n) => n.method === 'progress' && n.params.session === s).pop().params;
   await until(() => lastProgress().done === lastProgress().total, 'refinement progress at its total');
   assert.strictEqual(lastProgress().phase, 'refine');
+  // Refinement ended approx for segment 1, which the map lists as differs.
+  const refinedPage = await ok('segments', { session: s, offset: 0, limit: 100 });
+  assert.strictEqual(refinedPage.segments.find((x) => x.index === 1).status, 'approx');
+  assert.strictEqual(refinedPage.segments.find((x) => x.index === 7).status, 'differs');
 
   // Malformed input gets an error, not a crash.
   write('{not json');

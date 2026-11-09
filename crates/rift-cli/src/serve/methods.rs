@@ -431,7 +431,17 @@ impl Serialize for SegmentsPage {
                         index,
                         a: range(&s.a),
                         b: range(&s.b),
-                        status: status_name(s.status),
+                        // Refinement can turn a differing segment approx;
+                        // the map does not know until it has run.
+                        status: if self
+                            .session
+                            .diff()
+                            .is_ok_and(|d| d.refined_approx(index) == Some(true))
+                        {
+                            "approx"
+                        } else {
+                            status_name(s.status)
+                        },
                     })
             }),
         )?;

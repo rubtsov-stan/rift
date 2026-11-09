@@ -346,6 +346,18 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         self.sched.try_hunk(segment)
     }
 
+    /// Whether `segment` has been refined and, if so, whether the result is
+    /// approximate. Unlike [`try_hunk`](Self::try_hunk) it queues nothing:
+    /// `None` for a segment not refined yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `segment` is out of range.
+    #[must_use]
+    pub fn refined_approx(&self, segment: usize) -> Option<bool> {
+        self.sched.refined_approx(segment)
+    }
+
     /// Writes the diff as `diff -u` would, walking segments in order
     /// through the scheduler. Background refinement is switched off and the
     /// visible window moved ahead of the writer instead, so the workers

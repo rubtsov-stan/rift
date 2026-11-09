@@ -310,6 +310,18 @@ impl<J: Job> Scheduler<J> {
         )
     }
 
+    /// Whether `segment` has been refined and, if so, whether the result is
+    /// approximate. Never queues a job and never blocks on one; `None` for a
+    /// segment not refined yet, one that failed, or an equal one.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `segment` is out of range.
+    #[must_use]
+    pub fn refined_approx(&self, segment: usize) -> Option<bool> {
+        self.shared.lock().cache.refined_approx(segment)
+    }
+
     /// The hunk for `segment`, computing it first if needed. Blocks; for the
     /// unified writer and tests, not for a frame loop.
     ///
@@ -509,6 +521,7 @@ impl Queue {
             return;
         }
         if self.cache.mark_done(segment) && hunk.approx.is_some() {
+            self.cache.mark_approx(segment);
             self.approx.segments += 1;
             self.approx.a_lines += seg.len_a();
             self.approx.b_lines += seg.len_b();

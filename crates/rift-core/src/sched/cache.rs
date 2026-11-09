@@ -34,6 +34,9 @@ struct Row {
     state: State,
     /// Completed at least once; stays set across eviction for progress.
     done: bool,
+    /// The first completion was approximate. Kept with `done`, so it
+    /// outlives the hunk.
+    approx: bool,
 }
 
 const _: () = assert!(size_of::<Row>() == 24);
@@ -82,6 +85,7 @@ impl Cache {
                 hunk: None,
                 state: if equal(i) { State::Equal } else { State::Idle },
                 done: false,
+                approx: false,
             })
             .collect();
         Cache {
@@ -120,6 +124,19 @@ impl Cache {
         let first = !std::mem::replace(&mut self.rows[i].done, true);
         self.done += u64::from(first);
         first
+    }
+
+    /// Notes that the first completion of `i` was approximate.
+    pub(super) fn mark_approx(&mut self, i: usize) {
+        self.rows[i].approx = true;
+    }
+
+    /// Whether segment `i` has completed, and then whether it was
+    /// approximate; `None` before its first completion. Reads no hunk and
+    /// queues nothing.
+    pub(super) fn refined_approx(&self, i: usize) -> Option<bool> {
+        let row = &self.rows[i];
+        row.done.then_some(row.approx)
     }
 
     /// Segments completed at least once, even if evicted since.

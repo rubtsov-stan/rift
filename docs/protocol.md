@@ -278,8 +278,14 @@ Result:
 ```
 
 `index` is the segment's position in the full map, the number `hunk`
-takes. `status` is the map status: `differs` or `approx`. A segment's
-range can take in a few equal lines next to the change.
+takes. `status` is `differs` or `approx`: the map's status, except that
+a segment whose refinement has ended approximate is reported `approx`
+even if no `hunk` was asked for. A page read before refinement shows
+`differs` for such a segment, so a client that wants the marks reads the
+page again after `progress` in phase `refine` reaches its total, or when
+`segment_ready` names the segment. Reading a page never starts a
+refinement. A segment's range can take in a few equal lines next to the
+change.
 
 ### `hunk`
 
