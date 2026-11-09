@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Earlier versions read FIFOs and process substitution (for example
+  `rift <(cmd) file`) as empty files and printed a wrong diff with no
+  error. Rift now refuses any operand that is not a regular file, with the
+  path and a message to write the input to a file first. A directory names
+  its path too, and `-` is documented as a file name.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
 - Key mode at `--mem 16M` runs on several threads again. The number of
