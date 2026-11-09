@@ -70,7 +70,8 @@ The same on NDJSON, by the `id` field. The key prints as the file has it, quotes
 ## Rules to know
 
 - Rift compares the bytes of a record before it calls the record unchanged.
-- In CSV, a record can span lines inside quotes, and the header row counts as a record keyed by its own cell.
+- In CSV, a record can span lines inside quotes, and the header row counts as a record keyed by its own cell. A UTF-8 byte order mark before the header is not part of it.
+- Blank lines are not records, and in NDJSON neither are lines of only spaces or tabs.
 - In a `pg_dump`, only the rows of `COPY` blocks with the right column count take part, and the same key in two tables names two records.
 - A key that occurs twice in one file stops the run with exit status 2 and lists the first few. A run can stop after it printed some changes. The output is then incomplete: check the exit status before you use it.
 - A record too long for the budget stops the run with a budget error that names a `--mem` under which the record fits.
