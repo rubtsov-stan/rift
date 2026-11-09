@@ -162,9 +162,10 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     }
 
     /// [`Diff::with_config`] whose scan is followed and stopped through
-    /// `watch`, as [`build_pair_watched`] describes. Once the map is built
-    /// the watch is no longer read: cancelling it does not stop
-    /// refinement.
+    /// `watch`, as [`build_pair_watched`] describes. The watch is read once
+    /// more before the move search, which reads both files; after that the
+    /// build cannot be stopped, and cancelling the watch once the map is
+    /// built does not stop refinement.
     ///
     /// # Errors
     ///
@@ -248,6 +249,9 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         // Readers of their own with small buffers keep the comparison
         // buffers small; all of it is released once the blocks are found.
         let moves = if config.moves {
+            if watch.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
             let (ix_a, ix_b) = (&*index_a, &*index_b);
             let ma = IndexedLines::new(&*a, ix_a, budget, Half::Refine, WORKER_SCRATCH)?;
             let mb = IndexedLines::new(&*b, ix_b, budget, Half::Refine, WORKER_SCRATCH)?;

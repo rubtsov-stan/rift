@@ -137,6 +137,68 @@ fn a_diff_built_under_a_cancelled_watch_fails() {
     assert!(matches!(err, Error::Cancelled), "{err}");
 }
 
+/// Like [`Probe`], owned so a [`Diff`] can hold it.
+struct Trip {
+    data: Vec<u8>,
+    watch: Arc<Watch>,
+    read: Arc<AtomicU64>,
+    cancel_at: u64,
+}
+
+impl Source for Trip {
+    fn len(&self) -> Bytes {
+        Bytes(self.data.len() as u64)
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
+        let n = self.data.as_slice().read_at(buf, offset)?;
+        if self.read.fetch_add(n as u64, Ordering::Relaxed) + n as u64 >= self.cancel_at {
+            self.watch.cancel();
+        }
+        Ok(n)
+    }
+}
+
+#[test]
+fn a_watch_cancelled_as_the_scan_ends_stops_the_build_before_the_move_search() {
+    let (a, b) = pair(20_000);
+    let trips = |cancel_at| {
+        let (watch, read) = (Arc::new(Watch::new()), Arc::new(AtomicU64::new(0)));
+        let trip = |data: &Vec<u8>| {
+            Arc::new(Trip {
+                data: data.clone(),
+                watch: Arc::clone(&watch),
+                read: Arc::clone(&read),
+                cancel_at,
+            })
+        };
+        (trip(&a), trip(&b), watch, read)
+    };
+    // What the scan alone reads.
+    let (ta, tb, watch, read) = trips(u64::MAX);
+    build_pair_watched(&*ta, &*tb, &Budget::new(Bytes::mib(64)), &watch).unwrap();
+    let scan_bytes = read.load(Ordering::Relaxed);
+    // Cancelled by the scan's last read: nothing after it is read.
+    let (ta, tb, watch, read) = trips(scan_bytes);
+    let built = Diff::with_watch(
+        ta,
+        tb,
+        &Budget::new(Bytes::mib(64)),
+        2,
+        Config::default(),
+        &watch,
+    );
+    let Err(err) = built else {
+        panic!("the build went on after the cancel");
+    };
+    assert!(matches!(err, Error::Cancelled), "{err}");
+    assert_eq!(
+        read.load(Ordering::Relaxed),
+        scan_bytes,
+        "read after the scan"
+    );
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
 

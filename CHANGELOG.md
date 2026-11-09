@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A scan cancelled just as its reading ends no longer runs the move
+  search, which reads both files again, before it stops.
 - The protocol document says that an `open` right after closing a
   scanning session can answer `busy` until the scan has stopped, and
   that the client retries.
