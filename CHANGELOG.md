@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error. Rift now refuses any operand that is not a regular file, with the
   path and a message to write the input to a file first. A directory names
   its path too, and `-` is documented as a file name.
+- A Linux `/proc` file, which reports a length of 0 but has content, is
+  refused the same way instead of being read as empty.
+- A file cut while Rift reads it, or one that holds less than it reports,
+  is an error naming the file. Key mode used to take the early end as the
+  end of its records and print a wrong diff with no error.
+- A file that grows while Rift reads it no longer yields bytes past the
+  length taken at open, which could mix two versions of the file in one
+  diff. Reads stop at that length.
 - `rift serve` no longer hangs when a path is swapped for a FIFO between
   its check and its `open`. The open does not block, refuses a file that
   is not regular and never follows a symbolic link.
