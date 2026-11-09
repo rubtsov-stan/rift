@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its path too, and `-` is documented as a file name.
 - A Linux `/proc` file, which reports a length of 0 but has content, is
   refused the same way instead of being read as empty.
-- A file cut while Rift reads it is an error. Key mode used to take the
-  cut as the end of its records and print a wrong diff with no error.
+- A file cut while Rift reads it, or one that holds less than it reports,
+  is an error naming the file. Key mode used to take the early end as the
+  end of its records and print a wrong diff with no error.
 - A file that grows while Rift reads it no longer yields bytes past the
   length taken at open, which could mix two versions of the file in one
   diff. Reads stop at that length.
