@@ -192,11 +192,13 @@ limit that works depends on the files. Below it, Rift exits with status 2 and a 
 error that ends with a limit to rerun with, such as
 \fBrerun with \-\-mem 10333K\fR. It is not a lower bound, and a run at
 that limit can still stop at a later stage and name a higher one. In key
-mode a larger limit means fewer passes over the files. Key mode prints
-the same set of lines at any limit and thread count. Their order depends
-on the limit, since each pass prints its own changes sorted by line, and
-once key mode runs on several threads (a refine half of 8 MiB or more,
-about \fB\-\-mem 16M\fR and up) it can differ between runs.
+mode a larger limit means fewer passes over the files, and the limit
+it names is about twice the one refused or more, so a few reruns
+reach one that works. Key mode prints the same set of lines at any
+limit and thread count. Their order depends on the limit, since each
+pass prints its own changes sorted by line, and on nothing else: the
+same files under the same limit print the same bytes, errors included,
+on every run and machine.
 .SH EXIT STATUS
 Exit status follows \fBdiff\fR(1).
 .TP
