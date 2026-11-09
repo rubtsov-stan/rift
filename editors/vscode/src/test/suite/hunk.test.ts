@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { Api } from '../../extension';
+import { HunkDocs } from '../../hunk';
 import { until } from '../mock';
 import { api, closeAll, compare, describeMock, diffTab, labels, ready, text } from './helpers';
 
@@ -67,5 +68,14 @@ describeMock('hunk diff', () => {
     await vscode.commands.executeCommand('rift.previousDifference');
     await vscode.commands.executeCommand('rift.previousDifference');
     assert.strictEqual(label(), 'a.sql 10–11 ↔ b.sql 10–12');
+  });
+
+  it('does not reuse a document address after a reload, and says so for an unknown one', () => {
+    const e = { text: 'x', notes: new Map<number, string>(), start: 1 };
+    // Two activations stand for a window before and after a reload: the counter starts again.
+    const before = new HunkDocs().add('a', 'a.sql', e);
+    const after = new HunkDocs();
+    assert.notStrictEqual(after.add('a', 'a.sql', e).toString(), before.toString());
+    assert.match(after.provideTextDocumentContent(before), /no longer loaded/);
   });
 });
