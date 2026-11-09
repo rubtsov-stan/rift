@@ -99,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threads now grows with `--mem` instead of jumping from one at a refine
   half of 8 MiB. On the 128 MiB shuffled CSV pair it takes 1.09 s instead
   of 2.21 s in 0.3.1.
+- A large segment made of one repeated line no longer takes heap past
+  `--mem` while it is resampled. Two million copies of one line against
+  two million and one took 154 MB of heap at `--mem 12M`; they now take
+  3.8 MB.
 
 ## [0.3.2] - 2026-11-10
 

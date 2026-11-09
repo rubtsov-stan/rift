@@ -242,7 +242,9 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
                 s.see(k == 0, hash);
             }
             if level < parent && strata::contains(level, hash) {
-                if samples.len() == cap {
+                // Copies of one line share a hash: a level may keep all of
+                // them, so thin until there is room or no level is left.
+                while samples.len() >= cap && level < parent {
                     level += 1;
                     in_first = thin(&mut samples, in_first, level);
                 }
