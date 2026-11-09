@@ -113,6 +113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refinement waiting for them forever. Nothing in Rift made that call;
   `rift serve` opens its sessions with `Sessions::open`, which has a
   response pool.
+- A finished refinement keeps its bytes reserved until the hunk cache
+  holds it. Another worker could take them in between, and the heap
+  could pass the refine half by up to the size of one job.
 
 ## [0.3.2] - 2026-11-10
 
