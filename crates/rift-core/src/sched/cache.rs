@@ -3,6 +3,8 @@
 //! The row table is allocated once for every segment and doubles as the
 //! scheduler's per-segment state. Cached rows form a doubly linked list
 //! through `prev`/`next` indices; the tail is the least recently used.
+//! Beside it, one bit per [`GROUP`] rows marks where a requested row may
+//! be, so finding the next request skips empty stretches a word at a time.
 
 use std::sync::Arc;
 
@@ -10,6 +12,10 @@ use crate::edit::{Edit, Hunk};
 use crate::types::Bytes;
 
 const NONE: u32 = u32::MAX;
+/// Rows per bit of the request summary.
+const GROUP: usize = 64;
+/// Rows one summary word covers.
+const WORD_ROWS: usize = GROUP * 64;
 
 /// Where a segment is in its life cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +43,8 @@ struct Row {
     /// The first completion was approximate. Kept with `done`, so it
     /// outlives the hunk.
     approx: bool,
+    /// Asked for by a front end and not yet picked; see [`Cache::want`].
+    wanted: bool,
 }
 
 const _: () = assert!(size_of::<Row>() == 24);
@@ -53,12 +61,18 @@ pub(super) fn hunk_bytes(hunk: &Hunk) -> u64 {
 #[derive(Debug)]
 pub(super) struct Cache {
     rows: Vec<Row>,
+    /// Bit `g % 64` of word `g / 64` is set when row group `g` may hold a
+    /// requested row; cleared once a search finds the group empty.
+    groups: Vec<u64>,
     head: u32,
     tail: u32,
     bytes: u64,
     cap: u64,
     /// Segments completed at least once.
     done: u64,
+    /// Rows and words the wanted search looked at, for tests.
+    #[cfg(test)]
+    pub(super) visits: std::cell::Cell<u64>,
 }
 
 fn idx(i: usize) -> u32 {
@@ -68,7 +82,7 @@ fn idx(i: usize) -> u32 {
 impl Cache {
     /// Bytes the row table takes for `n` segments.
     pub(super) fn table_bytes(n: usize) -> Bytes {
-        Bytes((n * size_of::<Row>()) as u64)
+        Bytes((n * size_of::<Row>() + n.div_ceil(WORD_ROWS) * size_of::<u64>()) as u64)
     }
 
     /// A cache for `n` segments holding at most `cap` bytes of hunks.
@@ -86,15 +100,19 @@ impl Cache {
                 state: if equal(i) { State::Equal } else { State::Idle },
                 done: false,
                 approx: false,
+                wanted: false,
             })
             .collect();
         Cache {
             rows,
+            groups: vec![0; n.div_ceil(WORD_ROWS)],
             head: NONE,
             tail: NONE,
             bytes: 0,
             cap: cap.0,
             done: 0,
+            #[cfg(test)]
+            visits: std::cell::Cell::new(0),
         }
     }
 
@@ -117,6 +135,51 @@ impl Cache {
         let row = &self.rows[i];
         row.state == State::Idle && !row.done
     }
+
+    /// Marks segment `i` as asked for; returns whether it was not yet.
+    pub(super) fn want(&mut self, i: usize) -> bool {
+        self.groups[i / WORD_ROWS] |= 1 << (i / GROUP % 64);
+        !std::mem::replace(&mut self.rows[i].wanted, true)
+    }
+
+    pub(super) fn unwant(&mut self, i: usize) {
+        self.rows[i].wanted = false;
+    }
+
+    /// The lowest row at or after `from` that is asked for. No row below
+    /// `from` may be: a group found empty from there on is cleared.
+    pub(super) fn next_wanted(&mut self, from: usize) -> Option<usize> {
+        let mut g = from / GROUP;
+        while g < self.rows.len().div_ceil(GROUP) {
+            self.visit();
+            let w = g / 64;
+            let bits = self.groups[w] & (u64::MAX << (g % 64));
+            if bits == 0 {
+                g = (w + 1) * 64;
+                continue;
+            }
+            g = w * 64 + bits.trailing_zeros() as usize;
+            let rows = (g * GROUP).max(from)..((g + 1) * GROUP).min(self.rows.len());
+            for i in rows {
+                self.visit();
+                if self.rows[i].wanted {
+                    return Some(i);
+                }
+            }
+            self.groups[w] &= !(1 << (g % 64));
+            g += 1;
+        }
+        None
+    }
+
+    #[cfg(test)]
+    fn visit(&self) {
+        self.visits.set(self.visits.get() + 1);
+    }
+
+    #[cfg(not(test))]
+    #[expect(clippy::unused_self, reason = "it counts only in tests")]
+    fn visit(&self) {}
 
     /// Records a completion; only the first one per segment counts, and
     /// returns whether this was it.
