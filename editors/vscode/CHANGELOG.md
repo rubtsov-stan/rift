@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.2] - 2026-11-10
+
+- Bundles `rift` 0.3.2, which refuses a pipe, FIFO or other non-regular
+  file instead of reading it as empty.
+
 ## [0.3.1] - 2026-11-09
 
 - Bundles `rift` 0.3.1.
