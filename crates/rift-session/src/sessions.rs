@@ -443,9 +443,11 @@ impl Sessions {
     /// for the scan, its own or that of a session [`open`](Self::open)
     /// started for the pair.
     ///
-    /// A session built here has no response pool: an
-    /// [`excerpt`](Session::excerpt) of it is paid from whatever its Refine
-    /// half has free. A scan that fails leaves no session behind.
+    /// A session built here has no response pool, so its whole Refine half
+    /// goes to the diff and [`excerpt`](Session::excerpt) refuses it with
+    /// [`Error::NoResponsePool`]: bytes taken from that half after the
+    /// scheduler was sized from it could leave a worker waiting for them.
+    /// A scan that fails leaves no session behind.
     /// `rift-mcp` renders its answers itself and uses this.
     ///
     /// # Errors

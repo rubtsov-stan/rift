@@ -88,6 +88,10 @@ pub enum Error {
     /// Other responses of the session hold its response pool.
     #[error("the session is busy with other responses; retry later")]
     ResponsesBusy,
+    /// An excerpt of a session from [`Sessions::get`](crate::Sessions::get),
+    /// which has no response pool to build it in.
+    #[error("this session has no response pool for excerpts; open the files with Sessions::open")]
+    NoResponsePool,
     /// No live session has this id.
     #[error("no session {0}; it was closed or dropped, open the files again")]
     UnknownSession(SessionId),
@@ -143,6 +147,7 @@ impl Error {
             Self::File { .. } => code::FILE,
             Self::MemOverLimit { .. } => code::TOO_LARGE,
             Self::Busy | Self::ResponsesBusy => code::BUSY,
+            Self::NoResponsePool => code::INTERNAL_ERROR,
             Self::UnknownSession(_) => code::UNKNOWN_SESSION,
             Self::NotReady { .. } => code::NOT_READY,
             Self::SegmentOutOfRange { .. } | Self::LineOutOfRange { .. } => code::INVALID_PARAMS,
