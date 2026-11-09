@@ -604,6 +604,24 @@ more passes. A record counts as unchanged only after its bytes compare
 equal. `shuffled` is the test bed: its manifest names every
 change, and a pair that is only reordered reports none.
 
+A run takes at most 64 passes (`MAX_PASSES`). Each time a pass ends or
+starts over, `passes_left` bounds the passes still to come from below.
+A pass that ends holds every key of its range, so it covers at most the
+tables' capacity, and each reader counts the records it has read whose
+key hash lies above the pass's range (`Reader::above`). Each file holds
+a key once, so the keys still to come number at least the larger of the
+two counts, plus, after an overflow, the keys of the range the tables
+met; a pass that ends has read both files whole. After a refine
+overflow no pass is wider than the ceiling, so the rest of the hash
+range takes at least its width over the ceiling. Both counts come from
+records read, never from an estimate, so the bound holds for any keys
+and any layout of the files, and is the same on any machine. When the
+passes done plus the bound exceed the limit, key mode refuses the
+budget and asks for a half twice as many times larger as the bound
+exceeds the limit, and `doubled` for at least twice the half, so
+following the advice steps up geometrically. The counting adds one
+comparison per record, in place of the range check it extends.
+
 When a range of width 1 still overflows, or a window cannot grow for a
 record, key mode refuses the budget. Where the passes end moves with
 `--mem`, so no refusal can say what a rerun needs; it asks for a half

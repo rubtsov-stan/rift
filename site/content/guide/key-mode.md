@@ -83,6 +83,17 @@ Key mode writes no temporary files. When the keys do not fit `--mem`, Rift split
 
 Key mode prints the same set of lines at any `--mem`. Their order depends on `--mem`, since the passes split the keys by budget. From 0.3.3 it depends on nothing else: the same files under the same limit print the same bytes on every run, on any machine and any number of threads. Up to 0.3.2 it can also change between runs once key mode uses several threads (see Known issues). Sort the output before you compare runs with different limits.
 
+Key mode runs at most 64 passes. Each time a pass ends or starts over on a narrower range, Rift works out the fewest passes the rest of the run can take at this `--mem`: the records each file has shown so far whose keys belong to later passes, divided by what one pass's tables hold. If that is more than 64, it stops with the usual budget error. That can happen after some passes have printed their changes: the output is then incomplete, the message says so, and the exit status is 2. On a 1 MiB CSV pair from `rift-gen --seed 7 --profile shuffled --rows csv --change-ratio 0.01`, which takes 152 passes at `--mem 64K` without the limit:
+
+```
+$ rift --key csv:id --mem 64K a.csv b.csv
+rift: refine budget exceeded: requested 21504 bytes, 8192 available; rerun with --mem 90K
+```
+
+Each refusal names a `--mem` about twice as large or more; at 90K that pair takes 42 passes. Following the advice reaches a limit that works in a few reruns. The count is of records already read, so a run that fits in 64 passes is never refused, whatever its keys, and the same files under the same `--mem` get the same answer on any machine. Without the limit, a budget far too small for the files would still finish, after hundreds of passes over both files.
+
+Why 64: each pass rereads both files, and a pass takes about the same time at any budget, about 0.14 s on a 128 MiB CSV pair, 0.08 s on a 64 MiB SQL dump and 0.05 s on a 64 MiB NDJSON file (Apple M1, warm page cache). The limit keeps the reading to at most 64 times one pass, whatever the file size. On those pairs it refuses only the CSV and SQL runs at `--mem 256K`, of 8 to 15 s, and the advised limit cuts them to about a third. On large files 64 passes can still take minutes, which is what such a budget asks for.
+
 `--show-records` takes 64 KiB of the budget for its read buffer, plus 24 bytes for each record that waits for its match or has changed, until the end of its pass. Under a tight `--mem` that can add passes.
 
 ## Known issues

@@ -46,6 +46,9 @@ const EMPTY: u32 = 0;
 const FEW: usize = 5;
 /// Read window per file, from the refine half.
 const WINDOW: u64 = 4 << 20;
+/// Most passes a run may take: a budget that would need more is refused,
+/// with advice that fits the run within them.
+const MAX_PASSES: u64 = 64;
 /// Refine-half bytes a shard should have to itself.
 const SHARD_BYTES: u64 = 1 << 20;
 /// Most shards and most chunks per window. Every shard looks at every
@@ -102,7 +105,7 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    run::<A, B, ()>(a, b, spec, budget, on_change).map_err(|e| doubled(e, budget))
+    run::<A, B, ()>(a, b, spec, budget, MAX_PASSES, on_change).map_err(|e| doubled(e, budget))
 }
 
 /// [`compare`], handing out each change with the byte ranges of its
@@ -126,7 +129,7 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    run::<A, B, Ranges>(a, b, spec, budget, on_change).map_err(|e| doubled(e, budget))
+    run::<A, B, Ranges>(a, b, spec, budget, MAX_PASSES, on_change).map_err(|e| doubled(e, budget))
 }
 
 /// A budget refusal that asks for a half at least twice the size, built
@@ -161,6 +164,7 @@ fn run<A, B, X: Extra>(
     b: &B,
     spec: &super::KeySpec,
     budget: &Budget,
+    limit: u64,
     mut on_change: impl FnMut(&X::Change) -> io::Result<()>,
 ) -> Result<Report>
 where
@@ -209,10 +213,23 @@ where
                     }));
                 } else {
                     width = narrowed(half, w, progress, fill(&shards), &mut ceiling);
+                    // Keys still to come, at least: those of the range the
+                    // tables met, and the larger of the two files' counts
+                    // of records read so far above the range.
+                    let held: usize = shards.iter().map(|s| s.used).sum();
+                    let keys = held as u64 + ra.above().max(rb.above());
+                    within(
+                        &shards,
+                        budget,
+                        (report.passes, limit),
+                        keys,
+                        END - lo,
+                        ceiling,
+                    )?;
                 }
             }
             Outcome::Stop => {
-                let mut dups = collect_dups(&mut shards);
+                let mut dups = collect_dups(&mut shards, Vec::new());
                 if dups.is_empty() {
                     // Too many suspects: settle the first of them now, in
                     // room the records no longer need.
@@ -223,7 +240,6 @@ where
                     for s in &mut shards {
                         s.release();
                     }
-
                     let mut readers = (&mut ra, &mut rb, &tables);
                     on(workers.as_ref(), || {
                         read_pass(&mut readers, &mut shards, END, END, &pending.list, solo)
@@ -239,12 +255,7 @@ where
                 .into());
             }
             Outcome::Done => {
-                let mut dups = pending.duplicates(&ra, &rb);
-                for d in collect_dups(&mut shards) {
-                    if dups.len() < FEW && !dups.contains(&d) {
-                        dups.push(d);
-                    }
-                }
+                let dups = collect_dups(&mut shards, pending.duplicates(&ra, &rb));
                 if !dups.is_empty() {
                     return Err(KeyError::Duplicate(dups).into());
                 }
@@ -267,6 +278,17 @@ where
                 report.changes += emit(&mut shards, &mut on_change)?;
                 report.passes += 1;
                 pending.replace(&mut shards)?;
+                // Both files were read whole: their records above the
+                // range are the keys still to come, counted in each.
+                let keys = ra.above().max(rb.above());
+                within(
+                    &shards,
+                    budget,
+                    (report.passes, limit),
+                    keys,
+                    END - hi,
+                    ceiling,
+                )?;
                 // A range cut short by waiting records may leave the
                 // tables half empty; widen the next pass toward 90%.
                 let grown = scale(hi - lo, (0.9 / fill(&shards).max(f64::EPSILON)).min(2.0));
@@ -409,6 +431,77 @@ fn narrowed(half: Half, w: u64, progress: f64, fill: f64, ceiling: &mut u64) -> 
         }
     };
     scale(w, keep).clamp(1, w - 1)
+}
+
+/// The fewest passes `keys` distinct keys can take, `rest` from the
+/// start of their range to the end of the hash range, and the half that
+/// bounds them.
+///
+/// A pass that ends holds every key of its range in its tables, so it
+/// covers at most their capacity; after waiting records overflowed, no
+/// pass is wider than `ceiling`. The caller counts `keys` among records
+/// already read, so both are lower bounds, whatever the keys and however
+/// the files are laid out, and depend on the files and the budget alone.
+fn passes_left<X: Extra>(
+    shards: &[Pass<'_, X>],
+    keys: u64,
+    rest: u64,
+    ceiling: u64,
+) -> (u64, Half) {
+    let capacity: usize = shards.iter().map(|s| s.limit).sum();
+    let by_tables = keys.div_ceil((capacity as u64).max(1));
+    let by_width = rest.div_ceil(ceiling.max(1));
+    if by_width > by_tables {
+        (by_width, Half::Refine)
+    } else {
+        (by_tables, Half::Skeleton)
+    }
+}
+
+/// A budget refusal if a run that has taken `done` passes needs more
+/// than `limit` in all, by [`passes_left`] for `keys` keys from `rest`
+/// before the end of the hash range.
+fn within<X: Extra>(
+    shards: &[Pass<'_, X>],
+    budget: &Budget,
+    (done, limit): (u32, u64),
+    keys: u64,
+    rest: u64,
+    ceiling: u64,
+) -> Result<()> {
+    let left = passes_left(shards, keys, rest, ceiling);
+    match too_many_passes(budget, u64::from(done), left, limit) {
+        Some(refusal) => Err(Error::Budget(refusal)),
+        None => Ok(()),
+    }
+}
+
+/// A refusal for a run that has taken `done` passes and needs at least
+/// `left` more of a `short` half, if that is over `limit`: the half twice
+/// as many times larger. A half `k` times larger holds about `k` times
+/// the keys per pass, but the count is a lower bound and not every list
+/// grows with the half, so this asks for twice that, and [`doubled`] for
+/// at least twice the half; a rerun still short is refused again with
+/// the same advice, so following it steps up geometrically.
+fn too_many_passes(
+    budget: &Budget,
+    done: u64,
+    (left, short): (u64, Half),
+    limit: u64,
+) -> Option<BudgetExceeded> {
+    let passes = done.saturating_add(left);
+    if passes <= limit {
+        return None;
+    }
+    let cap = budget.capacity(short).0;
+    let need = 2 * u128::from(cap) * u128::from(passes) / u128::from(limit.max(1));
+    let available = budget.available(short);
+    let held = cap - available.0.min(cap);
+    Some(BudgetExceeded {
+        half: short,
+        requested: Bytes(u64::try_from(need).unwrap_or(u64::MAX).saturating_sub(held)),
+        available,
+    })
 }
 
 /// The fullest shard table, as a share of its limit.
@@ -568,7 +661,6 @@ where
             }
             Err(e) => return Err(e),
         };
-
         if !ga && !gb {
             return Ok(Outcome::Done);
         }
@@ -617,9 +709,9 @@ fn both(a: Result<bool>, b: Result<bool>) -> Result<(bool, bool)> {
     }
 }
 
-/// The waiting duplicates the shards found, the first few.
-fn collect_dups<X: Extra>(shards: &mut [Pass<'_, X>]) -> Vec<Vec<u8>> {
-    let mut dups: Vec<Vec<u8>> = Vec::new();
+/// `dups` and then the waiting duplicates the shards found, the first
+/// few.
+fn collect_dups<X: Extra>(shards: &mut [Pass<'_, X>], mut dups: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     for s in shards {
         for d in s.dups.drain(..) {
             if dups.len() < FEW && !dups.contains(&d) {
@@ -1331,10 +1423,24 @@ mod tests {
     type Change = (ChangeKind, String, Option<u64>, Option<u64>);
     type Rows = Vec<(u32, u32)>;
 
+    /// [`compare`] with no limit on the passes, for tests of what many
+    /// passes find.
     fn run(a: &[u8], b: &[u8], spec: &str, mem: u64) -> Result<(Vec<Change>, Report)> {
+        limited(a, b, spec, mem, u64::MAX)
+    }
+
+    /// [`compare`] with at most `limit` passes.
+    fn limited(
+        a: &[u8],
+        b: &[u8],
+        spec: &str,
+        mem: u64,
+        limit: u64,
+    ) -> Result<(Vec<Change>, Report)> {
         let spec: KeySpec = spec.parse().unwrap();
+        let budget = Budget::new(Bytes(mem));
         let mut out = Vec::new();
-        let report = compare(a, b, &spec, &Budget::new(Bytes(mem)), |c| {
+        let report = super::run::<_, _, ()>(a, b, &spec, &budget, limit, |c| {
             out.push((
                 c.kind,
                 String::from_utf8_lossy(&c.key).into_owned(),
@@ -1342,7 +1448,8 @@ mod tests {
                 c.b.map(|l| l.0),
             ));
             Ok(())
-        })?;
+        })
+        .map_err(|e| doubled(e, &budget))?;
         out.sort_unstable_by(|x, y| x.1.cmp(&y.1));
         Ok((out, report))
     }
@@ -1499,7 +1606,7 @@ mod tests {
         };
         let spec: KeySpec = "csv:1".parse().unwrap();
         let mut out = Vec::new();
-        compare_with_ranges(a, b, &spec, &Budget::new(Bytes(mem)), |c| {
+        super::run::<_, _, Ranges>(a, b, &spec, &Budget::new(Bytes(mem)), u64::MAX, |c| {
             let key = String::from_utf8_lossy(&c.change.key).into_owned();
             out.push((key, cut(a, &c.a_range), cut(b, &c.b_range)));
             Ok(())
@@ -1661,6 +1768,164 @@ mod tests {
                     "{spec} at {mem}: {refusal} advises {advice:?}"
                 );
             }
+        }
+    }
+
+    /// The passes `a` and `b` take at `mem`, after checking that every
+    /// limit below them refuses or answers the same, and none at or above
+    /// them refuses; and the largest limit that refused.
+    fn limits_hold(a: &[u8], b: &[u8], mem: u64) -> (u64, u64) {
+        let (want, report) = run(a, b, "csv:1", mem).unwrap();
+        let passes = u64::from(report.passes);
+        let mut refused = 0;
+        for limit in 1..=passes + 1 {
+            match limited(a, b, "csv:1", mem, limit) {
+                Ok((got, _)) => assert_eq!(got, want, "{mem}, limit {limit}"),
+                Err(Error::Budget(_)) => {
+                    assert!(passes > limit, "{mem}: {passes} passes refused at {limit}");
+                    refused = limit;
+                }
+                Err(e) => panic!("{mem}, limit {limit}: {e}"),
+            }
+        }
+        (passes, refused)
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn the_pass_limit_refuses_only_runs_that_exceed_it() {
+        let (a, b) = pair(3000, 7);
+        let (ca, cb) = (csv(&a), csv(&b));
+        for mem in [16 << 10, 24 << 10, 48 << 10] {
+            let (passes, refused) = limits_hold(&ca, &cb, mem);
+            assert!(passes > 4, "{mem}: {passes} passes");
+            // A lower bound, and a close one: 33, 21 and 10 passes are
+            // refused from limits of 32, 20 and 9.
+            assert!(
+                refused + 1 >= passes,
+                "{mem}: {passes} passes, refused up to {refused}"
+            );
+        }
+    }
+
+    /// Keys whose hashes crowd one narrow band, the rest spread out, in
+    /// an order of their own: a range that holds the band says nothing of
+    /// the ranges after it, and the bound must not take it for them.
+    fn crowded() -> (Vec<u8>, Vec<u8>) {
+        let from = END / 8;
+        let mut keys: Vec<String> = (0u64..)
+            .map(|j| format!("k{j}"))
+            .filter(|k| (from..from + (END >> 10)).contains(&key_hash(k.as_bytes(), 0)))
+            .take(4000)
+            .collect();
+        keys.extend((0..40_000).map(|j| format!("u{j}")));
+        keys.sort_by_key(|k| key_hash(k.as_bytes(), 99));
+        let (mut a, mut b) = (String::from("id,v\n"), String::from("id,v\n"));
+        for (i, k) in keys.iter().enumerate() {
+            writeln!(a, "{k},v").unwrap();
+            writeln!(b, "{k},{}", if i % 1000 == 0 { "w" } else { "v" }).unwrap();
+        }
+        (a.into_bytes(), b.into_bytes())
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn the_pass_limit_holds_on_keys_crowded_into_one_hash_band() {
+        let (a, b) = crowded();
+        for mem in [24 << 10, 32 << 10, 48 << 10, 64 << 10] {
+            let (want, report) = run(&a, &b, "csv:1", mem).unwrap();
+            let passes = u64::from(report.passes);
+            let (got, _) = limited(&a, &b, "csv:1", mem, passes)
+                .unwrap_or_else(|e| panic!("{mem}: {passes} passes refused: {e}"));
+            assert_eq!(got, want, "{mem}");
+        }
+    }
+
+    /// Files in the same order: after the first pass, the check at the
+    /// end of each pass is what refuses a run one pass over the limit.
+    /// Runs of 22 and 10 passes are refused from limits of 21 and 9, and
+    /// only from 20 and 8 without that check.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn the_pass_limit_is_close_on_files_in_the_same_order() {
+        let (mut a, mut b) = (String::new(), String::new());
+        for i in 0..20_000 {
+            writeln!(a, "k{i},v").unwrap();
+            writeln!(b, "k{i},{}", if i % 7 == 0 { "w" } else { "v" }).unwrap();
+        }
+        for mem in [32 << 10, 64 << 10] {
+            let (passes, refused) = limits_hold(a.as_bytes(), b.as_bytes(), mem);
+            assert!(passes > 4, "{mem}: {passes} passes");
+            assert!(
+                refused + 1 >= passes,
+                "{mem}: {passes} passes, refused up to {refused}"
+            );
+        }
+    }
+
+    /// Many short records and then a few long ones, or the other way
+    /// round: the keys met early say little of how many are left, and a
+    /// run is refused only if it takes more passes than the limit.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn the_pass_limit_holds_when_records_change_length() {
+        let file = |dense_first: bool, b: bool| {
+            let v = |i: usize| if b && i.is_multiple_of(7) { "c" } else { "s" };
+            let (mut short, mut long) = (String::new(), String::new());
+            for i in 0..15_000 {
+                writeln!(short, "s{i},{}", v(i)).unwrap();
+            }
+            for j in 0..500 {
+                writeln!(long, "l{j},{}{}", v(j), "x".repeat(12_000)).unwrap();
+            }
+            let body = if dense_first {
+                short + &long
+            } else {
+                long + &short
+            };
+            format!("id,v\n{body}").into_bytes()
+        };
+        let mem = 384 << 10;
+        for dense_first in [true, false] {
+            let (a, b) = (file(dense_first, false), file(dense_first, true));
+            let (want, report) = run(&a, &b, "csv:1", mem).unwrap();
+            let passes = u64::from(report.passes);
+            assert!(passes > 2, "{dense_first}: {passes} passes");
+            let (got, _) = limited(&a, &b, "csv:1", mem, passes)
+                .unwrap_or_else(|e| panic!("{dense_first}: {passes} passes refused: {e}"));
+            assert_eq!(got, want, "{dense_first}");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn following_the_advice_fits_the_run_in_a_few_reruns() {
+        // Each refusal asks for at least twice the budget, so from a budget
+        // that needs about 4 to 8 times as much, 3 reruns are enough.
+        let (a, b) = pair(3000, 7);
+        let uniform = (csv(&a), csv(&b));
+        for (name, (a, b), mut mem) in [
+            ("uniform", uniform, 16 << 10),
+            ("crowded", crowded(), 8 << 10),
+        ] {
+            let mut reruns = 0;
+            loop {
+                match limited(&a, &b, "csv:1", mem, 8) {
+                    Ok((_, report)) => {
+                        assert!(report.passes <= 8, "{name}: {report:?}");
+                        break;
+                    }
+                    Err(Error::Budget(refusal)) => {
+                        let next = refusal.mem_advice(Bytes(mem)).unwrap().0;
+                        assert!(next >= 2 * mem, "{name}: {mem} advised {next}");
+                        mem = next;
+                        reruns += 1;
+                        assert!(reruns <= 3, "{name}: no answer within 3 reruns, at {mem}");
+                    }
+                    Err(e) => panic!("{name}: {e}"),
+                }
+            }
+            assert!(reruns > 0, "{name}: the first budget was enough");
         }
     }
 

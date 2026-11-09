@@ -194,7 +194,9 @@ error that ends with a limit to rerun with, such as
 that limit can still stop at a later stage and name a higher one. In key
 mode a larger limit means fewer passes over the files, and the limit
 it names is about twice the one refused or more, so a few reruns
-reach one that works. Key mode prints the same set of lines at any
+reach one that works. Key mode runs at most 64 passes: a limit under
+which the records read so far show the files would take more is
+refused the same way. Key mode prints the same set of lines at any
 limit and thread count. Their order depends on the limit, since each
 pass prints its own changes sorted by line, and on nothing else: the
 same files under the same limit print the same bytes, errors included,
