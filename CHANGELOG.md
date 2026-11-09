@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift serve` reports a segment whose refinement ended approximate as
+  `approx` in `segments` pages, also when no `hunk` was asked for it.
+  Before, a page showed only the map's status, so a client that re-read
+  pages after refinement never saw the mark.
 - A scan cancelled just as its reading ends no longer runs the move
   search, which reads both files again, before it stops.
 - The protocol document says that an `open` right after closing a

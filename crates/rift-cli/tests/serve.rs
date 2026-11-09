@@ -396,6 +396,61 @@ fn the_summary_counts_approx_among_refined_segments() {
 }
 
 #[test]
+fn segments_report_approx_for_segments_nobody_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    // Sixty differing blocks of 400 lines with nothing unique in common,
+    // too large to refine exactly, each between runs of equal lines.
+    let rows = |tag: &str| -> Vec<u8> {
+        use std::fmt::Write;
+        let mut text = String::new();
+        for block in 0..60 {
+            for j in 0..10 {
+                writeln!(text, "common {block} {j}").unwrap();
+            }
+            for j in 0..400 {
+                if j % 100 == 0 {
+                    text += "\n";
+                } else {
+                    writeln!(text, "{tag} {block} {j}").unwrap();
+                }
+            }
+        }
+        text.into_bytes()
+    };
+    let a = write(dir.path(), "a", &rows("left"));
+    let b = write(dir.path(), "b", &rows("right"));
+    let mut c = Client::start(&[]);
+    c.initialize();
+    let s = open_ready(&mut c, &a, &b, "64M");
+    c.until("refinement to finish", |c| {
+        c.notes_of("progress", s)
+            .iter()
+            .any(|p| p["phase"] == "refine" && p["done"] == p["total"])
+    });
+    // No `hunk` was asked for: what is approx is known from refinement.
+    let sum = c.ok("summary", json!({"session": s}));
+    let want = sum["approx"]["segments"].as_u64().unwrap();
+    let total = sum["differing_segments"].as_u64().unwrap();
+    assert!(want >= 2, "{sum}");
+    let limit = 10;
+    assert!(total > 2 * limit, "more than a page of segments: {sum}");
+    let mut approx = 0;
+    let mut seen = 0;
+    for offset in (0..total).step_by(usize::try_from(limit).unwrap()) {
+        let page = c.ok(
+            "segments",
+            json!({"session": s, "offset": offset, "limit": limit}),
+        );
+        let segments = page["segments"].as_array().unwrap();
+        seen += segments.len() as u64;
+        approx += segments.iter().filter(|g| g["status"] == "approx").count() as u64;
+    }
+    assert_eq!(seen, total);
+    assert_eq!(approx, want, "segments pages vs summary: {sum}");
+    clean_exit(c);
+}
+
+#[test]
 fn scan_progress_grows_to_its_total_at_most_20_times_a_second() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = generated(dir.path(), 48 << 20);

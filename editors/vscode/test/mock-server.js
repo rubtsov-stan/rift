@@ -207,12 +207,15 @@ const METHODS = {
   },
 
   segments(p) {
-    readySession(p);
+    const [, s] = readySession(p);
     const { offset, limit } = page(p);
+    // As the server: the map status, except that a segment whose
+    // refinement ended approx is reported approx.
+    const refined = (g) => (s.refined.get(g.index) === 'approx' ? { ...g, status: 'approx' } : g);
     return {
       total: fixture.segments.length,
       offset,
-      segments: fixture.segments.slice(offset, offset + limit),
+      segments: fixture.segments.slice(offset, offset + limit).map(refined),
     };
   },
 

@@ -395,6 +395,18 @@ fn too_large_jobs_get_the_fallback_and_are_marked_approx() {
         b_lines: LINES,
     };
     assert_eq!(s.approx_refined(), one);
+    assert_eq!(s.refined_approx(0), Some(false));
+    assert_eq!(s.refined_approx(1), Some(true));
+}
+
+#[test]
+fn asking_whether_a_segment_is_approx_queues_nothing() {
+    let n = 3;
+    let s = Scheduler::new(Fake::new(), segments(n, |_| false), &budget(n, 4), 1).unwrap();
+    for i in 0..n {
+        let _ = s.refined_approx(i);
+    }
+    assert!(s.shared.lock().wanted.is_empty());
 }
 
 #[test]
