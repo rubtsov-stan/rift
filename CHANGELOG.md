@@ -105,6 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rift serve` sessions do: 1/16 of the refine half, at most 8 MiB.
   `rift-mcp` does not use the pool, so it refines with that much less of
   its `mem`, and `mem_reserved_bytes` in its summary counts the pool.
+- A finished refinement keeps its bytes reserved until the hunk cache
+  holds it. Another worker could take them in between, and the heap
+  could pass the refine half by up to the size of one job.
 
 ## [0.3.2] - 2026-11-10
 

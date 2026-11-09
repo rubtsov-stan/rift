@@ -605,7 +605,6 @@ fn worker<J: Job>(shared: &Shared<J>) {
                 shared.job.run(i, segment, &mut reservation, &cancel)
             }
         }));
-        drop(reservation);
 
         q = shared.lock();
         match out {
@@ -618,6 +617,9 @@ fn worker<J: Job>(shared: &Shared<J>) {
             Ok(Err(e)) => q.fail(i, Failure::Error(e)),
             Err(_) => q.fail(i, Failure::Panicked),
         }
+        // Only now: until the cache holds the hunk, the reservation is all
+        // that pays for it, and another worker could take the bytes.
+        drop(reservation);
         shared.ready.notify_all();
         shared.work.notify_one();
     }
