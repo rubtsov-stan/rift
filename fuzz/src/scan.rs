@@ -2,13 +2,29 @@
 
 use rift_core::index::IndexedLines;
 use rift_core::scan::{ScanConfig, scan};
-use rift_core::{Budget, Bytes, Error, Half, LineAccess, LineBuf, LineNo, MemLines, strata};
+use rift_core::{Budget, ByteOffset, Bytes, Error, Half, LineAccess, LineBuf, LineNo, strata};
 
 use crate::split_lines;
 
 const CHUNKS: [u64; 8] = [1, 2, 3, 7, 16, 64, 4096, 1 << 20];
 const CAPS: [usize; 4] = [1, 2, 16, 1 << 16];
 const SCRATCH: [u64; 4] = [1, 7, 64, 4096];
+
+/// Serves `offset % buf.len() + 1` bytes per read: short reads, as the
+/// `Source` contract allows.
+struct Short<'a>(&'a [u8]);
+
+impl rift_core::Source for Short<'_> {
+    fn len(&self) -> Bytes {
+        Bytes(self.0.len() as u64)
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> std::io::Result<usize> {
+        let step = offset.0 % buf.len().max(1) as u64 + 1;
+        let n = usize::try_from(step).unwrap_or(usize::MAX).min(buf.len());
+        rift_core::Source::read_at(self.0, &mut buf[..n], offset)
+    }
+}
 
 /// Scans the input with a configuration taken from its first two bytes
 /// (chunk size, threads, sample and checkpoint caps, reader scratch) and
@@ -101,20 +117,19 @@ pub fn check(data: &[u8]) {
         "samples differ from a one-chunk scan"
     );
 
-    read_back(text, index, &lines, &budget, SCRATCH[usize::from(c0 >> 7)]);
-    read_back(
-        text,
-        index,
-        &lines,
-        &budget,
+    for scratch in [
+        SCRATCH[usize::from(c0 >> 7)],
         SCRATCH[2 + usize::from(c1 >> 5 & 1)],
-    );
+    ] {
+        read_back(text, index, &lines, &budget, scratch);
+        read_back(&Short(text), index, &lines, &budget, scratch);
+    }
 }
 
 /// Reads every line through an index-backed reader with `scratch` bytes
 /// and compares it with the plain split.
-fn read_back(
-    text: &[u8],
+fn read_back<S: rift_core::Source + ?Sized>(
+    text: &S,
     index: &rift_core::index::LineIndex,
     lines: &[&[u8]],
     budget: &Budget,
@@ -122,8 +137,7 @@ fn read_back(
 ) {
     let reader = IndexedLines::new(text, index, budget, Half::Refine, Bytes(scratch))
         .expect("reader scratch fits");
-    let mem = MemLines::new(text);
-    assert_eq!(reader.line_count(), mem.line_count());
+    assert_eq!(reader.line_count(), lines.len() as u64);
     let mut buf = LineBuf::new();
     for (i, want) in lines.iter().enumerate() {
         let n = LineNo(i as u64);
