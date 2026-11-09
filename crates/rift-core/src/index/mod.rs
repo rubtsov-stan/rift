@@ -343,7 +343,11 @@ impl<S: Source, I: Borrow<LineIndex> + Sync> LineAccess for IndexedLines<S, I> {
                 scratch.copy_within(line_start..end, 0);
                 filled = end - line_start;
                 pos += line_start as u64;
-                first = Some(LineNo(line));
+                // A short read can end inside a line that began before
+                // `pos`: `first` then stays what it was.
+                if line_start > 0 {
+                    first = Some(LineNo(line));
+                }
             }
         }
     }
