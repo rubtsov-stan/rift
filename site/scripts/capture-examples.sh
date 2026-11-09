@@ -6,6 +6,7 @@
 # Data recipe, all rift-gen with seed 7 in a temporary directory:
 #   sql      64 MiB pair, renamed a.sql and b.sql
 #   csv      32 MiB pair, profile shuffled (same keys, moved blocks), a.csv and b.csv
+#   rec      16 KiB csv pair, seed 3, for the --show-records sample
 #   ndjson   32 MiB pair, profile shuffled with ndjson rows, a.ndjson and b.ndjson
 #   logs     64 MiB pair, profile ndjson
 #   big      1 GiB sql pair for the memory example
@@ -87,6 +88,13 @@ for k in "~" "-" "+"; do grep -m 2 "^$k" keys.txt; done
 cut -c1 keys.txt | sort | uniq -c'
 head -n 2 a.csv | cut -c1-100 >"$out/csv-head.out"
 echo 'head -n 2 a.csv' >"$out/csv-head.cmd"
+cd "$work"
+
+# A 16 KiB pair with seed 3 holds one changed key, enough for a short --show-records sample.
+"$gen" --seed 3 --size 16K --profile shuffled --rows csv --out "$work/rec" >/dev/null
+mv "$work/rec/a" "$work/rec/a.csv"; mv "$work/rec/b" "$work/rec/b.csv"
+cd "$work/rec"
+cap land-records 'rift --key csv:id --show-records a.csv b.csv | cut -c1-100'
 cd "$work"
 
 mk ndjson 32M shuffled ndjson --rows ndjson

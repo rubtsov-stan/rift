@@ -68,6 +68,8 @@
 <section><h3 class="cap">Key mode <span>rows compared by key, not by position</span></h3>
 <p class="prose-lite">An export written in a different row order diffs by content, not by position. <code>--key</code> takes a CSV column, an NDJSON field or a <code>pg_dump</code> COPY column, and lists the keys that were added (<code>+</code>), removed (<code>-</code>) or changed (<code>~</code>), with the line of the record in each file.</p>
 {{ m::term(name="land-key", kind="keys", title="rift --key csv:id", caption="Two lines of each kind, then the number of keys of each kind in all. A 32 MiB CSV pair, same keys, shuffled rows.") }}
+<p class="prose-lite">With <code>--show-records</code>, each change line is followed by the two records: the one from the first file behind <code>  - </code>, the one from the second behind <code>  + </code>.</p>
+{{ m::term(name="land-records", kind="keys", title="rift --key csv:id --show-records", caption="A 16 KiB CSV pair. The record of the changed key in each file.") }}
 <p class="note">Guide: <a href="{{ get_url(path='guide/key-mode/') | safe }}">key mode</a>. Use case: <a href="{{ get_url(path='use-cases/compare-csv-by-key/') | safe }}">compare CSV files by key</a>.</p></section>
 <section><h3 class="cap">Git <span>rift as the diff driver</span></h3>
 <p class="prose-lite">Git calls any file over 512 MiB binary and prints no diff. Name the large files in <code>.gitattributes</code> and git runs <code>rift git-diff</code> for them, with git's own headers. It ships in 0.3.0.</p>
