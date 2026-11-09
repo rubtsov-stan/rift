@@ -191,7 +191,7 @@ fn a_rename_with_edits_gets_git_headers_and_hunks() {
 }
 
 #[test]
-fn the_work_tree_side_shows_a_null_hash() {
+fn the_work_tree_side_has_no_index_line() {
     need_git!();
     let repo = Repo::new("");
     repo.write("m.txt", lines(40, None));
@@ -207,8 +207,8 @@ fn the_work_tree_side_shows_a_null_hash() {
             .join("\n")
     };
     assert_eq!(strip(&ext), strip(&plain));
-    let index = ext.lines().find(|l| l.starts_with("index ")).unwrap();
-    assert!(index.ends_with("..0000000 100644"), "{index}");
+    // `patch` refuses `index <old>..0000000` ("Not deleting file").
+    assert!(!ext.contains("index "), "{ext}");
 }
 
 #[test]
