@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `not_ready` error on a failed session says "session 1 failed; open
+  the files again" instead of asking the client to wait for it.
 - `rift serve` answered `busy` to an `open` that needed a ready session's
   room while the notifier happened to hold that session for a look. The
   `open` now waits up to 250 ms for the notifier to let go, and never

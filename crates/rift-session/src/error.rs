@@ -92,7 +92,7 @@ pub enum Error {
     #[error("no session {0}; it was closed or dropped, open the files again")]
     UnknownSession(SessionId),
     /// The session has no map: it is scanning, or its scan failed.
-    #[error("session {session} is {}; wait for it to be ready", state.name())]
+    #[error("{}", not_ready(*session, *state))]
     NotReady {
         /// The session.
         session: SessionId,
@@ -186,5 +186,17 @@ impl Error {
     #[must_use]
     pub fn suggested_mem(&self) -> Option<Bytes> {
         self.budget().and_then(|(mem, b)| b.mem_advice(mem))
+    }
+}
+
+/// The message of [`Error::NotReady`]: a scan in progress is waited for,
+/// a failed one is opened again.
+fn not_ready(session: SessionId, state: SessionState) -> String {
+    match state {
+        SessionState::Failed => format!("session {session} failed; open the files again"),
+        _ => format!(
+            "session {session} is {}; wait for it to be ready",
+            state.name()
+        ),
     }
 }
