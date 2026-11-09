@@ -1,8 +1,9 @@
 //! Git LFS pointers: what git stores for a large file, and where the real
 //! content sits in the local store.
 
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -42,9 +43,16 @@ impl Pointer {
     /// Reads `path` and parses it if it is small enough to be a pointer.
     /// A file over a KiB is never read.
     pub fn read(path: &Path) -> anyhow::Result<Option<Self>> {
-        let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-        let len = file.metadata()?.len();
-        if len > MAX_POINTER || len < MAGIC.len() as u64 {
+        // O_NONBLOCK keeps a FIFO from blocking the open; anything but a
+        // regular file is no pointer, and the diff itself refuses it.
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .with_context(|| format!("open {}", path.display()))?;
+        let meta = file.metadata()?;
+        let len = meta.len();
+        if !meta.is_file() || len > MAX_POINTER || len < MAGIC.len() as u64 {
             return Ok(None);
         }
         let mut text = Vec::new();
@@ -110,6 +118,35 @@ mod tests {
     use super::*;
 
     const OID: &str = "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393";
+
+    #[test]
+    fn a_fifo_is_not_read_as_a_pointer_and_does_not_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Pointer::read(&path).map_err(|e| e.to_string()));
+        });
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading a FIFO as a pointer blocked");
+        assert_eq!(got.unwrap(), None);
+        // Unblock the reader thread if it is still waiting in open.
+        drop(
+            OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo),
+        );
+    }
 
     #[test]
     fn parses_a_pointer_and_nothing_else() {
