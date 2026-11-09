@@ -91,7 +91,9 @@ at most 30 KiB outside the pool and 7.5 KiB per pool thread (macOS, 1 to
 32 threads); `R` is 1.5 times that, rounded up. `--mem` is at least 64K,
 since parsing the command line takes about 28 KiB before any budget
 exists. The advice `rerun with --mem N` adds `R` to what the halves
-need. `rift serve` keeps its own 8 MiB for the protocol out of
+need. Key mode keeps only the 48 KiB: it never starts rayon's global
+pool and holds its own pool's heap in the refine half. `rift serve`
+keeps its own 8 MiB for the protocol out of
 `--max-total-mem` and takes no further reserve per session.
 
 The budget covers the heap. Files are read through `pread` into fixed-size
@@ -534,19 +536,36 @@ assuming a record starts at its first byte and the parser is in the
 state the window started in. A chunk counts only if the one before it
 ended where it starts, in that state; a quoted line break at a cut, or
 a `COPY` header or terminator inside the window, makes the rest parse
-again from there. The pass's range is then split between shards, one
-per thread, by bits of the key hash the table does not use, and each
-shard takes its records with a table and waiting records of its own.
-With a refine half under 8 MiB (`--mem` under about 16M once the process
-reserve is taken) one thread does all of it. With more, the thread
-pool's own heap is reserved from the refine half, 16 KiB per thread.
+again from there. The pass's range is then split between shards by
+bits of the key hash the table does not use, and each shard takes its
+records with a table and waiting records of its own. There is one shard
+per MiB of the refine half, from 1 to 8 (`plan`), whatever the machine:
+every shard scans all records of a round for its own, so more shards
+cost more than they split. The shards run on a rayon pool of their own,
+one thread per shard and at most rayon's pool size (`workers`); rayon's
+global pool is never started. The pool's heap is held in the refine
+half at 16 KiB per shard, not per thread, so the rest of the half does
+not depend on the pool. A thread has no other working set: windows,
+chunk lists, tables and waiting records belong to a file, a chunk or a
+shard. One shard runs on the caller's thread and holds no pool.
+
+Lists that grow side by side never race for the refine half. Before
+each round, single-threaded, what the half has free is split into equal
+credits: one per chunk list of the two windows before they are parsed,
+one per shard before the shards take their records. A list grows only
+within its credit (`grow` in `read.rs`). A window that must grow for a
+long record grows before the round, A then B. Each file pays for a
+`COPY` table name the first time it gives it and sees only the names it
+gave, so a chunk stops at the same header whatever the other reader has
+named. Whether a list runs out then depends on its own records only.
 
 Each pass prints its changes sorted by line, so the output holds the
-same set of lines at any budget and thread count, in an order that
-depends on how the passes split the keys. One thread splits them the
-same way every run. Several threads grow their lists from the shared
-refine half at the same time, and the shard that runs out first sets
-where the pass starts over, so the order can differ between runs.
+same set of lines at any budget, in an order that depends on how the
+passes split the keys, and so on the input and `--mem` alone: the same
+files under the same `--mem` print the same bytes on every run, on any
+machine and any number of threads. Until 0.3.2 the shard count followed
+the thread count and the shards grew from the shared half at the same
+time, so the order could differ between machines and between runs.
 
 A fingerprint cannot tell which keys lie above a new top of the range,
 so when a shard's table or waiting records fill up the pass starts over

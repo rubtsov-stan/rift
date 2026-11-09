@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Key mode's output order depends on the files and `--mem` only. The
+  same pair under the same limit prints the same bytes on every run, on
+  any machine and any number of threads. The order at a given `--mem`
+  can differ from 0.3.1's where key mode used several threads; the set
+  of lines is the same.
+- Key mode runs one shard per MiB of the refine half, from 1 to 8, on a
+  thread pool of its own with one thread per shard, at most one per core
+  or `RAYON_NUM_THREADS`. It uses no more than 8 threads on any machine.
+- Key mode keeps 48 KiB of `--mem` out of the budget, without the 12 KiB
+  per pool thread: it no longer starts the shared pool, and holds its
+  own pool's heap, 16 KiB per shard, in the budget.
+
+### Fixed
+
+- Key mode's line order no longer changes between runs once it uses
+  several threads.
+- Key mode at `--mem 16M` runs on several threads again. The number of
+  threads now grows with `--mem` instead of jumping from one at a refine
+  half of 8 MiB. On the 128 MiB shuffled CSV pair it takes 1.09 s instead
+  of 2.21 s in 0.3.1.
+
 ## [0.3.1] - 2026-11-09
 
 ### Added
