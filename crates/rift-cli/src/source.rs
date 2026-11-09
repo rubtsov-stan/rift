@@ -45,6 +45,14 @@ impl FileSource {
             ));
         }
         let len = meta.len();
+        // Linux /proc files are regular with a length of 0 yet hold bytes;
+        // read as empty, they would make a wrong diff.
+        if len == 0 && file.read_at(&mut [0u8; 1], 0)? > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "reports no length but has content; Rift needs random access, so write the input to a file first",
+            ));
+        }
         hints::sequential(&file);
         Ok(Self { file, len })
     }
@@ -58,8 +66,21 @@ impl Source for FileSource {
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
         let left = self.len.saturating_sub(offset.0);
         let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
-        self.file.read_at(&mut buf[..n], offset.0)
+        let got = self.file.read_at(&mut buf[..n], offset.0)?;
+        if got == 0 && n > 0 {
+            return Err(shrank());
+        }
+        Ok(got)
     }
+}
+
+/// Nothing came back before the length taken at open: the file was cut
+/// while Rift read it, and taking that as the end would make a wrong diff.
+fn shrank() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "the file shrank while Rift was reading it",
+    )
 }
 
 /// Kernel read-ahead hints. The only FFI in the binary.
@@ -117,6 +138,31 @@ mod tests {
         assert_eq!(src.read_at(&mut buf, ByteOffset(0)).unwrap(), 4);
         assert_eq!(&buf[..4], b"x\ny\n");
         assert_eq!(src.read_at(&mut buf, ByteOffset(4)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_file_that_shrinks_after_open_is_an_error_not_an_end() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"one\ntwo\nthree\n").unwrap();
+        let src = FileSource::open(tmp.path()).unwrap();
+        tmp.as_file().set_len(4).unwrap();
+        let mut buf = [0u8; 16];
+        let err = src.read_at(&mut buf, ByteOffset(4)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_proc_file_that_reports_no_length_is_refused() {
+        let err = FileSource::open("/proc/self/status").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn an_empty_regular_file_is_still_a_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let src = FileSource::open(tmp.path()).unwrap();
+        assert_eq!(src.len(), Bytes(0));
     }
 
     #[test]

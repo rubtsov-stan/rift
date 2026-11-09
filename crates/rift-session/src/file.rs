@@ -114,6 +114,10 @@ fn open_regular(p: &Path) -> Result<(File, Metadata), Reason> {
     if !meta.is_file() {
         return Err(Reason::NotRegular);
     }
+    // Linux /proc files are regular with a length of 0 yet hold bytes.
+    if meta.len() == 0 && file.read_at(&mut [0u8; 1], 0).map_err(Reason::Io)? > 0 {
+        return Err(Reason::NotRegular);
+    }
     let flags = fcntl_getfl(&file).map_err(|e| Reason::Io(e.into()))?;
     fcntl_setfl(&file, flags - OFlags::NONBLOCK).map_err(|e| Reason::Io(e.into()))?;
     Ok((file, meta))
@@ -167,7 +171,16 @@ impl Source for FileSource {
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
         let left = self.len.saturating_sub(offset.0);
         let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
-        self.file.read_at(&mut buf[..n], offset.0)
+        let got = self.file.read_at(&mut buf[..n], offset.0)?;
+        if got == 0 && n > 0 {
+            // Cut while being read: taking this as the end would make a
+            // wrong diff.
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the file shrank while Rift was reading it",
+            ));
+        }
+        Ok(got)
     }
 }
 
@@ -205,6 +218,23 @@ mod tests {
         assert_eq!(src.read_at(&mut buf, ByteOffset(0)).unwrap(), 4);
         assert_eq!(&buf[..4], b"x\ny\n");
         assert_eq!(src.read_at(&mut buf, ByteOffset(4)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_file_that_shrinks_after_open_is_an_error_not_an_end() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"one\ntwo\nthree\n").unwrap();
+        let (src, _) = FileSource::open(tmp.path().to_str().unwrap()).unwrap();
+        tmp.as_file().set_len(4).unwrap();
+        let mut buf = [0u8; 16];
+        let err = src.read_at(&mut buf, ByteOffset(4)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_proc_file_that_reports_no_length_is_refused() {
+        assert_eq!(reason("/proc/self/status"), "not_regular");
     }
 
     #[test]
