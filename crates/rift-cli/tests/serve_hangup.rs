@@ -56,13 +56,7 @@ fn a_client_that_leaves_mid_response_ends_the_server_without_a_panic() {
         path.to_str().unwrap().to_owned()
     };
     let (a, b) = (file("a", 'a'), file("b", 'b'));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_rift"))
-        .arg("serve")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let Server(child) = &mut serve();
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
 
@@ -102,7 +96,29 @@ fn a_client_that_leaves_mid_response_ends_the_server_without_a_panic() {
     drop(stdout);
     drop(stdin);
 
-    exits_cleanly(&mut child);
+    exits_cleanly(child);
+}
+
+/// `rift serve`, killed and reaped when dropped, so a test that fails
+/// leaves no server behind.
+struct Server(Child);
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn serve() -> Server {
+    let child = Command::new(env!("CARGO_BIN_EXE_rift"))
+        .arg("serve")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    Server(child)
 }
 
 /// Waits a bounded time for `child` to exit, then checks it exited with 0
@@ -150,13 +166,7 @@ fn a_killed_client_with_requests_in_flight_ends_the_server() {
     let (a, b) = (file("a", 'a', 2000), file("b", 'b', 2000));
     let (big_a, big_b) = (file("big_a", 'c', 20_000), file("big_b", 'd', 20_000));
     for round in 0..ROUNDS {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_rift"))
-            .arg("serve")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let Server(child) = &mut serve();
         let mut stdin = child.stdin.take().unwrap();
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         send(&mut stdin, 1, "initialize", &json!({"protocol": 1}));
@@ -206,6 +216,6 @@ fn a_killed_client_with_requests_in_flight_ends_the_server() {
         }
         drop(stdout);
         drop(stdin);
-        exits_cleanly(&mut child);
+        exits_cleanly(child);
     }
 }

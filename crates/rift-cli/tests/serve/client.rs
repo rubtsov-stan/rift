@@ -290,3 +290,12 @@ impl Client {
         (status, stderr)
     }
 }
+
+/// A test that fails or panics before [`Client::finish`] must not leave its
+/// server running.
+impl Drop for Client {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
