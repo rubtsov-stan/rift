@@ -48,12 +48,15 @@ const FEW: usize = 5;
 const WINDOW: u64 = 4 << 20;
 /// Refine-half bytes a shard should have to itself.
 const SHARD_BYTES: u64 = 1 << 20;
-/// Most shards and most chunks per window.
-const MAX_SHARDS: usize = 64;
-/// Refine-half bytes held for each thread of the pool.
+/// Most shards and most chunks per window. Every shard looks at every
+/// record of a round to find its own, so past a few shards the scan costs
+/// more than the split saves; a constant, so the shards stay the same on
+/// any machine.
+const MAX_SHARDS: usize = 8;
+/// Refine-half bytes held for each thread of the pool that runs the
+/// shards: its queues and thread record, about 8 KiB per thread on macOS,
+/// held twice over.
 const POOL_PER_THREAD: u64 = 16 << 10;
-/// Fewest refine-half bytes for more than one thread.
-const PARALLEL_REFINE: u64 = 8 << 20;
 
 /// What the comparison cost.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -135,10 +138,12 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    let (threads, pool) = threads(budget)?;
+    let (shards, pool) = plan(budget.available(Half::Refine).0);
+    let pool = budget.try_reserve(Half::Refine, Bytes(pool))?;
+    let workers = workers(&pool)?;
     let lens = [a.len().0, b.len().0];
     let (len_a, len_b) = (lens[0], lens[1]);
-    let sizes = Sizes::new(budget.available(Half::Refine).0, threads, lens);
+    let sizes = Sizes::new(budget.available(Half::Refine).0, shards, lens);
     let mut ra = Reader::new(a, Side::A, spec, budget, sizes.windows[0], sizes.chunks)?;
     let mut rb = Reader::new(b, Side::B, spec, budget, sizes.windows[1], sizes.chunks)?;
     let tables = Mutex::new(Tables::new(budget)?);
@@ -152,7 +157,9 @@ where
     loop {
         let hi = lo + width.min(END - lo);
         let mut readers = (&mut ra, &mut rb, &tables);
-        let read = read_pass(&mut readers, &mut shards, lo, hi, &pending.list);
+        let read = on(workers.as_ref(), || {
+            read_pass(&mut readers, &mut shards, lo, hi, &pending.list)
+        });
         let read = read.map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens));
         match read? {
             Outcome::Overflow(half, progress) => {
@@ -176,8 +183,10 @@ where
                         pending.take_from(s)?;
                     }
                     let mut readers = (&mut ra, &mut rb, &tables);
-                    read_pass(&mut readers, &mut shards, END, END, &pending.list)
-                        .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
+                    on(workers.as_ref(), || {
+                        read_pass(&mut readers, &mut shards, END, END, &pending.list)
+                    })
+                    .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
                     dups = pending.duplicates(&ra, &rb);
                 }
                 return Err(if dups.is_empty() {
@@ -243,7 +252,7 @@ struct Sizes {
 }
 
 impl Sizes {
-    fn new(refine: u64, threads: usize, lens: [u64; 2]) -> Self {
+    fn new(refine: u64, shards: usize, lens: [u64; 2]) -> Self {
         // Windows in proportion to the files keep both at the same
         // relative position.
         let window = (refine / 16).clamp(64, WINDOW);
@@ -255,10 +264,8 @@ impl Sizes {
         Self {
             window,
             windows: [win(lens[0]), win(lens[1])],
-            // A chunk per thread once the budget is large enough to care.
-            chunks: usize::try_from(refine / SHARD_BYTES)
-                .unwrap_or(usize::MAX)
-                .clamp(1, threads),
+            // A chunk per shard.
+            chunks: shards,
         }
     }
 }
@@ -316,14 +323,9 @@ where
     let used = cap.saturating_sub(refusal.available.0);
     let held = [ra.held(), rb.held()];
     let rest = used.saturating_sub(pool + held[0] + held[1]);
-    let threads = rayon::current_num_threads().clamp(1, MAX_SHARDS);
     let fits = |r: u64| {
-        let (threads, pool) = if r < PARALLEL_REFINE {
-            (1, 0)
-        } else {
-            (threads, POOL_PER_THREAD * threads as u64)
-        };
-        let sizes = Sizes::new(r.saturating_sub(pool), threads, lens);
+        let (n, pool) = plan(r);
+        let sizes = Sizes::new(r.saturating_sub(pool), n, lens);
         let mut need = pool;
         for (&share, &record) in sizes.windows.iter().zip(&records) {
             let mut window = share as u64;
@@ -391,18 +393,59 @@ fn scale(w: u64, factor: f64) -> u64 {
     v
 }
 
-/// Threads for the comparison, and the refine-half bytes held for the
-/// pool's own heap. Under a small budget one thread does it all, which
-/// also keeps the pool out of a budget that could not absorb it.
-fn threads(budget: &Budget) -> Result<(usize, Reservation)> {
-    if budget.available(Half::Refine).0 < PARALLEL_REFINE {
-        return Ok((1, budget.try_reserve(Half::Refine, Bytes(0))?));
+/// Shards for a refine half with `refine` bytes free, and the refine-half
+/// bytes to hold for the threads that run them.
+///
+/// The shards follow the budget only, never the thread count, so the
+/// passes and the order of their changes are the same on any machine. A
+/// pool is held for one thread per shard, the most [`workers`] starts,
+/// so what is left of the half does not depend on the pool either. One
+/// shard runs on the caller's thread and holds no pool.
+fn plan(refine: u64) -> (usize, u64) {
+    let shards = usize::try_from(refine / SHARD_BYTES)
+        .unwrap_or(usize::MAX)
+        .clamp(1, MAX_SHARDS);
+    let pool = if shards > 1 {
+        POOL_PER_THREAD * shards as u64
+    } else {
+        0
+    };
+    (shards, pool)
+}
+
+/// The threads that run the shards, as many as the `pool` held for them
+/// pays for, at most rayon's pool size; `None` when it pays for none, as
+/// for one shard, which runs on the caller's thread. Rayon's global pool
+/// is never started: its size follows the machine, and its heap is not
+/// in the budget.
+///
+/// A thread's own working set is the pool's heap for it,
+/// [`POOL_PER_THREAD`]. Everything else belongs to a file, a chunk or a
+/// shard, whichever thread works on it: the two windows (`Reader::buf`,
+/// sized by [`Sizes`]), the record list of each chunk (`Chunk::recs`, as
+/// many chunks per window as shards), and each shard's table and lists
+/// (`Pass::slots`, `kept`, `arena`, `dups`, `suspects`). Thread stacks
+/// are mapped by the system, outside the heap. So the threads number
+/// `min(pool size, pool / POOL_PER_THREAD)`, which [`plan`] makes at
+/// most one per shard.
+fn workers(pool: &Reservation) -> Result<Option<rayon::ThreadPool>> {
+    let paid = usize::try_from(pool.bytes().0 / POOL_PER_THREAD).unwrap_or(usize::MAX);
+    if paid == 0 {
+        return Ok(None);
     }
-    let threads = rayon::current_num_threads().clamp(1, MAX_SHARDS);
-    // The pool's queues and thread records: about 8 KiB per thread on
-    // macOS, held twice over.
-    let pool = budget.try_reserve(Half::Refine, Bytes(POOL_PER_THREAD * threads as u64))?;
-    Ok((threads, pool))
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(crate::budget::pool_threads().min(paid))
+        .build()
+        .map(Some)
+        .map_err(|e| Error::Io(io::Error::other(e)))
+}
+
+/// Runs `op` on `workers`, or on this thread without them.
+fn on<R: Send>(workers: Option<&rayon::ThreadPool>, op: impl FnOnce() -> R + Send) -> R {
+    match workers {
+        Some(pool) => pool.install(op),
+        None => op(),
+    }
 }
 
 /// How a read of both files ended.

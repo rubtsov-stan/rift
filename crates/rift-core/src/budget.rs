@@ -63,6 +63,24 @@ impl BudgetExceeded {
     }
 }
 
+/// The threads rayon's global pool starts, by rayon's own rule
+/// (`ThreadPoolBuilder::get_num_threads` in rayon-core): a positive
+/// `RAYON_NUM_THREADS`, else, unless that is 0, a positive
+/// `RAYON_RS_NUM_CPUS`, else the cores. Asking rayon would start the
+/// pool, whose heap a small budget cannot hold.
+#[must_use]
+pub fn pool_threads() -> usize {
+    let var = |name| std::env::var(name).ok()?.parse::<usize>().ok();
+    let cores = || std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    match var("RAYON_NUM_THREADS") {
+        Some(n @ 1..) => n,
+        Some(0) => cores(),
+        None => var("RAYON_RS_NUM_CPUS")
+            .filter(|&n| n > 0)
+            .unwrap_or_else(cores),
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
     cap: u64,
@@ -211,6 +229,11 @@ mod tests {
         // A refusal that does not exceed its half proves nothing about mem.
         assert_eq!(refusal(Half::Skeleton, 10, 20).mem_advice(mem), None);
         assert_eq!(refusal(Half::Refine, u64::MAX, 0).mem_advice(mem), None);
+    }
+
+    #[test]
+    fn pool_threads_counts_what_rayon_starts() {
+        assert_eq!(pool_threads(), rayon::current_num_threads());
     }
 
     #[test]

@@ -201,7 +201,7 @@ pub fn main(cli: &GitDiffArgs) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) if crate::broken_pipe(&err) => return ExitCode::SUCCESS,
         Err(err) => {
-            match crate::mem_advice(&err, cli.mem) {
+            match crate::mem_advice(&err, cli.mem, true) {
                 Some(advice) => eprintln!("rift: {err:#}; {advice}"),
                 None => eprintln!("rift: {err:#}"),
             }

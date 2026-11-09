@@ -93,9 +93,11 @@ fn a_full_diff_short_of_one_worker_needs_one_rerun() {
 #[test]
 fn key_mode_advises_a_mem_that_works() {
     let dir = tempfile::tempdir().unwrap();
+    // Records of 8 KiB: key mode keeps only the base reserve, and 64K
+    // holds a few thousand short ones.
     let rows = |v: &str| -> String {
         std::iter::once("id,v\n".to_owned())
-            .chain((0..2000).map(|i| format!("{i},{v}{i}\n")))
+            .chain((0..50).map(|i| format!("{i},{}{i}\n", v.repeat(8 << 10))))
             .collect()
     };
     let (a, b) = pair(dir.path(), &rows("x"), &rows("y"));
