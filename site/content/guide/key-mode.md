@@ -83,3 +83,8 @@ Key mode writes no temporary files. When the keys do not fit `--mem`, Rift split
 Key mode prints the same set of lines at any `--mem` and on any number of threads. Their order is not fixed. It depends on `--mem`, since the passes split the keys by budget. Once key mode runs on several threads, from a refine half of 8 MiB, about `--mem 16M`, it can also differ between two runs with the same files and limit: the threads share the refine half, and the one that runs out first sets where the pass starts over. Sort the output before you compare runs.
 
 `--show-records` takes 64 KiB of the budget for its read buffer, plus 24 bytes for each record that waits for its match or has changed, until the end of its pass. Under a tight `--mem` that can add passes.
+
+## Known issues
+
+- With several threads, from about `--mem 16M`, the order of the lines can differ between two runs of the same command. The set of lines is always the same. The next release fixes this. Until then, sort the output before you compare runs.
+- Rift 0.3.1 runs key mode on one thread at exactly `--mem 16M`: the process reserve takes the refine half just under the 8 MiB that several threads need. On a 128 MiB CSV pair that took 2.21 s where 0.3.0 took 1.25 s. `--mem 16528K` or more restores the old time. The measurement is from the 0.3.1 changelog.
