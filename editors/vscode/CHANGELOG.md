@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- A carriage return inside a line is shown as ␍ with a hover note. It used to split
+  the line in the editor and shift the lines after it.
+
 ## [0.3.2] - 2026-11-10
 
 - Bundles `rift` 0.3.2, which refuses a pipe, FIFO or other non-regular

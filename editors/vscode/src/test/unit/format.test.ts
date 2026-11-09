@@ -30,4 +30,20 @@ describe('format', () => {
     assert.match(e.notes.get(1)!, /CRLF/);
     assert.match(e.notes.get(2)!, /No line terminator/);
   });
+
+  it('shows a carriage return inside a line, so it does not split the document line', () => {
+    const e = excerpt({
+      start: 1,
+      total: 3,
+      lines: [
+        { text: 'x\r', bytes: 2, eol: 'crlf' },
+        { text: 'x', bytes: 1, eol: 'crlf' },
+        { text: 'a\rb', bytes: 3, eol: 'lf' },
+      ],
+    });
+    assert.strictEqual(e.text.split(/\r\n|\r|\n/).length, 3);
+    assert.deepStrictEqual(e.text.split('\n'), ['x\u240d', 'x', 'a\u240db']);
+    assert.match(e.notes.get(0)!, /carriage return/);
+    assert.ok(!/carriage return/.test(e.notes.get(1) ?? ''));
+  });
 });
