@@ -49,6 +49,9 @@ use cache::{Cache, State};
 
 /// Segments on each side of the visible window that count as neighbours.
 const NEIGHBORS: usize = 4;
+/// How long a worker that found no room for the top job waits before it
+/// tries again without being woken; see `Queue::retry`.
+const RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Cooperative cancellation token handed to a running job.
 #[derive(Debug, Clone, Default)]
@@ -153,6 +156,9 @@ struct Queue {
     /// No row below it is flagged as asked for through `hunk()`. Flagged
     /// rows are served before background, lowest index first.
     wanted_from: usize,
+    /// How long a worker waits for bytes before it tries again unwoken.
+    /// [`RETRY`]; tests lengthen it to see whether a wakeup came.
+    retry: std::time::Duration,
     /// Background scan position in file order: nothing below it is fresh.
     cursor: usize,
     /// Whether idle workers refine segments nobody asked for.
@@ -249,6 +255,7 @@ impl<J: Job> Scheduler<J> {
                 _cache_block: reservation,
                 visible: 0..0,
                 wanted_from: 0,
+                retry: RETRY,
                 cursor: 0,
                 background: true,
                 running: Vec::with_capacity(threads),
@@ -445,7 +452,10 @@ impl<J: Job> Shared<J> {
             ));
         }
         let hunk = q.cache.get(segment);
-        if hunk.is_none() && q.cache.state(segment) == State::Idle && q.want(segment) {
+        if hunk.is_none() && q.cache.state(segment) == State::Idle {
+            q.want(segment);
+            // Also when it was wanted already: a worker that found no
+            // room for it may be waiting with nothing running to wake it.
             self.work.notify_one();
         }
         Ok(hunk)
@@ -572,7 +582,14 @@ fn worker<J: Job>(shared: &Shared<J>) {
                 !q.running.is_empty(),
                 "Refine half is used outside the scheduler"
             );
-            q = wait(&shared.work, q);
+            // Timed: bytes held outside the scheduler come back with no
+            // notify, and a blocked `wait_hunk` would wait with it.
+            let retry = q.retry;
+            q = shared
+                .work
+                .wait_timeout(q, retry)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
             continue;
         };
         let cancel = q.start(i, prefetch);
