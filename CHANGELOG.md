@@ -68,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   side, so `patch` no longer reads a work tree file as deleted.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
+- Key mode ignores a UTF-8 byte order mark before a CSV header, and
+  NDJSON lines of only spaces or tabs, as it ignores blank lines.
 - Key mode at `--mem 16M` runs on several threads again. The number of
   threads now grows with `--mem` instead of jumping from one at a refine
   half of 8 MiB. On the 128 MiB shuffled CSV pair it takes 1.09 s instead

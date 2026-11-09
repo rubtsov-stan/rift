@@ -1437,6 +1437,30 @@ mod tests {
         assert!(matches!(err, Error::Budget(_)), "{err}");
     }
 
+    #[test]
+    fn a_byte_order_mark_is_not_part_of_the_csv_header() {
+        let (a, b) = (b"\xEF\xBB\xBFid,v\n1,a\n2,b\n", b"id,v\n2,b\n1,a\n");
+        for spec in ["csv:id", "csv:1"] {
+            assert_eq!(run(a, b, spec, 1 << 20).unwrap().0, [], "{spec}");
+        }
+        let changed = records(b"\xEF\xBB\xBFid,v\n1,a\n", b"id,v\n1,b\n", 1 << 20);
+        assert_eq!(
+            changed,
+            [("1".into(), Some(b"1,a".to_vec()), Some(b"1,b".to_vec()))]
+        );
+    }
+
+    #[test]
+    fn blank_ndjson_lines_are_not_records() {
+        let (a, b) = (
+            b"{\"id\":1}\n  \n\t\r\n{\"id\":2}\n",
+            b"{\"id\":2}\n \n{\"id\":1}\n",
+        );
+        let (changes, report) = run(a, b, "json:id", 1 << 20).unwrap();
+        assert_eq!(changes, []);
+        assert_eq!((report.records_a, report.records_b), (2, 2));
+    }
+
     proptest! {
         #[test]
         #[cfg_attr(miri, ignore = "too slow under Miri")]

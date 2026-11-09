@@ -450,9 +450,12 @@ impl Ctx<'_> {
                 state.col = Some(i);
                 Ok(Some((key, 0, 0)))
             }
-            Kind::Ndjson(path) => json_key(rec, path)
-                .map(|k| Some((k, 0, 0)))
-                .ok_or(Miss::NoKey),
+            Kind::Ndjson(path) => match json_key(rec, path) {
+                Some(k) => Ok(Some((k, 0, 0))),
+                // A line of spaces is a blank line, not a record.
+                None if rec.trim_ascii().is_empty() => Ok(None),
+                None => Err(Miss::NoKey),
+            },
             Kind::Copy { name } => match state.block {
                 Block::Outside => {
                     if let Some((table, cols)) = copy_header(rec) {
@@ -719,6 +722,13 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
         }
         if self.start == self.end && self.eof {
             return Ok(false);
+        }
+        // A UTF-8 byte order mark is not part of the header's first name.
+        if matches!(self.kind, Kind::Csv { .. })
+            && self.consumed() == 0
+            && self.buf[..self.end].starts_with(b"\xEF\xBB\xBF")
+        {
+            self.start = 3;
         }
         let (base, end) = (self.start, self.end);
         let n = if matches!(self.kind, Kind::Csv { .. }) && self.state.col.is_none() {
