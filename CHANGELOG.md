@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift serve` answered `busy` to an `open` that needed a ready session's
+  room while the notifier happened to hold that session for a look. The
+  `open` now waits up to 250 ms for the notifier to let go, and never
+  evicts a session whose memory it cannot free.
 - `rift serve` could send `progress` or `session_state` for a session
   after it had answered that session's `close`. The notifier now lists
   the live sessions under the lock `close` answers under.

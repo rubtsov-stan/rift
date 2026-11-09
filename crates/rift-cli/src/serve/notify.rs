@@ -6,7 +6,6 @@
 //! notifications per tick, 20 a second, however fast its work advances.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::Duration;
 
 use rift_core::{DiffView, HunkState, Progress};
@@ -90,26 +89,19 @@ impl Server {
     pub fn notify(&self) {
         #[cfg(test)]
         tests::before_notes();
-        // The lock first: `close` answers under it, so a session closed
-        // after this point was already answered, and one closed before it
-        // is not listed.
+        // Everything below runs under the notes lock, which `close` answers
+        // under: `observe` finds no session that was closed before this
+        // point, so no note follows the answer to a close.
         let mut notes = self.notes();
-        let live: Vec<_> = self
-            .sessions
-            .live()
-            .iter()
-            .map(|s| (s.id(), Arc::downgrade(s)))
-            .collect();
-        notes
-            .sessions
-            .retain(|f| live.iter().any(|(id, _)| *id == f.id));
+        let ids = self.sessions.ids();
+        notes.sessions.retain(|f| ids.contains(&f.id));
         let (mut out, mut ready) = (Vec::new(), Vec::new());
-        for (id, session) in &live {
+        for id in ids {
             // Held only while it is read, never across a send: a send waits
-            // while the writer is behind, and a session held meanwhile looks
-            // in use, so an `open` that needs its room would get `busy`.
-            if let Some(s) = session.upgrade() {
-                look(notes.get(*id), &s, &mut out, &mut ready);
+            // while the writer is behind, and a closed session held
+            // meanwhile would keep its memory.
+            if let Some(s) = self.sessions.observe(id) {
+                look(notes.get(id), &s, &mut out, &mut ready);
             }
             for n in out.drain(..) {
                 self.send(Box::new(n));
