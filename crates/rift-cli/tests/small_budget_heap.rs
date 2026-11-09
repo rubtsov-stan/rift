@@ -134,7 +134,7 @@ fn key_mode_peaks_under_mem() {
         (&["--key", "csv:id", "--show-records"], Rows::Csv),
     ] {
         for mem in BUDGETS {
-            let p = generated(4 * bytes(mem).max(1 << 20), Profile::Shuffled, rows);
+            let p = generated(4 * bytes(mem), Profile::Shuffled, rows);
             let mut args: Vec<&OsStr> = opts.iter().map(OsStr::new).collect();
             args.extend(["--stats", "--mem", mem].map(OsStr::new));
             args.extend([p.a.as_os_str(), p.b.as_os_str()]);
