@@ -350,8 +350,7 @@ impl Session {
     /// reached through [`At::LineA`] from that line, since its lines match
     /// one for one. Each side shows at most `max_lines` lines of at most
     /// `max_line_bytes` bytes, and both sides together fit what the
-    /// response pool (or, for a session from [`Sessions::get`], the free
-    /// Refine half) had free when the call began. Memory: the lines, their
+    /// response pool had free when the call began. Memory: the lines, their
     /// text and one line buffer, held by the returned excerpt until it is
     /// dropped. Time: one positional read per line shown, two for a
     /// truncated one, plus `O(moved blocks)`.
@@ -361,12 +360,14 @@ impl Session {
     /// # Errors
     ///
     /// [`Error::NotReady`] while the session scans or after its scan
-    /// failed, [`Error::SegmentOutOfRange`] or [`Error::LineOutOfRange`]
+    /// failed, [`Error::NoResponsePool`] for a session from
+    /// [`Sessions::get`], [`Error::SegmentOutOfRange`] or [`Error::LineOutOfRange`]
     /// for a position past the end, [`Error::ResponsesBusy`] when other excerpts
     /// hold the pool, [`Error::Segment`] when a read or the segment's
     /// refinement failed.
     pub fn excerpt(&self, req: &ExcerptRequest) -> Result<Excerpt, Error> {
         let built = self.built()?;
+        let pool = &built.pool.as_ref().ok_or(Error::NoResponsePool)?.budget;
         let diff = &built.diff;
         let segs = diff.segments();
         let (i, from) = match req.at {
@@ -407,7 +408,6 @@ impl Session {
         let window_a = first_a - pre..seg.a.end.0 + post;
         let window_b = first_b - pre..seg.b.end.0 + post;
 
-        let pool = built.pool.as_ref().map_or(&built.budget, |p| &p.budget);
         let cap = pool.capacity(Half::Refine).0;
         // One line on each side and the line buffer must fit an empty
         // pool, so a small budget narrows lines instead of refusing them.

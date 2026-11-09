@@ -377,6 +377,51 @@ fn excerpts_share_the_response_pool_and_return_it() {
 }
 
 #[test]
+fn an_excerpt_of_a_session_from_get_is_refused() {
+    // Its bytes would come from the diff's Refine half after the scheduler
+    // was sized from it, and a worker could wait for them forever.
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let file = |p: &str| rift_session::file::FileSource::open(p).unwrap();
+    let session = sessions().get(file(&a), file(&b), MEM).unwrap();
+    let err = session
+        .excerpt(&ExcerptRequest::new(At::Segment(1)))
+        .unwrap_err();
+    assert!(matches!(err, Error::NoResponsePool), "{err}");
+}
+
+#[test]
+fn a_session_from_get_holds_what_a_plain_diff_holds() {
+    // rift-mcp builds its sessions here: a response pool would shrink the
+    // diff's share of `mem` and raise the smallest budget that works.
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let file = |p: &str| rift_session::file::FileSource::open(p).unwrap();
+    let session = sessions().get(file(&a), file(&b), MEM).unwrap();
+    let diff = session.diff().unwrap();
+    for i in 0..diff.segments().len() {
+        refined(&session, i);
+    }
+    let budget = rift_core::Budget::new(MEM.unwrap());
+    let plain = rift_core::diff::Diff::with_config(
+        Arc::new(file(&a).0),
+        Arc::new(file(&b).0),
+        &budget,
+        diff.threads(),
+        rift_core::diff::Config::default(),
+    )
+    .unwrap();
+    for i in 0..plain.segments().len() {
+        while matches!(plain.try_hunk(i).unwrap(), HunkState::Pending) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    let used = |h| budget.used(h).0;
+    let held = used(rift_core::Half::Skeleton) + used(rift_core::Half::Refine);
+    assert_eq!(session.summary().unwrap().reserved, Bytes(held));
+}
+
+#[test]
 fn core_errors_map_to_their_codes() {
     let mem = Bytes::mib(1);
     let build = |error| Error::Build { mem, error };

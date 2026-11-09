@@ -107,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a front end asked for and was not yet refined held about 20 bytes, so
   a `rift serve` or `rift-mcp` client asking for every segment of a
   large diff could add tens of megabytes.
+- `Session::excerpt` on a session from `Sessions::get` returns
+  `Error::NoResponsePool` instead of taking bytes from the diff's refine
+  half after the scheduler was sized from it, which could leave a
+  refinement waiting for them forever. Nothing in Rift made that call;
+  `rift serve` opens its sessions with `Sessions::open`, which has a
+  response pool.
 
 ## [0.3.2] - 2026-11-10
 

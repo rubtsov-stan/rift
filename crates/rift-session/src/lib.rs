@@ -39,8 +39,8 @@
 //!   half, taken before the diff is built, 1/[`RESPONSE_SHARE`] of the
 //!   half and at most [`MAX_RESPONSE_POOL`];
 //! - an [`Excerpt`]: its lines, their text and one line buffer, inside the
-//!   response pool (the free Refine half for a session from
-//!   [`Sessions::get`]), held until the excerpt is dropped;
+//!   response pool, held until the excerpt is dropped. A session from
+//!   [`Sessions::get`] has no pool and refuses excerpts;
 //! - [`Summary`] and pages of [`Session::differing`] and moved blocks: no
 //!   heap; they borrow from the map and the block list;
 //! - the session table and each session's scan thread: a few hundred
