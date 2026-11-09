@@ -41,6 +41,14 @@ Rift marks a region it could not align within the budget as approximate: the uni
 
 `--stats` counts the approximate segments for each reason. Two files that share no line come out as one deletion and one insertion without the mark: with nothing in common, that is the smallest diff.
 
+## File names in the header
+
+The `---` and `+++` lines quote a name as GNU diff 3.10 on x86_64 does. A name with a space, a control character, `"`, `\` or a byte above 0x7f is wrapped in double quotes, with C escapes and octal bytes: `"caf\303\251"`, `"sp ace"`, `"ta\tb"`. Other names are printed as given. GNU diff on aarch64 prints bytes above 0x7f raw. `patch` reads the quoted form on both.
+
+## Binary files
+
+Rift does not look for binary files. A NUL byte is part of a line and is printed in the `-` and `+` lines. There is no `Binary files differ` message, and `patch` still applies the output.
+
 ## What it does not promise
 
 The diff is not minimal. Like patience diff in git, Rift can show a change as larger than the smallest possible one. Correctness is the promise: the output always rebuilds the second file from the first.

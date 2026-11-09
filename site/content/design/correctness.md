@@ -80,9 +80,9 @@ Sources: `fuzz/README.md`; `fuzz/fuzz_targets/`; `.github/workflows/fuzz.yml`.
 
 ## Miri
 
-The only `unsafe` code in `rift-core` is the counting allocator, and the only other `unsafe` in the binary is two kernel read-ahead hints; the other crates forbid it. Miri runs the `rift-core` library tests every night at 03:41 UTC: most of them under stacked borrows, and the scan, skeleton, moves and key-mode tests under tree borrows, with 8 cases per property test. A failing nightly run opens an issue, or comments on the open one. On a pull request, or a push to any branch but `main`, the CI job `unsafe-diff` looks for `unsafe` in the Rust lines the change adds, and when it finds one the same Miri jobs run as part of CI.
+The only `unsafe` code in `rift-core` is the counting allocator, and the only other `unsafe` in the binary is two kernel read-ahead hints and one `localtime_r` call for the time zone offset in `--- ` and `+++ ` lines; the other crates forbid it. Miri runs the `rift-core` library tests every night at 03:41 UTC: most of them under stacked borrows, and the scan, skeleton, moves and key-mode tests under tree borrows, with 8 cases per property test. A failing nightly run opens an issue, or comments on the open one. On a pull request, or a push to any branch but `main`, the CI job `unsafe-diff` looks for `unsafe` in the Rust lines the change adds, and when it finds one the same Miri jobs run as part of CI.
 
-Sources: `.github/workflows/miri.yml`, `.github/workflows/miri-run.yml`, `.github/workflows/ci.yml` (jobs `unsafe-diff` and `miri`); `crates/rift-core/src/alloc.rs`; `crates/rift-cli/src/source.rs`, `hints`.
+Sources: `.github/workflows/miri.yml`, `.github/workflows/miri-run.yml`, `.github/workflows/ci.yml` (jobs `unsafe-diff` and `miri`); `crates/rift-core/src/alloc.rs`; `crates/rift-cli/src/source.rs`, `hints`; `crates/rift-cli/src/full.rs`, `clock`.
 
 ## Memory, to the byte
 

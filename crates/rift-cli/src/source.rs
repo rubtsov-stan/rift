@@ -93,7 +93,8 @@ fn ended_early(path: &Path) -> io::Error {
     )
 }
 
-/// Kernel read-ahead hints. The only FFI in the binary.
+/// Kernel read-ahead hints. `full.rs` holds the binary's other FFI, for the
+/// time zone.
 #[allow(unsafe_code, reason = "fadvise and fcntl have no safe std wrapper")]
 mod hints {
     use std::fs::File;

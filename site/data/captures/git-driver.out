@@ -1,5 +1,4 @@
 diff --git a/dump.sql b/dump.sql
-index 86d4681..0000000 100644
 --- a/dump.sql
 +++ b/dump.sql
 @@ -380,7 +380,6 @@
