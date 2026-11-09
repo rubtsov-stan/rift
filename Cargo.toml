@@ -20,6 +20,7 @@ clap_mangen = "0.3.3"
 thiserror = "2.0.21"
 anyhow = "1.0.104"
 libc = "0.2.191"
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 bumpalo = "3.20.3"

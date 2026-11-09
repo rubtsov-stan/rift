@@ -5,6 +5,8 @@ use std::io;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 
+use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl};
+
 use rift_core::{ByteOffset, Bytes, Source};
 
 /// A file opened for positional reads. Its length is taken at open time.
@@ -87,6 +89,36 @@ pub struct FileError {
     pub reason: Reason,
 }
 
+/// Opens `p` read-only without following a symbolic link, and returns the
+/// file with its `fstat`.
+///
+/// The path may have become a FIFO since the `lstat`, and `open` on a FIFO
+/// waits for a writer. `O_NONBLOCK` makes it return, and the `fstat` on the
+/// descriptor then refuses anything but a regular file. The flag is cleared
+/// before the file is used.
+fn open_regular(p: &Path) -> Result<(File, Metadata), Reason> {
+    let fd = rustix::fs::open(
+        p,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| {
+        if e == rustix::io::Errno::LOOP {
+            Reason::Symlink
+        } else {
+            Reason::Io(e.into())
+        }
+    })?;
+    let file = File::from(fd);
+    let meta = file.metadata().map_err(Reason::Io)?;
+    if !meta.is_file() {
+        return Err(Reason::NotRegular);
+    }
+    let flags = fcntl_getfl(&file).map_err(|e| Reason::Io(e.into()))?;
+    fcntl_setfl(&file, flags - OFlags::NONBLOCK).map_err(|e| Reason::Io(e.into()))?;
+    Ok((file, meta))
+}
+
 impl FileSource {
     /// Opens `path` after checking that it names a regular file.
     ///
@@ -112,10 +144,8 @@ impl FileSource {
         if !before.is_file() {
             return Err(fail(Reason::NotRegular));
         }
-        // `File::open` is read-only.
-        let file = File::open(p).map_err(|e| fail(Reason::Io(e)))?;
-        let after = file.metadata().map_err(|e| fail(Reason::Io(e)))?;
-        if !after.is_file() || (after.dev(), after.ino()) != (before.dev(), before.ino()) {
+        let (file, after) = open_regular(p).map_err(fail)?;
+        if (after.dev(), after.ino()) != (before.dev(), before.ino()) {
             return Err(fail(Reason::Changed));
         }
         let id = FileId::of(&after);
@@ -213,5 +243,53 @@ mod tests {
         tmp.write_all(b"y\n").unwrap();
         let (_, after) = FileSource::open(&path).unwrap();
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn a_path_swapped_for_a_fifo_never_blocks_the_open() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("swap");
+        fs::write(&target, b"x\n").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flipper = {
+            let (dir, target, stop) = (dir.path().to_owned(), target.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let mut i = 0u32;
+                while !stop.load(Ordering::Relaxed) {
+                    i += 1;
+                    let (fifo, reg) = (
+                        dir.join(format!("f{}", i % 2)),
+                        dir.join(format!("r{}", i % 2)),
+                    );
+                    let _ = std::process::Command::new("mkfifo").arg(&fifo).status();
+                    fs::write(&reg, b"y\n").unwrap();
+                    fs::rename(&reg, &target).unwrap();
+                    fs::rename(&fifo, &target).unwrap();
+                }
+            })
+        };
+        let (done, finished) = mpsc::channel();
+        let path = target.to_str().unwrap().to_owned();
+        // A blocked open never returns, so the thread is left behind.
+        std::thread::spawn(move || {
+            let end = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < end {
+                drop(FileSource::open(&path));
+            }
+            let _ = done.send(());
+        });
+        let result = finished.recv_timeout(Duration::from_secs(30));
+        stop.store(true, Ordering::Relaxed);
+        if result.is_ok() {
+            flipper.join().unwrap();
+        }
+        assert!(
+            result.is_ok(),
+            "open blocked on a FIFO swapped in after lstat"
+        );
     }
 }
