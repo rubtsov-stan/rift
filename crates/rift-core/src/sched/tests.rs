@@ -697,6 +697,57 @@ fn refine_bytes_held_before_construction_do_not_stall_the_workers() {
     assert!(budget.used(Half::Refine) <= budget.capacity(Half::Refine));
 }
 
+// A debug build asserts that no Refine bytes are held outside the
+// scheduler, which kills the worker this test needs.
+#[cfg(not(debug_assertions))]
+#[test]
+#[ignore = "release only: run with --release -- --ignored"]
+fn asking_again_wakes_a_worker_that_waited_for_outside_bytes() {
+    let n = 1;
+    let budget = budget(n, 4);
+    let job = Fake {
+        estimate: Box::new(|_| Bytes(u64::MAX / 2)),
+        ..Fake::new()
+    };
+    let s = Scheduler::new(job, segments(n, |_| false), &budget, 1).unwrap();
+    s.set_background(false);
+    let held = budget.try_reserve(Half::Refine, Bytes(64)).unwrap();
+    assert!(matches!(s.hunk(0), HunkState::Pending));
+    // Give the worker time to fail its reservation and wait.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(held);
+    let began = std::time::Instant::now();
+    while matches!(s.hunk(0), HunkState::Pending) {
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "still pending 5 s after the outside bytes were released"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+// Release only, as above.
+#[cfg(not(debug_assertions))]
+#[test]
+#[ignore = "release only: run with --release -- --ignored"]
+fn a_blocked_waiter_gets_its_hunk_once_outside_bytes_are_released() {
+    let n = 1;
+    let budget = budget(n, 4);
+    let job = Fake {
+        estimate: Box::new(|_| Bytes(u64::MAX / 2)),
+        ..Fake::new()
+    };
+    let s = Arc::new(Scheduler::new(job, segments(n, |_| false), &budget, 1).unwrap());
+    s.set_background(false);
+    let held = budget.try_reserve(Half::Refine, Bytes(64)).unwrap();
+    let t = Arc::clone(&s);
+    let waiter = std::thread::spawn(move || t.wait_hunk(0).map(|_| ()));
+    // Give the worker time to fail its reservation and wait.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(held);
+    finishes(move || waiter.join().unwrap()).unwrap().unwrap();
+}
+
 #[test]
 fn a_failing_job_fails_the_waiter_instead_of_hanging() {
     struct Boom;

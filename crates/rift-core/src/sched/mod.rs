@@ -49,6 +49,9 @@ use cache::{Cache, State};
 
 /// Segments on each side of the visible window that count as neighbours.
 const NEIGHBORS: usize = 4;
+/// How long a worker that found no room for the top job waits before it
+/// tries again without being woken.
+const RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Cooperative cancellation token handed to a running job.
 #[derive(Debug, Clone, Default)]
@@ -445,7 +448,10 @@ impl<J: Job> Shared<J> {
             ));
         }
         let hunk = q.cache.get(segment);
-        if hunk.is_none() && q.cache.state(segment) == State::Idle && q.want(segment) {
+        if hunk.is_none() && q.cache.state(segment) == State::Idle {
+            q.want(segment);
+            // Also when it was wanted already: a worker that found no
+            // room for it may be waiting with nothing running to wake it.
             self.work.notify_one();
         }
         Ok(hunk)
@@ -572,7 +578,13 @@ fn worker<J: Job>(shared: &Shared<J>) {
                 !q.running.is_empty(),
                 "Refine half is used outside the scheduler"
             );
-            q = wait(&shared.work, q);
+            // Timed: bytes held outside the scheduler come back with no
+            // notify, and a blocked `wait_hunk` would wait with it.
+            q = shared
+                .work
+                .wait_timeout(q, RETRY)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
             continue;
         };
         let cancel = q.start(i, prefetch);
