@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift serve` could send a scan's last `progress` notification short of
+  its total and then `session_state` ready, when the scan ended between
+  the two reads. The notifier reads the state first.
 - `rift serve` under a small `--max-total-mem` no longer advertises a
   `default_mem` or `max_session_mem` above what its sessions can hold.
   Every `open` used to answer `busy` forever; one that asks for more than
