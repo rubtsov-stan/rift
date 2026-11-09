@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -102,6 +102,12 @@ fn a_client_that_leaves_mid_response_ends_the_server_without_a_panic() {
     drop(stdout);
     drop(stdin);
 
+    exits_cleanly(&mut child);
+}
+
+/// Waits a bounded time for `child` to exit, then checks it exited with 0
+/// and did not panic.
+fn exits_cleanly(child: &mut Child) {
     let began = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -122,4 +128,84 @@ fn a_client_that_leaves_mid_response_ends_the_server_without_a_panic() {
         .unwrap();
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert_eq!(status.code(), Some(0), "{status:?}: {stderr}");
+}
+
+/// A client killed while several requests run: an open still scanning,
+/// hunks that do not fit the pipe, a summary and a cancel. Its pipes close
+/// at once, at a different point of the answers each round.
+#[test]
+fn a_killed_client_with_requests_in_flight_ends_the_server() {
+    const ROUNDS: usize = 50;
+    let dir = tempfile::tempdir().unwrap();
+    let file = |name: &str, fill: char, lines: usize| {
+        let path = dir.path().join(name);
+        let line = fill.to_string().repeat(1000);
+        let mut text = String::new();
+        for i in 0..lines {
+            writeln!(text, "{line}{i}").unwrap();
+        }
+        std::fs::write(&path, text).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let (a, b) = (file("a", 'a', 2000), file("b", 'b', 2000));
+    let (big_a, big_b) = (file("big_a", 'c', 20_000), file("big_b", 'd', 20_000));
+    for round in 0..ROUNDS {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_rift"))
+            .arg("serve")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        send(&mut stdin, 1, "initialize", &json!({"protocol": 1}));
+        while frame(&mut stdout)["id"] != 1 {}
+        send(
+            &mut stdin,
+            2,
+            "open",
+            &json!({"a": a, "b": b, "mem": "64M"}),
+        );
+        let mut session = None;
+        loop {
+            let m = frame(&mut stdout);
+            if m["id"] == 2 {
+                session = m["result"]["session"].as_u64();
+            }
+            if m["method"] == "session_state" && m["params"]["state"] == "ready" {
+                break;
+            }
+        }
+        let session = session.unwrap();
+        send(
+            &mut stdin,
+            3,
+            "open",
+            &json!({"a": big_a, "b": big_b, "mem": "64M"}),
+        );
+        for id in 4..8 {
+            send(
+                &mut stdin,
+                id,
+                "hunk",
+                &json!({"session": session, "segment": 0, "context": 0,
+                        "max_lines": 2000, "max_line_bytes": 65536}),
+            );
+        }
+        send(&mut stdin, 8, "summary", &json!({"session": session}));
+        let cancel = json!({"jsonrpc": "2.0", "method": "$/cancelRequest",
+                            "params": {"id": 3}});
+        let cancel = serde_json::to_vec(&cancel).unwrap();
+        write!(stdin, "Content-Length: {}\r\n\r\n", cancel.len()).unwrap();
+        stdin.write_all(&cancel).unwrap();
+        stdin.flush().unwrap();
+        // Read a little more of the answers each round before leaving.
+        for _ in 0..round % 4 {
+            header(&mut stdout);
+        }
+        drop(stdout);
+        drop(stdin);
+        exits_cleanly(&mut child);
+    }
 }
