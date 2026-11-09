@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift serve` could send `progress` or `session_state` for a session
+  after it had answered that session's `close`. The notifier now lists
+  the live sessions under the lock `close` answers under.
 - `rift serve` could send a scan's last `progress` notification short of
   its total and then `session_state` ready, when the scan ended between
   the two reads. The notifier reads the state first.

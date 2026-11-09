@@ -88,13 +88,18 @@ impl Server {
 
     /// Sends what changed in every live session since the last call.
     pub fn notify(&self) {
+        #[cfg(test)]
+        tests::before_notes();
+        // The lock first: `close` answers under it, so a session closed
+        // after this point was already answered, and one closed before it
+        // is not listed.
+        let mut notes = self.notes();
         let live: Vec<_> = self
             .sessions
             .live()
             .iter()
             .map(|s| (s.id(), Arc::downgrade(s)))
             .collect();
-        let mut notes = self.notes();
         notes
             .sessions
             .retain(|f| live.iter().any(|(id, _)| *id == f.id));
@@ -190,11 +195,12 @@ fn look(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::sync::mpsc::sync_channel;
     use std::sync::{Arc, Mutex};
 
     use rift_session::{Limits, Session, Sessions};
+    use serde_json::json;
 
     use super::super::Server;
 
@@ -289,5 +295,90 @@ mod tests {
             }
         }
         panic!("the scan never ended");
+    }
+
+    thread_local! {
+        /// Runs at the start of `notify`, on the thread that ticks.
+        static BEFORE_NOTES: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn before_notes() {
+        BEFORE_NOTES.with(|h| {
+            if let Some(hook) = &*h.borrow() {
+                hook();
+            }
+        });
+    }
+
+    /// `close` answers under the notes lock, so a tick that lists the live
+    /// sessions after that has nothing to say about the session. The close
+    /// runs, through the real request path, in the gap between the start of
+    /// a tick and the point it lists the sessions.
+    #[test]
+    fn no_note_follows_the_answer_to_a_close() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::mpsc::channel;
+
+        use super::super::Flight;
+        use super::super::methods::Call;
+        use super::super::wire::Body;
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str, text: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, text).unwrap();
+            p.to_str().unwrap().to_owned()
+        };
+        let (a, b) = (path("a", "one\n"), path("b", "two\n"));
+        let (tx, rx) = sync_channel::<Box<dyn Body>>(64);
+        let server = Arc::new(Server {
+            sessions: Sessions::new(Limits::default()),
+            max_session_mem: Limits::default().session_mem,
+            default_mem: rift_session::DEFAULT_MEM,
+            out: tx,
+            flights: Mutex::default(),
+            room: std::sync::Condvar::new(),
+            notes: Mutex::default(),
+        });
+        // Held by this test, as by a request that is still running on it.
+        let session = server.sessions.open(&a, &b, None).unwrap().session;
+        session.wait();
+        let (started, start) = channel();
+        let (go, resume) = channel();
+        let ticker = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || {
+                BEFORE_NOTES.with(|h| {
+                    *h.borrow_mut() = Some(Box::new(move || {
+                        started.send(()).unwrap();
+                        resume.recv().unwrap();
+                    }));
+                });
+                server.notify();
+            })
+        };
+        start.recv().unwrap();
+        let flight = Flight {
+            id: json!(1),
+            answered: AtomicBool::new(false),
+        };
+        server.run(&flight, Call::Close(session.id()));
+        go.send(()).unwrap();
+        ticker.join().unwrap();
+        drop(server);
+        let mut closed = false;
+        let mut late = Vec::new();
+        while let Ok(body) = rx.recv() {
+            let mut text = Vec::new();
+            body.write(&mut text).unwrap();
+            let text = String::from_utf8(text).unwrap();
+            if text.contains("\"closed\"") {
+                closed = true;
+            } else if closed {
+                late.push(text);
+            }
+        }
+        assert!(closed, "no answer to the close");
+        assert!(late.is_empty(), "sent after the close answer: {late:?}");
+        drop(session);
     }
 }
