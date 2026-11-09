@@ -1732,6 +1732,7 @@ dependencies = [
  "rift-gen",
  "rift-session",
  "rift-tui",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

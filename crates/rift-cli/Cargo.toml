@@ -25,6 +25,7 @@ ratatui = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 libc.workspace = true
+rustix.workspace = true
 memchr.workspace = true
 rift-session = { path = "../rift-session" }
 serde.workspace = true

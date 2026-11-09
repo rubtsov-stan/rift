@@ -9,6 +9,8 @@ mod serve;
 mod source;
 mod summary;
 
+use std::fs::File;
+use std::os::unix::fs::FileTypeExt;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -104,6 +106,10 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
 
 fn main() -> ExitCode {
     let args = Args::parse_from(tui_alias(std::env::args_os().collect()));
+    if !matches!(args.command, Some(Command::Serve(_))) && stdout_was_closed() {
+        eprintln!("rift: standard output is closed");
+        return ExitCode::from(2);
+    }
     match &args.command {
         Some(Command::Serve(cli)) => return serve::main(cli),
         Some(Command::GitDiff(cli)) => return gitdiff::main(cli),
@@ -124,6 +130,27 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Whether standard output was closed when Rift started, as in
+/// `rift a b >&-`.
+///
+/// Before `main`, Rust's standard library reopens a closed descriptor 0, 1
+/// or 2 as `/dev/null` opened for reading and writing, so the closed state
+/// can only be seen as that. A shell's `>/dev/null` opens it write-only.
+fn stdout_was_closed() -> bool {
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::MetadataExt;
+    let Ok(fd) = std::io::stdout().as_fd().try_clone_to_owned() else {
+        return true;
+    };
+    let file = File::from(fd);
+    let is_null = file
+        .metadata()
+        .ok()
+        .zip(std::fs::metadata("/dev/null").ok());
+    is_null.is_some_and(|(out, null)| out.rdev() == null.rdev() && out.file_type().is_char_device())
+        && rustix::fs::fcntl_getfl(&file).is_ok_and(|f| f.contains(rustix::fs::OFlags::RDWR))
 }
 
 /// The output's reader went away, as in `rift a b | head`. Rust ignores

@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file that grows while Rift reads it no longer yields bytes past the
   length taken at open, which could mix two versions of the file in one
   diff. Reads stop at that length.
+- `rift a b >&-` (standard output closed) exits 2 with a message, as GNU
+  diff does. It used to exit 0 or 1 after printing the diff to nowhere.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
 - Key mode at `--mem 16M` runs on several threads again. The number of

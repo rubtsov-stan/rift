@@ -13,7 +13,7 @@ summary = "What each exit status means and how to use it in a script."
 |---|---|
 | 0 | The files are identical. |
 | 1 | The files differ. |
-| 2 | An error: an unreadable file, an operand that is not a regular file (a pipe, FIFO, `<(command)` or directory), a budget too small, a duplicate key in key mode, an invalid option, or `-i` in a build without the terminal view. The message goes to standard error. |
+| 2 | An error: an unreadable file, an operand that is not a regular file (a pipe, FIFO, `<(command)` or directory), standard output closed before Rift starts (`rift a b >&-`), a budget too small, a duplicate key in key mode, an invalid option, or `-i` in a build without the terminal view. The message goes to standard error. |
 
 The three cases on the generated pair, with the status printed after each run:
 
