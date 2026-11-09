@@ -349,6 +349,7 @@ fn run_by_hand_it_exits_two_on_errors() {
         let out = Command::new(BIN).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(lossy(&out.stderr).starts_with("rift: "), "{args:?}");
+        assert!(lossy(&out.stderr).contains("path alone"), "{args:?}");
     }
     let dir = tempfile::tempdir().unwrap();
     let out = Command::new(BIN)
@@ -460,4 +461,23 @@ fn a_reader_that_quits_early_does_not_make_the_external_diff_die() {
     let (status, stderr) = diff_into_head(&repo);
     assert_eq!(stderr, "");
     assert_eq!(status, "0");
+}
+
+#[test]
+fn an_unmerged_path_prints_git_s_line_and_exits_zero() {
+    need_git!();
+    let repo = Repo::new("");
+    repo.write("f.txt", "a\nb\n");
+    repo.commit("base");
+    repo.git(&["checkout", "-q", "-b", "other"]);
+    repo.write("f.txt", "a\nX\n");
+    repo.commit("other");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("f.txt", "a\nY\n");
+    repo.commit("main");
+    repo.git(&["merge", "other"]);
+    let (ext, plain) = both(&repo, &["--cached"]);
+    assert_eq!(ext.status.code(), Some(0), "{}", lossy(&ext.stderr));
+    assert_eq!(lossy(&plain.stdout), "* Unmerged path f.txt\n");
+    assert_eq!(lossy(&ext.stdout), lossy(&plain.stdout));
 }

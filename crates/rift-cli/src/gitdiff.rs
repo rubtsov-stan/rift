@@ -4,7 +4,7 @@
 //! `CMD path old-file old-hex old-mode new-file new-hex new-mode`, plus
 //! `new-path` and a rename header when it found a rename or copy. Any
 //! nonzero exit makes `git diff` stop with status 128, so a diff with
-//! changes exits 0.
+//! changes exits 0. An unmerged path comes as the path alone.
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -49,8 +49,8 @@ impl Call {
     fn parse(args: &[OsString]) -> anyhow::Result<Self> {
         if args.len() != 7 && args.len() != 9 {
             bail!(
-                "git-diff takes the 7 arguments git passes to an external diff, or 9 for a \
-                 rename or copy; got {}",
+                "git-diff takes the 7 arguments git passes to an external diff, 9 for a \
+                 rename or copy, or the path alone for an unmerged path; got {}",
                 args.len()
             );
         }
@@ -156,6 +156,15 @@ fn content(side: &Side, name: &[u8]) -> anyhow::Result<PathBuf> {
 }
 
 fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
+    // Git calls the driver with the path alone for an unmerged entry and
+    // prints this line itself when it has no driver. Exit 0, or git stops.
+    if let [path] = cli.external.as_slice() {
+        let mut out = io::stdout().lock();
+        out.write_all(b"* Unmerged path ").map_err(Error::Write)?;
+        out.write_all(path.as_bytes()).map_err(Error::Write)?;
+        out.write_all(b"\n").map_err(Error::Write)?;
+        return out.flush().map_err(|e| Error::Write(e).into());
+    }
     let call = Call::parse(&cli.external)?;
     let old = content(&call.old, &call.old_path)?;
     let new = content(&call.new, &call.new_path)?;
