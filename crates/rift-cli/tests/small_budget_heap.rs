@@ -9,7 +9,7 @@
 //! with `RAYON_NUM_THREADS` well above the cores, since part of the heap
 //! no budget counts grows with the pool.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -139,6 +139,49 @@ fn key_mode_peaks_under_mem() {
             args.extend(["--stats", "--mem", mem].map(OsStr::new));
             args.extend([p.a.as_os_str(), p.b.as_os_str()]);
             over.extend(check(&args, mem, refused));
+        }
+    }
+    assert!(over.is_empty(), "{over:#?}");
+}
+
+/// At 64K a 1 MiB pair would take over a hundred passes, more than key
+/// mode runs: the refusal names a `--mem`, and a run at that limit
+/// answers. Both stay under their limit, with either pool.
+#[test]
+fn key_mode_refuses_too_many_passes_and_advises_a_mem_that_works() {
+    let mut over = Vec::new();
+    for (opts, rows) in [
+        (&["--key", "csv:id"][..], Rows::Csv),
+        (&["--key", "json:id"], Rows::Ndjson),
+        (&["--key", "copy:id"], Rows::Sql),
+    ] {
+        let p = generated(1 << 20, Profile::Shuffled, rows);
+        let args = |mem: &str| -> Vec<OsString> {
+            let mut args: Vec<OsString> = opts.iter().map(OsString::from).collect();
+            args.extend(["--stats", "--mem", mem].map(OsString::from));
+            args.extend([p.a.clone().into_os_string(), p.b.clone().into_os_string()]);
+            args
+        };
+        let out = Command::new(env!("CARGO_BIN_EXE_rift"))
+            .args(args("64K"))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{opts:?}: {stderr}");
+        assert!(stderr.starts_with("rift: "), "{opts:?}: {stderr}");
+        assert!(refused(&stderr), "{opts:?}: {stderr}");
+        let (_, advised) = stderr
+            .split_once("; rerun with --mem ")
+            .unwrap_or_else(|| panic!("{opts:?}: no advice in {stderr}"));
+        let advised = advised.split_whitespace().next().unwrap().to_owned();
+        assert!(bytes(&advised) > bytes("64K"), "{opts:?}: {advised}");
+        for (mem, allow) in [
+            ("64K", refused as fn(&str) -> bool),
+            (&advised, |_: &str| false),
+        ] {
+            let args = args(mem);
+            let args: Vec<&OsStr> = args.iter().map(OsString::as_os_str).collect();
+            over.extend(check(&args, mem, allow));
         }
     }
     assert!(over.is_empty(), "{over:#?}");

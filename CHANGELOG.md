@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Key mode runs one shard per MiB of the refine half, from 1 to 8, on a
   thread pool of its own with one thread per shard, at most one per core
   or `RAYON_NUM_THREADS`. It uses no more than 8 threads on any machine.
+- Key mode runs at most 64 passes. A `--mem` under which the files
+  would take more, counted from the records read so far, is refused with
+  a budget error instead of rereading both files hundreds of times. The
+  error names a `--mem` at least about twice as large; following it
+  reaches one that works in a few reruns.
 - Key mode keeps 48 KiB of `--mem` out of the budget, without the 12 KiB
   per pool thread: it no longer starts the shared pool, and holds its
   own pool's heap, 16 KiB per shard, in the budget.

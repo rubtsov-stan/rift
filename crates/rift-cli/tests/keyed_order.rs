@@ -257,3 +257,26 @@ fn copy_dumps_answer_or_advise_the_same_way_on_any_thread_count() {
         every_budget_answers_or_advises(&pair, &budgets, &["1", "2", "8", "64"], 20, 3);
     }
 }
+
+/// A run that would take too many passes is refused with the same text,
+/// advice included, on every thread count.
+#[test]
+fn too_many_passes_are_refused_the_same_way_on_any_thread_count() {
+    let pair = shuffled(1 << 20);
+    let run = |threads: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rift"))
+            .args(["--key", "csv:id", "--mem", "64K"])
+            .args([&pair.a, &pair.b])
+            .env("RAYON_NUM_THREADS", threads)
+            .output()
+            .unwrap();
+        (out.status.code(), out.stdout, out.stderr)
+    };
+    let first = run("1");
+    let stderr = String::from_utf8_lossy(&first.2);
+    assert_eq!(first.0, Some(2), "{stderr}");
+    assert!(advised(&stderr).is_some(), "{stderr}");
+    for threads in ["1", "2", "8", "64"] {
+        assert!(run(threads) == first, "{threads} threads");
+    }
+}

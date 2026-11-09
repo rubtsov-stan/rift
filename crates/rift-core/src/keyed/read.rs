@@ -302,6 +302,8 @@ struct Chunk {
     /// File line of its first byte, once it counts.
     line0: u64,
     records: u64,
+    /// Records whose key hash lies above the read's range.
+    above: u64,
     blocks: u64,
     seen: [u32; SUSPECTS],
     stop: Stop,
@@ -319,7 +321,7 @@ impl Chunk {
     )]
     fn parse(&mut self, buf: &[u8], eof: bool, may_name: bool, ctx: &Ctx<'_>) {
         self.recs.clear();
-        (self.lines, self.records, self.blocks) = (0, 0, 0);
+        (self.lines, self.records, self.above, self.blocks) = (0, 0, 0, 0);
         self.seen = [0; SUSPECTS];
         self.fault = None;
         self.stop = Stop::Done;
@@ -392,7 +394,9 @@ impl Chunk {
             let hash = key_hash(&rec[key.clone()], seed);
             let filter = ctx.filter;
             filter.count(ctx.side, table, hash, &rec[key.clone()], &mut self.seen);
-            if hash >= filter.lo && hash < filter.hi {
+            if hash >= filter.hi {
+                self.above += 1;
+            } else if hash >= filter.lo {
                 self.recs.push(Rec {
                     hash,
                     off: at as u32,
@@ -520,6 +524,8 @@ pub struct Reader<'s, S: ?Sized> {
     /// last rewind.
     blocks: u64,
     records: u64,
+    /// Records since the last rewind whose key hash lies above the range.
+    above: u64,
     chunks: Vec<Chunk>,
     /// Chunks of the last round that count.
     valid: usize,
@@ -590,6 +596,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
                 lines: 0,
                 line0: 0,
                 records: 0,
+                above: 0,
                 blocks: 0,
                 seen: [0; SUSPECTS],
                 stop: Stop::Done,
@@ -611,6 +618,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             eof: false,
             blocks: 0,
             records: 0,
+            above: 0,
             chunks: list,
             valid: 0,
             seen: [0; SUSPECTS],
@@ -624,7 +632,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
     pub fn rewind(&mut self) {
         (self.start, self.end, self.pos, self.line) = (0, 0, 0, 0);
         self.eof = false;
-        (self.blocks, self.records, self.valid) = (0, 0, 0);
+        (self.blocks, self.records, self.above, self.valid) = (0, 0, 0, 0);
         self.seen = [0; SUSPECTS];
         self.state.block = Block::Outside;
     }
@@ -679,6 +687,12 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
     #[must_use]
     pub fn records(&self) -> u64 {
         self.records
+    }
+
+    /// Records since the last rewind whose key hash lies at or above the
+    /// top of the range the read keeps.
+    pub(crate) fn above(&self) -> u64 {
+        self.above
     }
 
     /// How often each suspect of this file was seen since the last rewind.
@@ -802,6 +816,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             }
             self.line += c.lines;
             self.records += c.records;
+            self.above += c.above;
             self.blocks += c.blocks;
             for (s, n) in self.seen.iter_mut().zip(c.seen) {
                 *s = s.saturating_add(n);
@@ -1491,6 +1506,31 @@ mod tests {
         }
         assert_eq!(rounds[0], ["100"], "{rounds:?}");
         assert_eq!(rounds.concat(), ["100", "2"]);
+    }
+
+    #[test]
+    fn a_read_counts_the_records_above_its_range() {
+        use std::fmt::Write;
+
+        let mut csv = String::new();
+        for i in 0..2000 {
+            writeln!(csv, "{i},x").unwrap();
+        }
+        let above = (0..2000)
+            .filter(|i: &i32| key_hash(i.to_string().as_bytes(), 0) >= 1 << 61)
+            .count() as u64;
+        let budget = Budget::new(Bytes::mib(1));
+        let spec: KeySpec = "csv:1".parse().unwrap();
+        let tables = Mutex::new(Tables::new(&budget).unwrap());
+        for chunks in [1, 4] {
+            let filter = Filter::new(1 << 60, 1 << 61, &[]);
+            let mut r = Reader::new(csv.as_bytes(), Side::A, &spec, &budget, 256, chunks).unwrap();
+            for _ in 0..2 {
+                r.rewind();
+                while r.advance(&tables, &filter).unwrap() {}
+                assert_eq!(r.above(), above, "{chunks} chunks");
+            }
+        }
     }
 
     #[test]
