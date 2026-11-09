@@ -7,3 +7,13 @@ a terminal view, or compare records by key.
 Rift hashes every line once and cuts the pair into segments at lines that
 occur once in each file. Segments with identical bytes are equal. The
 others are refined on demand.
+.PP
+In the \fB\-\-\-\fR and \fB+++\fR lines a file name is quoted as GNU diff
+3.10 on x86_64 quotes it: a name with a space, a control character,
+\fB"\fR, \fB\e\fR or a byte above 0x7f is wrapped in double quotes, with
+C escapes and octal bytes (\fB"caf\e303\e251"\fR). Other names are printed
+as given. On aarch64 that diff prints bytes above 0x7f raw; Rift does not.
+.PP
+Rift does not look for binary files. A NUL byte is part of a line, and the
+diff prints it in the \fB\-\fR and \fB+\fR lines. There is no
+"Binary files differ" message. \fBpatch\fR still applies the output.

@@ -73,7 +73,7 @@
 <p class="note">Guide: <a href="{{ get_url(path='guide/key-mode/') | safe }}">key mode</a>. Use case: <a href="{{ get_url(path='use-cases/compare-csv-by-key/') | safe }}">compare CSV files by key</a>.</p></section>
 <section><h3 class="cap">Git <span>rift as the diff driver</span></h3>
 <p class="prose-lite">Git calls any file over 512 MiB binary and prints no diff. Name the large files in <code>.gitattributes</code> and git runs <code>rift git-diff</code> for them, with git's own headers. It ships in 0.3.0.</p>
-{{ m::term(name="git-driver", kind="diff", title="git diff on a 640 MiB dump", caption="A scratch repository with the dump committed and then changed. The first 10 lines of the output, cut at 90 columns.") }}
+{{ m::term(name="git-driver", kind="diff", title="git diff on a 640 MiB dump", caption="A scratch repository with the dump committed and then changed. The start of the output, cut at 90 columns.") }}
 <p class="note">Guide: <a href="{{ get_url(path='guide/git/') | safe }}">git integration</a>. Use case: <a href="{{ get_url(path='use-cases/git-binary-files-differ/') | safe }}">git says &quot;Binary files differ&quot;</a>.</p></section>
 <section><h3 class="cap">MCP <span>a diff an MCP client can query</span></h3>
 <p class="prose-lite"><code>rift-mcp</code> lets an MCP client, such as an editor or a chat app, ask about the diff of two huge files without loading them. It has three tools, <code>summary</code>, <code>hunks_at</code> and <code>next_difference</code>, and every answer has a size limit.</p>

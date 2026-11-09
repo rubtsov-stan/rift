@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documented that Rift does not detect binary files: NUL bytes are
+  printed in the diff and there is no `Binary files differ` message.
 - Key mode's output order depends on the files and `--mem` only. The
   same pair under the same limit prints the same bytes on every run, on
   any machine and any number of threads. The order at a given `--mem`
@@ -50,6 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the total now gets `too_large`. The server refuses to start when its
   limits leave a session less than 11 MiB, the least that runs even a
   one-line pair.
+- `rift git-diff` prints `* Unmerged path <path>` and exits 0 when git
+  passes the path alone, instead of exiting 2 and stopping `git diff`
+  with status 128.
+- `rift git-diff` quotes paths in `---` and `+++` lines and in
+  `diff --git` headers the way git does (tab, newline, quote, backslash
+  or non-ASCII byte), and a name with a space gets git's trailing tab, so
+  `patch` and `git apply` read the headers.
+- The plain `rift a b` diff names files as GNU diff 3.10 does: a name
+  with a space, control character, `"` or `\` is wrapped in double quotes
+  with C escapes, bytes above 0x7f included as octal (`"caf\303\251"`).
+  This is GNU diff 3.10 on x86_64; on aarch64 that build prints those
+  bytes raw. DEL stays raw. Before it printed every name raw.
+- `rift git-diff` leaves out the `index` line when git gave no hash for a
+  side, so `patch` no longer reads a work tree file as deleted.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
 - Key mode at `--mem 16M` runs on several threads again. The number of

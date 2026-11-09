@@ -18,6 +18,16 @@ a terminal view, or compare records by key.
 Rift hashes every line once and cuts the pair into segments at lines that
 occur once in each file. Segments with identical bytes are equal. The
 others are refined on demand.
+.PP
+In the \fB\-\-\-\fR and \fB+++\fR lines a file name is quoted as GNU diff
+3.10 on x86_64 quotes it: a name with a space, a control character,
+\fB"\fR, \fB\e\fR or a byte above 0x7f is wrapped in double quotes, with
+C escapes and octal bytes (\fB"caf\e303\e251"\fR). Other names are printed
+as given. On aarch64 that diff prints bytes above 0x7f raw; Rift does not.
+.PP
+Rift does not look for binary files. A NUL byte is part of a line, and the
+diff prints it in the \fB\-\fR and \fB+\fR lines. There is no
+"Binary files differ" message. \fBpatch\fR still applies the output.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH OPTIONS
@@ -286,8 +296,18 @@ git config diff.rift.command 'rift git\-diff \-\-mem 1G'
 .RE
 .PP
 The headers match \fBgit diff\fR, except that the hunk headers carry no
-function name, the hash of a work tree file is written as 0000000
-because git does not pass one, and hashes are always 7 characters.
+function name, hashes are always 7 characters, the prefixes are always
+\fBa/\fR and \fBb/\fR (\fBdiff.noprefix\fR and \fBdiff.mnemonicPrefix\fR
+are ignored), and a side whose hash git
+does not pass (a work tree file) leaves out the \fBindex\fR line, since
+\fBpatch\fR reads a null hash as a deleted file. A path with a tab,
+newline, quote, backslash or non\-ASCII byte is quoted as
+\fBcore.quotePath\fR=true does, whatever the setting is (the driver is
+not told, and asking git for each file would cost a process), and a name
+with a space gets git's trailing tab on the \fB\-\-\-\fR and \fB+++\fR lines. For an unmerged
+path, which git passes as the path alone, Rift prints
+\fB* Unmerged path\fR \fIpath\fR and exits 0, as git does. Any single
+argument is taken as such a path.
 .PP
 A file that is a Git LFS pointer on either side is replaced by the object
 in \fB.git/lfs/objects\fR of the common git directory, found with

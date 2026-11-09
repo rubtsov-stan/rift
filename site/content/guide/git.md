@@ -40,8 +40,16 @@ The command exits 0 whether or not the files differ, because git treats any othe
 ## What differs from git's output
 
 - Hunk headers carry no function name.
-- The hash of a work tree file is written as `0000000`, because git does not pass one.
+- A side whose hash git does not pass, a work tree file, leaves out the `index` line. `patch` reads a null hash as a deleted file.
 - Hashes are always 7 characters.
+- Prefixes are always `a/` and `b/`. `diff.noprefix` and `diff.mnemonicPrefix` are ignored.
+- Paths are quoted as `core.quotePath=true` does, whatever the setting is: git does not tell the driver, and asking git for each file would cost a process.
+
+In a header, a path with a tab, newline, quote, backslash or non-ASCII byte is wrapped in double quotes with C escapes and octal bytes, and a name with a space gets git's trailing tab after `---` and `+++` lines.
+
+## Unmerged paths
+
+For an unmerged path, as in `git diff --cached` during a conflict, git passes the path alone. Rift prints `* Unmerged path <path>` and exits 0, as git does without a driver. Any single argument is taken as such a path.
 
 ## LFS pointers
 
