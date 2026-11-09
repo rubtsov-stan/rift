@@ -122,7 +122,8 @@ pub struct GitDiffArgs {
     #[arg(long)]
     pub stats: bool,
     /// `path old-file old-hex old-mode new-file new-hex new-mode`, and for a
-    /// rename or copy `new-path` and the rename header.
+    /// rename or copy `new-path` and the rename header. A single argument
+    /// is an unmerged path: prints `* Unmerged path <path>` and exits 0.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub external: Vec<OsString>,
 }
