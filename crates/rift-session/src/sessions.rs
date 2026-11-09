@@ -13,8 +13,8 @@
 //!   using; a scanning session is never evicted. When that is not enough
 //!   the call fails with [`Error::Busy`].
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use rift_core::diff::{Config, Diff};
@@ -161,6 +161,9 @@ pub struct Session {
     /// only.
     ended: Arc<OnceLock<()>>,
     held: Held,
+    /// The [`Observed`] handles on the session. Each holds an `Arc` that
+    /// eviction does not count as a use. Changed under the set's lock only.
+    observers: AtomicUsize,
 }
 
 impl Session {
@@ -265,6 +268,65 @@ struct Entry {
     used: Instant,
 }
 
+/// How long an `open` that found only observed sessions to evict waits for
+/// an observer to let go. An observer reads one session for one tick of
+/// notifications, microseconds of work.
+const OBSERVER_WAIT: Duration = Duration::from_millis(250);
+
+/// Why [`Sessions::make_room`] found no room.
+enum Full {
+    /// Every session that could be evicted is in use by a call.
+    Busy,
+    /// The sessions that could be evicted are held only by observers; room
+    /// appears when one lets go.
+    Observed,
+}
+
+/// Whether every holder of the session besides the table is an observer.
+/// Read under the set's lock, which also guards every change to the
+/// observer count and every new `Arc` of a live session.
+fn only_observed(e: &Entry) -> bool {
+    Arc::strong_count(&e.session) - e.session.observers.load(Ordering::Relaxed) == 1
+}
+
+/// A live session seen by [`Sessions::observe`].
+#[derive(Debug)]
+pub struct Observed<'s> {
+    sessions: &'s Sessions,
+    session: Option<Arc<Session>>,
+}
+
+impl std::ops::Deref for Observed<'_> {
+    type Target = Session;
+
+    fn deref(&self) -> &Session {
+        self.session.as_ref().expect("held until drop")
+    }
+}
+
+impl Drop for Observed<'_> {
+    fn drop(&mut self) {
+        let mut session = self.session.take();
+        if let Some(s) = &session {
+            // Uncounted and, while the table still holds the session,
+            // released under the same lock: between the two the entry would
+            // show one more holder than observers, which eviction takes for
+            // a call in use. The table's own `Arc` keeps this one from being
+            // the last, so no worker is joined under the lock.
+            let state = self.sessions.lock();
+            s.observers.fetch_sub(1, Ordering::Relaxed);
+            if state.live.iter().any(|e| Arc::ptr_eq(&e.session, s)) {
+                session = None;
+            }
+        }
+        self.sessions.released.notify_all();
+        // A session that left the table is released outside the lock: its
+        // last holder drops the scheduler, which joins the refinement
+        // workers.
+        drop(session);
+    }
+}
+
 #[derive(Debug, Default)]
 struct State {
     live: Vec<Entry>,
@@ -278,6 +340,9 @@ struct State {
 #[derive(Debug)]
 pub struct Sessions {
     state: Mutex<State>,
+    /// Signalled when an [`Observed`] lets go, for an `open` waiting in
+    /// [`Sessions::wait_observers`].
+    released: Condvar,
     /// Budgets of every session that holds memory; see the module docs.
     held: Arc<AtomicU64>,
     limits: Limits,
@@ -300,6 +365,7 @@ impl Sessions {
     pub fn new(limits: Limits) -> Self {
         Self {
             state: Mutex::default(),
+            released: Condvar::new(),
             held: Arc::default(),
             limits,
         }
@@ -338,14 +404,27 @@ impl Sessions {
         Bytes(self.held.load(Ordering::Relaxed))
     }
 
-    /// The live sessions, for a caller that reports on each of them.
+    /// The ids of the live sessions.
     #[must_use]
-    pub fn live(&self) -> Vec<Arc<Session>> {
-        self.lock()
-            .live
-            .iter()
-            .map(|e| Arc::clone(&e.session))
-            .collect()
+    pub fn ids(&self) -> Vec<SessionId> {
+        self.lock().live.iter().map(|e| e.session.id).collect()
+    }
+
+    /// A handle for reporting on session `id`, if it is live. Unlike
+    /// [`session`](Self::session) it does not mark the session as used. An
+    /// `open` that needs a live session's room waits for the handle to be
+    /// dropped, so a handle is held for a short read, never across a wait.
+    /// A session closed while a handle holds it keeps its memory counted
+    /// until the handle is dropped, and an `open` meanwhile answers busy.
+    #[must_use]
+    pub fn observe(&self, id: SessionId) -> Option<Observed<'_>> {
+        let s = self.lock();
+        let e = s.live.iter().find(|e| e.session.id == id)?;
+        e.session.observers.fetch_add(1, Ordering::Relaxed);
+        Some(Observed {
+            sessions: self,
+            session: Some(Arc::clone(&e.session)),
+        })
     }
 
     /// Drops sessions that have been idle for the idle timeout and are not in
@@ -381,6 +460,7 @@ impl Sessions {
     ) -> Result<Arc<Session>, Error> {
         let key = (id_a, id_b);
         let mem = self.check_mem(mem)?;
+        let mut waited = None;
         let (session, _building) = loop {
             let mut s = self.lock();
             if let Some(i) = s.live.iter().position(|e| e.key == key) {
@@ -398,7 +478,14 @@ impl Sessions {
                     continue;
                 }
             }
-            self.make_room(&mut s, mem)?;
+            match self.make_room(&mut s, mem) {
+                Ok(()) => {}
+                Err(Full::Observed) => {
+                    drop(self.wait_observers(s, &mut waited)?);
+                    continue;
+                }
+                Err(Full::Busy) => return Err(Error::Busy),
+            }
             s.building += 1;
             let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
             break (session, Building { sessions: self });
@@ -441,7 +528,8 @@ impl Sessions {
         let (b, id_b) = file(Side::B, b)?;
         let key = (id_a, id_b);
         let mem = self.check_mem(mem)?;
-        let session = {
+        let mut waited = None;
+        let session = loop {
             let mut s = self.lock();
             if let Some(e) = s.live.iter_mut().find(|e| e.key == key)
                 && e.session.state() != SessionState::Failed
@@ -453,14 +541,21 @@ impl Sessions {
                 });
             }
             s.live.retain(|e| e.key != key);
-            self.make_room(&mut s, mem)?;
+            match self.make_room(&mut s, mem) {
+                Ok(()) => {}
+                Err(Full::Observed) => {
+                    drop(self.wait_observers(s, &mut waited)?);
+                    continue;
+                }
+                Err(Full::Busy) => return Err(Error::Busy),
+            }
             let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
             s.live.push(Entry {
                 key,
                 session: Arc::clone(&session),
                 used: Instant::now(),
             });
-            session
+            break session;
         };
         let scan = Arc::clone(&session);
         let spawned = std::thread::Builder::new()
@@ -541,7 +636,10 @@ impl Sessions {
     }
 
     /// Evicts until a session of `mem` fits, as the module docs describe.
-    fn make_room(&self, s: &mut State, mem: Bytes) -> Result<(), Error> {
+    /// A session an [`Observed`] still holds is never evicted: its memory
+    /// would not be freed, and the next victim would be evicted for
+    /// nothing.
+    fn make_room(&self, s: &mut State, mem: Bytes) -> Result<(), Full> {
         let idle = self.limits.idle;
         s.live
             .retain(|e| Arc::strong_count(&e.session) > 1 || e.used.elapsed() < idle);
@@ -556,22 +654,43 @@ impl Sessions {
                 .live
                 .iter()
                 .position(|e| e.session.state() == SessionState::Failed);
+            let ready = |e: &Entry| e.session.state() == SessionState::Ready;
             let lru = || {
                 s.live
                     .iter()
                     .enumerate()
-                    .filter(|(_, e)| {
-                        Arc::strong_count(&e.session) == 1
-                            && e.session.state() == SessionState::Ready
-                    })
+                    .filter(|(_, e)| Arc::strong_count(&e.session) == 1 && ready(e))
                     .min_by_key(|(_, e)| e.used)
                     .map(|(i, _)| i)
             };
             let Some(i) = failed.or_else(lru) else {
-                return Err(Error::Busy);
+                return Err(if s.live.iter().any(|e| ready(e) && only_observed(e)) {
+                    Full::Observed
+                } else {
+                    Full::Busy
+                });
             };
             s.live.swap_remove(i);
         }
+    }
+
+    /// Waits for an observer to let go, for [`OBSERVER_WAIT`] in all
+    /// across the calls that share `waited`.
+    fn wait_observers<'a>(
+        &'a self,
+        s: MutexGuard<'a, State>,
+        waited: &mut Option<Instant>,
+    ) -> Result<MutexGuard<'a, State>, Error> {
+        let end = *waited.get_or_insert_with(|| Instant::now() + OBSERVER_WAIT);
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(Error::Busy);
+        }
+        Ok(self
+            .released
+            .wait_timeout(s, left)
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0)
     }
 
     /// A new session of `mem` for files of `bytes`, counted in the held
@@ -590,6 +709,7 @@ impl Sessions {
                 total: Arc::clone(&self.held),
                 mem: AtomicU64::new(mem.0),
             },
+            observers: AtomicUsize::new(0),
         })
     }
 }
@@ -640,5 +760,109 @@ mod tests {
         assert_eq!(session.wait(), SessionState::Ready);
         drop(session);
         s.open(&a, &c, None).unwrap();
+    }
+
+    /// Files `a` to `d` and a set under `total` with 16 MiB sessions.
+    fn pairs(total: Bytes) -> (tempfile::TempDir, Sessions, [String; 4]) {
+        let dir = tempfile::tempdir().unwrap();
+        let f = |name: &str, text: &[u8]| write(dir.path(), name, text);
+        let files = [
+            f("a", b"one\n"),
+            f("b", b"two\n"),
+            f("c", b"three\n"),
+            f("d", b"four\n"),
+        ];
+        let s = Sessions::new(Limits {
+            sessions: 4,
+            session_mem: Bytes::mib(16),
+            total_mem: total,
+            ..Limits::default()
+        });
+        (dir, s, files)
+    }
+
+    fn ready(s: &Sessions, a: &str, b: &str) -> SessionId {
+        let session = s.open(a, b, Some(Bytes::mib(16))).unwrap().session;
+        session.wait();
+        session.id()
+    }
+
+    #[test]
+    fn an_open_waits_for_the_observer_of_the_session_it_needs_room_from() {
+        let (_dir, s, [a, b, c, _]) = pairs(Bytes::mib(16));
+        let id = ready(&s, &a, &b);
+        let looking = s.observe(id).unwrap();
+        let opened = std::thread::scope(|scope| {
+            let open = scope.spawn(|| s.open(&a, &c, Some(Bytes::mib(16))));
+            drop(looking);
+            open.join().unwrap()
+        });
+        assert!(opened.is_ok(), "{opened:?}");
+        assert!(s.session(id).is_err(), "the old session made room");
+    }
+
+    #[test]
+    fn eviction_skips_a_session_it_cannot_free() {
+        // Two ready sessions, the first the least recently used and
+        // observed: the second is evicted, the observed one stays.
+        let (_dir, s, files) = pairs(Bytes::mib(32));
+        let (first, second) = (
+            ready(&s, &files[0], &files[1]),
+            ready(&s, &files[0], &files[2]),
+        );
+        let looking = s.observe(first).unwrap();
+        let opened = s.open(&files[0], &files[3], Some(Bytes::mib(16)));
+        assert!(opened.is_ok(), "{opened:?}");
+        assert!(s.session(first).is_ok(), "the observed session was evicted");
+        assert!(s.session(second).is_err());
+        drop(looking);
+    }
+
+    #[test]
+    fn a_busy_open_leaves_the_observed_session_alone() {
+        let (_dir, s, [a, b, c, _]) = pairs(Bytes::mib(16));
+        let first = ready(&s, &a, &b);
+        let looking = s.observe(first).unwrap();
+        let opened = s.open(&a, &c, Some(Bytes::mib(16)));
+        assert!(matches!(opened, Err(Error::Busy)), "{opened:?}");
+        assert!(s.session(first).is_ok(), "busy, and the session is gone");
+        drop(looking);
+    }
+
+    /// Observers come and go while opens need their sessions' room. An open
+    /// waits for an observer to let go, so none may answer busy, and none
+    /// may see the entry between the observer's uncount and its release.
+    #[test]
+    fn opens_beside_a_looping_observer_are_never_busy() {
+        use std::sync::atomic::AtomicBool;
+        const OPENS: usize = 2000;
+        let (_dir, s, files) = pairs(Bytes::mib(16));
+        let [a, b, c] = [&files[0], &files[1], &files[2]];
+        ready(&s, a, b);
+        let stop = AtomicBool::new(false);
+        let busy = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    for id in s.ids() {
+                        drop(s.observe(id));
+                    }
+                }
+            });
+            let mut busy = 0;
+            for i in 0..OPENS {
+                let other = if i % 2 == 0 { c } else { b };
+                match s.open(a, other, Some(Bytes::mib(16))) {
+                    Ok(opened) => {
+                        opened.session.wait();
+                    }
+                    Err(Error::Busy) => busy += 1,
+                    Err(err) => panic!("{err}"),
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+            busy
+        });
+        eprintln!("{busy} of {OPENS} opens were busy");
+        assert_eq!(busy, 0);
     }
 }

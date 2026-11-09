@@ -62,5 +62,5 @@ pub use session::{
 };
 pub use sessions::{
     DEFAULT_MEM, IDLE_TIMEOUT, Limits, MAX_RESPONSE_POOL, MAX_SESSION_MEM, MAX_SESSIONS,
-    MAX_TOTAL_MEM, Opened, RESPONSE_SHARE, Session, SessionId, SessionState, Sessions,
+    MAX_TOTAL_MEM, Observed, Opened, RESPONSE_SHARE, Session, SessionId, SessionState, Sessions,
 };
