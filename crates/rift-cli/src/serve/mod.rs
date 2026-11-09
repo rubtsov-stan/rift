@@ -57,6 +57,12 @@ const QUEUE: usize = 16;
 /// input and output buffers, and 48 KiB for the notifier's list: two pages
 /// of segments, an index and a status name each.
 const PROTOCOL_RESERVE: Bytes = Bytes::mib(8);
+/// The least budget a session can run on. An open of a one-line pair fails
+/// in the Refine half below 11072 KiB (10.81 MiB, measured at 1, 2 and 4
+/// threads; 11008 KiB fails), and the offer it makes then is above any
+/// limit under this; a server whose sessions get less would only ever
+/// refuse.
+const MIN_SESSION_MEM: Bytes = Bytes::mib(11);
 /// The input and output buffers.
 const IO_BUF: usize = 64 << 10;
 
@@ -280,10 +286,18 @@ fn write_all(rx: &Receiver<Box<dyn Body>>) -> io::Result<()> {
 
 fn run(cli: &ServeArgs) -> anyhow::Result<()> {
     let sessions_mem = Bytes(cli.max_total_mem.0.saturating_sub(PROTOCOL_RESERVE.0));
+    // A session cannot hold more than the sessions total: advertise and
+    // enforce the smaller figure, so a budget the total can never grant is
+    // `too_large` rather than `busy` forever.
+    let per_session = cli.max_session_mem.min(sessions_mem);
     anyhow::ensure!(
-        sessions_mem.0 > 0,
-        "--max-total-mem must be above the {} the protocol keeps",
-        PROTOCOL_RESERVE.to_mem_arg()
+        per_session >= MIN_SESSION_MEM,
+        "a session needs at least {}; --max-session-mem {} and --max-total-mem {} (less the {} the protocol keeps) leave {}",
+        MIN_SESSION_MEM.to_mem_arg(),
+        cli.max_session_mem.to_mem_arg(),
+        cli.max_total_mem.to_mem_arg(),
+        PROTOCOL_RESERVE.to_mem_arg(),
+        per_session.to_mem_arg()
     );
     let (tx, rx) = sync_channel(QUEUE);
     let writer = std::thread::Builder::new()
@@ -292,12 +306,12 @@ fn run(cli: &ServeArgs) -> anyhow::Result<()> {
     let server = Arc::new(Server {
         sessions: Sessions::new(Limits {
             sessions: MAX_SESSIONS,
-            session_mem: cli.max_session_mem,
+            session_mem: per_session,
             total_mem: sessions_mem,
             idle: Duration::MAX,
         }),
-        max_session_mem: cli.max_session_mem,
-        default_mem: DEFAULT_MEM.min(cli.max_session_mem),
+        max_session_mem: per_session,
+        default_mem: DEFAULT_MEM.min(per_session),
         out: tx,
         flights: Mutex::default(),
         room: Condvar::new(),

@@ -108,6 +108,10 @@ these numbers; it does not assume them.
 
 `max_total_mem` is what sessions may use in total: the flag less the
 8 MiB the server keeps for its own buffers, which lie outside it.
+`max_session_mem` and `default_mem` never exceed it: a smaller
+`--max-total-mem` lowers both, and a `mem` above `max_session_mem` is
+`too_large`. `rift serve` refuses to start when a session would get less than
+11 MiB, the least that runs even a one-line pair.
 
 `SIZE` is written as for `--mem`. The other numbers are fixed:
 `max_sessions` 4, `default_mem` 256 MiB (as `--mem`, at most

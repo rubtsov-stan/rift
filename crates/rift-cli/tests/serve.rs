@@ -162,6 +162,50 @@ fn the_defaults_are_one_and_two_gibibytes() {
 }
 
 #[test]
+fn a_server_whose_sessions_cannot_run_refuses_to_start() {
+    // One session needs 11072K for the smallest pair: below the 11M floor
+    // every open would fail with an offer above the limit.
+    for args in [
+        ["--max-total-mem", "9M"],
+        ["--max-total-mem", "18M"],
+        ["--max-session-mem", "4M"],
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_rift"))
+            .arg("serve")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(stderr.contains("at least 11264K"), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn limits_never_exceed_what_the_sessions_can_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "a", b"one\n");
+    let b = write(dir.path(), "b", b"two\n");
+    // 100M less the 8M the protocol keeps leaves 92M for sessions.
+    let mut c = Client::start(&["--max-total-mem", "100M"]);
+    let limits = c.initialize()["limits"].clone();
+    let total = limits["max_total_mem"].as_u64().unwrap();
+    assert!(
+        limits["max_session_mem"].as_u64().unwrap() <= total,
+        "{limits}"
+    );
+    assert!(limits["default_mem"].as_u64().unwrap() <= total, "{limits}");
+    // An open without `mem` gets the advertised default.
+    let opened = c.ok("open", json!({"a": a, "b": b}));
+    assert_eq!(opened["mem_bytes"], limits["default_mem"]);
+    // More than the sessions can ever hold is too_large, not busy.
+    let e = c.err("open", json!({"a": a, "b": b, "mem": "500M"}), TOO_LARGE);
+    assert_eq!(e["data"]["max_mem_bytes"], limits["max_session_mem"]);
+    clean_exit(c);
+}
+
+#[test]
 #[allow(clippy::too_many_lines, reason = "one session, step by step")]
 fn a_scripted_session_on_a_generated_pair() {
     let dir = tempfile::tempdir().unwrap();

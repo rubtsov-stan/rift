@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift serve` under a small `--max-total-mem` no longer advertises a
+  `default_mem` or `max_session_mem` above what its sessions can hold.
+  Every `open` used to answer `busy` forever; one that asks for more than
+  the total now gets `too_large`. The server refuses to start when its
+  limits leave a session less than 11 MiB, the least that runs even a
+  one-line pair.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
 - Key mode at `--mem 16M` runs on several threads again. The number of
