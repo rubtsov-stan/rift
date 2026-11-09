@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use rift_core::Error;
-use rift_core::unified::{DEFAULT_CONTEXT, Label, Options};
+use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, quote_path};
 use rift_diff::GitDiffArgs;
 
 use crate::full::{self, Files};
@@ -84,10 +84,10 @@ impl Call {
     /// `index`.
     fn header(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        out.extend_from_slice(b"diff --git a/");
-        out.extend_from_slice(&self.old_path);
-        out.extend_from_slice(b" b/");
-        out.extend_from_slice(&self.new_path);
+        out.extend_from_slice(b"diff --git ");
+        out.extend_from_slice(&quote_path(&[b"a/", self.old_path.as_slice()].concat()));
+        out.push(b' ');
+        out.extend_from_slice(&quote_path(&[b"b/", self.new_path.as_slice()].concat()));
         out.push(b'\n');
         let (old_mode, new_mode) = (self.old.mode.as_deref(), self.new.mode.as_deref());
         let mut line = |s: String| {
@@ -128,7 +128,15 @@ impl Call {
     }
 
     fn labels(&self) -> (Vec<u8>, Vec<u8>) {
-        let name = |prefix: &[u8], path: &[u8]| [prefix, path].concat();
+        // Git quotes the whole label and puts a tab after a name with a
+        // space; without it `patch` reads the rest of the line as a time.
+        let name = |prefix: &[u8], path: &[u8]| {
+            let mut label = quote_path(&[prefix, path].concat()).into_owned();
+            if label.contains(&b' ') {
+                label.push(b'\t');
+            }
+            label
+        };
         (
             if self.added() {
                 DEV_NULL.into()

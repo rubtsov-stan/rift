@@ -11,7 +11,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Context;
 use rift_core::diff::{Config, Diff};
-use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict};
+use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict, quote_diff_name};
 use rift_core::{ApproxReason, Bytes};
 
 use crate::source::FileSource;
@@ -47,10 +47,18 @@ pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, F
 pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
     let diff = build(files, mem)?;
+    let (old_name, old_time) = label(files.path_a)?;
+    let (new_name, new_time) = label(files.path_b)?;
     let opts = Options {
         context: DEFAULT_CONTEXT,
-        old: label(files.path_a)?,
-        new: label(files.path_b)?,
+        old: Label {
+            name: &old_name,
+            mtime: Some(old_time),
+        },
+        new: Label {
+            name: &new_name,
+            mtime: Some(new_time),
+        },
     };
     let written = diff.write_unified(&opts, io::stdout().lock())?;
     if stats {
@@ -108,9 +116,9 @@ pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
     })
 }
 
-/// The header of a file as `diff -u` prints it: the name as given and the
-/// modification time in the local zone.
-fn label(path: &Path) -> anyhow::Result<Label<'_>> {
+/// The header of a file as `diff -u` prints it: the name, quoted as GNU diff
+/// quotes it, and the modification time in the local zone.
+fn label(path: &Path) -> anyhow::Result<(Vec<u8>, Timestamp)> {
     let modified = std::fs::metadata(path)
         .and_then(|m| m.modified())
         .with_context(|| format!("stat {}", path.display()))?;
@@ -129,14 +137,14 @@ fn label(path: &Path) -> anyhow::Result<Label<'_>> {
             }
         }
     };
-    Ok(Label {
-        name: path.as_os_str().as_bytes(),
-        mtime: Some(Timestamp {
+    Ok((
+        quote_diff_name(path.as_os_str().as_bytes()).into_owned(),
+        Timestamp {
             secs,
             nanos,
             utc_offset: clock::utc_offset(secs),
-        }),
-    })
+        },
+    ))
 }
 
 /// The local zone's offset from UTC. The only other FFI in the binary.

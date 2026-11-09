@@ -316,3 +316,30 @@ fn change_block_prints_deletes_before_inserts_whatever_the_edit_order() {
         "--- a\n+++ b\n@@ -1 +1,2 @@\n-a\n+b\n+c\n\\ No newline at end of file\n"
     );
 }
+
+#[test]
+fn quote_path_follows_gits_rules() {
+    let q = |n: &[u8]| String::from_utf8(quote_path(n).into_owned()).unwrap();
+    assert_eq!(q(b"a b/c.txt"), "a b/c.txt");
+    assert_eq!(q(b"t\tn\nq\"s\\"), r#""t\tn\nq\"s\\""#);
+    assert_eq!(q(b"\x07\x08\x0b\x0c\r\x01\x7f"), r#""\a\b\v\f\r\001\177""#);
+    assert_eq!(q("caf\u{e9}".as_bytes()), r#""caf\303\251""#);
+    assert_eq!(q(b"\xff"), r#""\377""#);
+}
+
+#[test]
+fn quote_diff_name_follows_gnu_diff() {
+    let q = |n: &[u8]| quote_diff_name(n).into_owned();
+    assert_eq!(q(b"plain.txt"), b"plain.txt");
+    // Recorded from GNU diffutils 3.10 on x86_64 (Debian stable under
+    // `podman run --platform linux/amd64`), LC_ALL=C and C.UTF-8 alike.
+    assert_eq!(q("caf\u{e9}".as_bytes()), br#""caf\303\251""#);
+    assert_eq!(q(b"f\xc3"), br#""f\303""#);
+    assert_eq!(q(b"a\x7fb"), b"a\x7fb");
+    assert_eq!(q(b"sp ace"), b"\"sp ace\"");
+    assert_eq!(q(b"q\"s\\"), br#""q\"s\\""#);
+    assert_eq!(q(b"t\tn\nr\r\x01\x1b"), br#""t\tn\nr\r\001\033""#);
+    // DEL stays raw, inside quotes too.
+    assert_eq!(q(b"b\xff\x01\x7f x"), b"\"b\\377\\001\x7f x\"");
+    assert_eq!(q(b"d\x7fe"), b"d\x7fe");
+}
