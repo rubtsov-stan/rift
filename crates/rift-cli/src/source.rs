@@ -1,8 +1,8 @@
 //! [`Source`] backed by a file, read through `pread`.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::Path;
 
 use rift_core::{ByteOffset, Bytes, Source};
@@ -20,13 +20,31 @@ pub struct FileSource {
 impl FileSource {
     /// Opens `path` read-only and asks the kernel for sequential read-ahead.
     ///
+    /// Symbolic links are followed. Anything but a regular file is refused,
+    /// except `/dev/null`, which is an empty file: a pipe or FIFO has no
+    /// length and cannot be read at an offset.
+    ///
     /// # Errors
     ///
-    /// Returns the error from `open` or `metadata`. A failed read-ahead hint
-    /// is ignored: it only affects speed.
+    /// Returns the error from `open` or `metadata`, or `InvalidInput` for a
+    /// file that is not regular. A failed read-ahead hint is ignored: it only
+    /// affects speed.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
-        let file = File::open(path)?;
-        let len = file.metadata()?.len();
+        let path = path.as_ref();
+        // O_NONBLOCK keeps `open` from waiting for a writer on a FIFO. It
+        // changes nothing for a regular file, the only kind kept.
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)?;
+        let meta = file.metadata()?;
+        if !meta.is_file() && path != Path::new("/dev/null") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a regular file; Rift needs random access, so write the input to a file first",
+            ));
+        }
+        let len = meta.len();
         hints::sequential(&file);
         Ok(Self { file, len })
     }
@@ -85,6 +103,13 @@ mod tests {
         assert_eq!(src.read_at(&mut buf, ByteOffset(9)).unwrap(), 8);
         assert_eq!(&buf, b"line two");
         assert_eq!(src.read_at(&mut buf, ByteOffset(18)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_directory_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = FileSource::open(dir.path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]

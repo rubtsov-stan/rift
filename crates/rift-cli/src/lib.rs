@@ -46,10 +46,12 @@ pub struct Args {
     /// same name is given with a path: `./serve`.
     #[command(subcommand)]
     pub command: Option<Command>,
-    /// First file.
+    /// First file. It must be a regular file: Rift reads at offsets, so a
+    /// pipe, FIFO or `<(command)` is refused. `-` is a file name, not
+    /// standard input.
     #[arg(required = true)]
     pub a: Option<PathBuf>,
-    /// Second file.
+    /// Second file, under the same rules as the first.
     #[arg(required = true)]
     pub b: Option<PathBuf>,
     /// Print line counts, the segment map and resource use instead of a
