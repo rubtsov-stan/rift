@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error. Rift now refuses any operand that is not a regular file, with the
   path and a message to write the input to a file first. A directory names
   its path too, and `-` is documented as a file name.
+- `rift serve` no longer hangs when a path is swapped for a FIFO between
+  its check and its `open`. The open does not block, refuses a file that
+  is not regular and never follows a symbolic link.
 - Key mode's line order no longer changes between runs once it uses
   several threads.
 - Key mode at `--mem 16M` runs on several threads again. The number of
