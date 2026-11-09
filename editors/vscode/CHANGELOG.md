@@ -4,6 +4,8 @@
 
 - A carriage return inside a line is shown as ␍ with a hover note. It used to split
   the line in the editor and shift the lines after it.
+- The summary row reads the refine progress from the notifications, so it no
+  longer shows "refining 0/287" while the status bar is at 286/287.
 
 ## [0.3.2] - 2026-11-10
 
