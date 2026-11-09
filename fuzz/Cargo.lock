@@ -1424,7 +1424,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rift-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bumpalo",
  "crossbeam-utils",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "rift-mcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "rift-core",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "rift-session"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "rift-core",
  "thiserror 2.0.21",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "rift-tui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crossterm",
  "ratatui",

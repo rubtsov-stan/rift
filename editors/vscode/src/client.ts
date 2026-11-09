@@ -132,7 +132,7 @@ export class Server {
           if (restarting) this.connect().then(() => this.opts.onRestarted(), () => {});
         },
       );
-      c.request<InitializeResult>('initialize', { protocol: 1, client: { name: 'rift-vscode', version: '0.3.0' } }).then((r) => {
+      c.request<InitializeResult>('initialize', { protocol: 1, client: { name: 'rift-vscode', version: '0.3.1' } }).then((r) => {
         this.limits = r.limits;
         resolve(c);
       }, reject);
