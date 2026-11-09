@@ -18,6 +18,7 @@
 //! once for its lines, so a hunk of any length costs nothing more. Lines
 //! are written straight from the line buffer.
 
+use std::borrow::Cow;
 use std::io::{self, BufWriter, Write};
 use std::marker::PhantomData;
 use std::ops::{Deref, Range};
@@ -42,11 +43,12 @@ pub struct Timestamp {
     pub utc_offset: i32,
 }
 
-/// What goes after `---` or `+++`: `name`, then a tab and the mtime when
+/// What goes after `---` or `+++`: `name` as it is to be printed (see
+/// [`quote_diff_name`] and [`quote_path`]), then a tab and the mtime when
 /// there is one (`diff --label` prints the name alone).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label<'a> {
-    /// File name as given on the command line.
+    /// File name, already quoted.
     pub name: &'a [u8],
     /// Modification time, none for a label without a file.
     pub mtime: Option<Timestamp>,
@@ -408,6 +410,64 @@ fn write_range(out: &mut impl Write, start: LineNo, len: u64) -> io::Result<()> 
     }
 }
 
+/// `name` as git writes a path in a header: wrapped in double quotes, with
+/// C escapes and octal bytes, when it holds a control character, `"`, `\`
+/// or a byte above 0x7f (git's default `core.quotePath`); unchanged
+/// otherwise. A space alone does not quote.
+#[must_use]
+pub fn quote_path(name: &[u8]) -> Cow<'_, [u8]> {
+    let plain = |b: u8| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\';
+    c_quote(name, |b| !plain(b), |b| !plain(b))
+}
+
+/// `name` as GNU diff 3.10 on `x86_64` writes it after `---` and `+++`:
+/// wrapped in double quotes when it holds a space, a control character,
+/// `"`, `\` or a byte above 0x7f; inside the quotes those bytes except the
+/// space are escaped, the high ones as octal, and DEL stays raw. Unquoted
+/// otherwise. The same build on aarch64 prints bytes above 0x7f raw and
+/// does not quote for them; the choice is octal, in either locale.
+#[must_use]
+pub fn quote_diff_name(name: &[u8]) -> Cow<'_, [u8]> {
+    let escaped = |b: u8| !(0x20..0x80).contains(&b) || b == b'"' || b == b'\\';
+    c_quote(name, |b| escaped(b) || b == b' ', escaped)
+}
+
+/// Quotes `name` when `quote_if` holds for a byte, escaping the bytes for
+/// which `escape` holds.
+fn c_quote(
+    name: &[u8],
+    quote_if: impl Fn(u8) -> bool,
+    escape: impl Fn(u8) -> bool,
+) -> Cow<'_, [u8]> {
+    if !name.iter().copied().any(quote_if) {
+        return Cow::Borrowed(name);
+    }
+    let mut out = Vec::with_capacity(name.len() + 2);
+    out.push(b'"');
+    for &b in name {
+        match b {
+            _ if !escape(b) => out.push(b),
+            7 => out.extend_from_slice(b"\\a"),
+            8 => out.extend_from_slice(b"\\b"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            11 => out.extend_from_slice(b"\\v"),
+            12 => out.extend_from_slice(b"\\f"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'"' | b'\\' => out.extend_from_slice(&[b'\\', b]),
+            _ => out.extend_from_slice(&[
+                b'\\',
+                b'0' + (b >> 6),
+                b'0' + (b >> 3 & 7),
+                b'0' + (b & 7),
+            ]),
+        }
+    }
+    out.push(b'"');
+    Cow::Owned(out)
+}
+
+/// The label line as it is given: the caller has quoted the name.
 fn write_label(out: &mut impl Write, prefix: &[u8], label: &Label<'_>) -> io::Result<()> {
     out.write_all(prefix)?;
     out.write_all(label.name)?;

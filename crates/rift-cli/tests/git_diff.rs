@@ -1,9 +1,12 @@
 //! `rift git-diff` as a `diff.<driver>.command` of a real repository: git's
 //! own headers, exit codes, and Git LFS pointers read from the local store.
 
+use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 const BIN: &str = env!("CARGO_BIN_EXE_rift");
 
@@ -69,16 +72,26 @@ impl Repo {
     }
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .current_dir(dir)
-        .args(args)
+/// `git` in `dir`, cut off from the environment of whatever runs the tests:
+/// under `git rebase --exec`, `GIT_DIR` would point at the real repository.
+fn git_in(dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_EXTERNAL_DIFF")
-        .output()
-        .unwrap()
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_EXTERNAL_DIFF",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
+fn run_git(dir: &Path, args: &[&str]) -> Output {
+    git_in(dir).args(args).output().unwrap()
 }
 
 fn lossy(b: &[u8]) -> String {
@@ -480,4 +493,86 @@ fn an_unmerged_path_prints_git_s_line_and_exits_zero() {
     assert_eq!(ext.status.code(), Some(0), "{}", lossy(&ext.stderr));
     assert_eq!(lossy(&plain.stdout), "* Unmerged path f.txt\n");
     assert_eq!(lossy(&ext.stdout), lossy(&plain.stdout));
+}
+
+/// Paths that git quotes, or marks with a trailing tab, in its headers.
+const ODD_NAMES: [&str; 6] = [
+    "sp ace.txt",
+    "tab\there.txt",
+    "new\nline.txt",
+    "q\"uote.txt",
+    "back\\slash.txt",
+    "caf\u{e9}.txt",
+];
+
+#[test]
+fn odd_names_are_quoted_as_git_quotes_them() {
+    need_git!();
+    let repo = Repo::new("");
+    for n in ODD_NAMES {
+        repo.write(n, lines(20, None));
+    }
+    repo.commit("base");
+    for n in ODD_NAMES {
+        repo.write(n, lines(20, Some(10)));
+    }
+    repo.git(&["add", "-A"]);
+    let (ext, plain) = both(&repo, &["--cached"]);
+    assert!(ext.status.success(), "{}", lossy(&ext.stderr));
+    assert_eq!(lossy(&ext.stdout), lossy(&plain.stdout));
+    assert!(lossy(&ext.stdout).contains("--- \"a/tab\\there.txt\"\n"));
+}
+
+#[test]
+fn a_name_that_is_not_utf8_is_quoted_with_octal_escapes() {
+    need_git!();
+    let repo = Repo::new("");
+    let name = OsStr::from_bytes(b"bad\xff\x01name.txt");
+    // Some file systems refuse this name, so git gets it through the index
+    // and its builtin diff, and the driver is run by hand.
+    let blob = |content: &str| {
+        let mut child = git_in(repo.path())
+            .args(["hash-object", "-w", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(content.as_bytes())
+            .unwrap();
+        lossy(&child.wait_with_output().unwrap().stdout)
+            .trim()
+            .to_owned()
+    };
+    let stage = |oid: &str| {
+        let status = git_in(repo.path())
+            .args(["update-index", "--add", "--cacheinfo", "100644", oid])
+            .arg(name)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    let (old, new) = (lines(20, None), lines(20, Some(10)));
+    let (old_oid, new_oid) = (blob(&old), blob(&new));
+    stage(&old_oid);
+    repo.git(&["commit", "-q", "-m", "base"]);
+    stage(&new_oid);
+    let plain = repo.git(&["diff", "--cached", "--no-ext-diff"]);
+    assert!(lossy(&plain.stdout).contains("\\377\\001name.txt\""));
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("x"), &old).unwrap();
+    fs::write(dir.path().join("y"), &new).unwrap();
+    let out = Command::new(BIN)
+        .current_dir(dir.path())
+        .args(["git-diff"])
+        .arg(name)
+        .args(["x", &old_oid, "100644", "y", &new_oid, "100644"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", lossy(&out.stderr));
+    assert_eq!(lossy(&out.stdout), lossy(&plain.stdout));
 }
