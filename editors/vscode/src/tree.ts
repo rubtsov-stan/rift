@@ -176,7 +176,7 @@ export class RiftTree implements vscode.TreeDataProvider<Node> {
       ];
       if (s?.moves === 'found') parts.push(`${num(s.moved_blocks ?? 0)} moved`);
       else if (s?.moves === 'skipped') parts.push('moves not searched');
-      const p = s?.progress;
+      const p = c.progress ?? s?.progress;
       if (p?.phase === 'refine' && p.done < p.total) parts.push(`refining ${num(p.done)}/${num(p.total)}`);
       item.description = parts.join(' · ');
       item.iconPath = new vscode.ThemeIcon('git-compare');

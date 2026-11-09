@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import { Comparison } from '../../comparison';
+import { RiftTree } from '../../tree';
 import { Api } from '../../extension';
 import { api, closeAll, compare, describeMock, labels, ready } from './helpers';
 
@@ -22,5 +24,18 @@ describeMock('tree', () => {
     assert.strictEqual(segs[1], 'A 20–24 ↔ B before 21');
     assert.strictEqual(segs[2], 'A 35–38 ↔ B 31–34 | approx');
     assert.deepStrictEqual(labels(x, moves), ['A 20–24 → B 47–51 | 5 lines']);
+  });
+
+  it('shows the refine progress the notifications reported, not the one in the last summary', () => {
+    const refine = (done: number) => ({ phase: 'refine' as const, done, total: 287 });
+    const tree = new RiftTree();
+    tree.comparison = {
+      a: '/x/a.sql',
+      b: '/x/b.sql',
+      state: 'ready',
+      progress: refine(286),
+      summary: { identical: false, a: { lines: 1, bytes: 1 }, b: { lines: 1, bytes: 1 }, mem_bytes: 1 << 20, progress: refine(0) },
+    } as unknown as Comparison;
+    assert.match(tree.getTreeItem({ kind: 'summary' }).description as string, /refining 286\/287/);
   });
 });
