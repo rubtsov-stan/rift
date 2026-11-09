@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use super::Server;
 use super::methods::refined_status;
-use super::wire::{note, scan_progress, session_error};
+use super::wire::{note, session_error};
 
 /// How often sessions are looked at.
 pub const TICK: Duration = Duration::from_millis(50);
@@ -129,14 +129,21 @@ fn look(
 ) {
     let id = s.id().0;
     if !f.ended {
-        let (done, _) = s.scan_progress();
+        // The state first: a scan that is ready has its final progress, so
+        // reading them the other way round can report a ready session with
+        // a progress short of its total, and never the total.
+        let state = s.state();
+        #[cfg(test)]
+        tests::BETWEEN_READS.with(|h| h.get().map_or((), |hook| hook(s)));
+        let (done, total) = s.scan_progress();
         if f.scan != Some(done.0) {
             f.scan = Some(done.0);
-            let mut params = scan_progress(s);
-            params["session"] = json!(id);
-            out.push(note("progress", params));
+            out.push(note(
+                "progress",
+                json!({"session": id, "phase": "scan", "done": done.0, "total": total.0}),
+            ));
         }
-        match s.state() {
+        match state {
             SessionState::Scanning => return,
             SessionState::Ready => {
                 out.push(note(
@@ -183,10 +190,11 @@ fn look(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::mpsc::sync_channel;
     use std::sync::{Arc, Mutex};
 
-    use rift_session::{Limits, Sessions};
+    use rift_session::{Limits, Session, Sessions};
 
     use super::super::Server;
 
@@ -227,5 +235,59 @@ mod tests {
         drop(rx);
         ticker.join().unwrap();
         assert!(opened.is_ok(), "{opened:?}");
+    }
+
+    thread_local! {
+        /// Runs in `look` between the read of the state and that of the
+        /// progress, on the thread that looks.
+        pub(super) static BETWEEN_READS: Cell<Option<fn(&Session)>> = const { Cell::new(None) };
+    }
+
+    /// A look that reports the end of a scan has reported its progress as
+    /// complete. The scan ends between the two reads, which the hook makes
+    /// happen on every look: read in the other order, the first look sends
+    /// the progress of before the end and then `ready`.
+    #[test]
+    fn the_progress_sent_with_the_end_of_a_scan_is_complete() {
+        use std::fmt::Write;
+
+        use super::{Notes, look};
+        fn wait_for_the_end(s: &Session) {
+            s.wait();
+        }
+        BETWEEN_READS.with(|h| h.set(Some(wait_for_the_end)));
+        let dir = tempfile::tempdir().unwrap();
+        let mut text = String::new();
+        for i in 0..20_000 {
+            writeln!(text, "line {i}").unwrap();
+        }
+        let path = |name: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, &text).unwrap();
+            p.to_str().unwrap().to_owned()
+        };
+        let (a, b) = (path("a"), path("b"));
+        let sessions = Sessions::new(Limits::default());
+        let session = sessions.open(&a, &b, None).unwrap().session;
+        let (mut notes, mut last) = (Notes::default(), None);
+        for _ in 0..3 {
+            let (mut out, mut ready) = (Vec::new(), Vec::new());
+            look(notes.get(session.id()), &session, &mut out, &mut ready);
+            for n in &out {
+                match n["method"].as_str().unwrap() {
+                    "progress" if n["params"]["phase"] == "scan" => {
+                        last = Some(n["params"].clone());
+                    }
+                    "session_state" => {
+                        let p = last.as_ref().expect("a progress before the end");
+                        assert_eq!(p["done"], p["total"], "ready after {p}");
+                        BETWEEN_READS.with(|h| h.set(None));
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        panic!("the scan never ended");
     }
 }
