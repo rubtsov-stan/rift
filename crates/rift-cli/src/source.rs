@@ -3,7 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rift_core::{ByteOffset, Bytes, Source};
 
@@ -15,6 +15,7 @@ use rift_core::{ByteOffset, Bytes, Source};
 pub struct FileSource {
     file: File,
     len: u64,
+    path: PathBuf,
 }
 
 impl FileSource {
@@ -46,7 +47,8 @@ impl FileSource {
         }
         let len = meta.len();
         // Linux /proc files are regular with a length of 0 yet hold bytes;
-        // read as empty, they would make a wrong diff.
+        // read as empty, they would make a wrong diff. The probe can take a
+        // byte from a file whose reads consume data, such as /proc/kmsg.
         if len == 0 && file.read_at(&mut [0u8; 1], 0)? > 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -54,7 +56,11 @@ impl FileSource {
             ));
         }
         hints::sequential(&file);
-        Ok(Self { file, len })
+        Ok(Self {
+            file,
+            len,
+            path: path.to_owned(),
+        })
     }
 }
 
@@ -68,18 +74,22 @@ impl Source for FileSource {
         let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
         let got = self.file.read_at(&mut buf[..n], offset.0)?;
         if got == 0 && n > 0 {
-            return Err(shrank());
+            return Err(ended_early(&self.path));
         }
         Ok(got)
     }
 }
 
 /// Nothing came back before the length taken at open: the file was cut
-/// while Rift read it, and taking that as the end would make a wrong diff.
-fn shrank() -> io::Error {
+/// while Rift read it, or holds less than it reports. Taking that as the end
+/// would make a wrong diff.
+fn ended_early(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::UnexpectedEof,
-        "the file shrank while Rift was reading it",
+        format!(
+            "{} ended before the length it had at open: it was cut while Rift read it, or holds less than it reports",
+            path.display()
+        ),
     )
 }
 
@@ -149,6 +159,10 @@ mod tests {
         let mut buf = [0u8; 16];
         let err = src.read_at(&mut buf, ByteOffset(4)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(
+            err.to_string().contains(&*tmp.path().display().to_string()),
+            "{err}"
+        );
     }
 
     #[cfg(target_os = "linux")]

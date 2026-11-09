@@ -14,6 +14,7 @@ use rift_core::{ByteOffset, Bytes, Source};
 pub struct FileSource {
     file: File,
     len: u64,
+    path: String,
 }
 
 /// What identifies a file's contents for the session cache: a changed file
@@ -114,7 +115,8 @@ fn open_regular(p: &Path) -> Result<(File, Metadata), Reason> {
     if !meta.is_file() {
         return Err(Reason::NotRegular);
     }
-    // Linux /proc files are regular with a length of 0 yet hold bytes.
+    // Linux /proc files are regular with a length of 0 yet hold bytes. The
+    // probe can take a byte from a file whose reads consume data.
     if meta.len() == 0 && file.read_at(&mut [0u8; 1], 0).map_err(Reason::Io)? > 0 {
         return Err(Reason::NotRegular);
     }
@@ -157,6 +159,7 @@ impl FileSource {
             Self {
                 file,
                 len: after.len(),
+                path: path.to_owned(),
             },
             id,
         ))
@@ -173,11 +176,14 @@ impl Source for FileSource {
         let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
         let got = self.file.read_at(&mut buf[..n], offset.0)?;
         if got == 0 && n > 0 {
-            // Cut while being read: taking this as the end would make a
-            // wrong diff.
+            // Cut while being read, or holding less than it reports: taking
+            // this as the end would make a wrong diff.
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "the file shrank while Rift was reading it",
+                format!(
+                    "{} ended before the length it had at open: it was cut while Rift read it, or holds less than it reports",
+                    self.path
+                ),
             ));
         }
         Ok(got)
@@ -229,6 +235,10 @@ mod tests {
         let mut buf = [0u8; 16];
         let err = src.read_at(&mut buf, ByteOffset(4)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(
+            err.to_string().contains(tmp.path().to_str().unwrap()),
+            "{err}"
+        );
     }
 
     #[cfg(target_os = "linux")]
