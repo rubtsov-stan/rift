@@ -6,6 +6,8 @@
   the line in the editor and shift the lines after it.
 - The summary row reads the refine progress from the notifications, so it no
   longer shows "refining 0/287" while the status bar is at 286/287.
+- A `rift:` document address now carries a per-window token, and one that is not
+  loaded shows a note instead of another difference's lines or an empty editor.
 
 ## [0.3.2] - 2026-11-10
 
