@@ -80,11 +80,11 @@ The same on NDJSON, by the `id` field. The key prints as the file has it, quotes
 
 Key mode writes no temporary files. When the keys do not fit `--mem`, Rift splits them by hash and reads both files once per part, so a smaller budget means more passes over the files. Each pass prints its changes sorted by line. `--stats` reports the number of passes.
 
-Key mode prints the same set of lines at any `--mem`. Their order depends on `--mem`, since the passes split the keys by budget, and on nothing else: the same files under the same limit print the same bytes on every run, on any machine and any number of threads. Sort the output before you compare runs with different limits. Before 0.3.2 the order could also change between runs and with the thread count.
+Key mode prints the same set of lines at any `--mem`. Their order depends on `--mem`, since the passes split the keys by budget. From 0.3.3 it depends on nothing else: the same files under the same limit print the same bytes on every run, on any machine and any number of threads. Up to 0.3.2 it can also change between runs once key mode uses several threads (see Known issues). Sort the output before you compare runs with different limits.
 
 `--show-records` takes 64 KiB of the budget for its read buffer, plus 24 bytes for each record that waits for its match or has changed, until the end of its pass. Under a tight `--mem` that can add passes.
 
 ## Known issues
 
-- With several threads, from about `--mem 16M`, the order of the lines can differ between two runs of the same command. The set of lines is always the same. The next release fixes this. Until then, sort the output before you compare runs.
-- Rift 0.3.1 runs key mode on one thread at exactly `--mem 16M`: the process reserve takes the refine half just under the 8 MiB that several threads need. On a 128 MiB CSV pair that took 2.21 s where 0.3.0 took 1.25 s. `--mem 16528K` or more restores the old time. The measurement is from the 0.3.1 changelog.
+- Up to 0.3.2, with several threads, from about `--mem 16M`, the order of the lines can differ between two runs of the same command. The set of lines is always the same. 0.3.3 fixes this. Until then, sort the output before you compare runs.
+- Rift 0.3.1 and 0.3.2 run key mode on one thread at exactly `--mem 16M`: the process reserve takes the refine half just under the 8 MiB that several threads need. On a 128 MiB CSV pair that took 2.21 s where 0.3.0 took 1.25 s. `--mem 16528K` or more restores the old time. The measurement is from the 0.3.1 changelog.

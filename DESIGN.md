@@ -563,7 +563,7 @@ Each pass prints its changes sorted by line, so the output holds the
 same set of lines at any budget, in an order that depends on how the
 passes split the keys, and so on the input and `--mem` alone: the same
 files under the same `--mem` print the same bytes on every run, on any
-machine and any number of threads. Until 0.3.2 the shard count followed
+machine and any number of threads. Up to 0.3.2 the shard count followed
 the thread count and the shards grew from the shared half at the same
 time, so the order could differ between machines and between runs.
 
