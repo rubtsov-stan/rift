@@ -8,6 +8,6 @@ paths:
   #   notes on dist's own run scripts: five of them as of dist 0.34.0.
   .github/workflows/release.yml:
     ignore:
-      - 'reusable workflow call "\$/\.github/workflows/[a-z]+\.yml" at "uses" is not following the format'
+      - 'reusable workflow call "\$/\.github/workflows/[a-z-]+\.yml" at "uses" is not following the format'
       - 'shellcheck reported issue in this script: SC2086:info:'
       - 'shellcheck reported issue in this script: SC2129:style:'
