@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Key mode's line order no longer changes between runs once it uses
+  several threads.
+- Key mode at `--mem 16M` runs on several threads again. The number of
+  threads now grows with `--mem` instead of jumping from one at a refine
+  half of 8 MiB. On the 128 MiB shuffled CSV pair it takes 1.09 s instead
+  of 2.21 s in 0.3.1.
+
+## [0.3.2] - 2026-11-10
+
+### Fixed
+
 - Earlier versions read FIFOs and process substitution (for example
   `rift <(cmd) file`) as empty files and printed a wrong diff with no
   error. Rift now refuses any operand that is not a regular file, with the
@@ -39,18 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rift serve` no longer hangs when a path is swapped for a FIFO between
   its check and its `open`. The open does not block, refuses a file that
   is not regular and never follows a symbolic link.
+- `rift git-diff` no longer blocks on a FIFO operand while it looks for a
+  Git LFS pointer.
 - A source that returns short reads could make the line reader return the
   tail of a long line as a whole line instead of refusing it as too long.
   The reader now keeps the line's start across short reads.
-- A file that grows while Rift reads it no longer yields bytes past the
-  length taken at open, which could mix two versions of the file in one
-  diff. Reads stop at that length.
-- Key mode's line order no longer changes between runs once it uses
-  several threads.
-- Key mode at `--mem 16M` runs on several threads again. The number of
-  threads now grows with `--mem` instead of jumping from one at a refine
-  half of 8 MiB. On the 128 MiB shuffled CSV pair it takes 1.09 s instead
-  of 2.21 s in 0.3.1.
+
+### Known issues
+
+- The two known issues of 0.3.1 remain in this release: key mode's line
+  order can differ between runs once it uses several threads, and key mode
+  at exactly `--mem 16M` runs on one thread. Both are fixed on `main` for
+  the next release.
 
 ## [0.3.1] - 2026-11-09
 
@@ -261,7 +272,8 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/rubtsov-stan/rift/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/rubtsov-stan/rift/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rubtsov-stan/rift/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rubtsov-stan/rift/compare/v0.1.0...v0.2.0
