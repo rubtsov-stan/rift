@@ -149,6 +149,9 @@ The message goes to standard error.
 When standard output closes before Rift finishes, as in
 \fBrift a b | head\fR, Rift stops without a message and exits 141, the
 status a shell reports for \fBdiff\fR(1) killed by SIGPIPE.
+A standard output closed before Rift starts (\fB>&\-\fR) is reopened on
+\fI/dev/null\fR by the Rust runtime, so Rift writes there and exits 0 or 1
+as usual.
 .SH MEMORY
 The heap stays at or under \fB\-\-mem\fR. Rift keeps 48 KiB of it, plus
 12 KiB per thread of its thread pool (one per core, or

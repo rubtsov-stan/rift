@@ -33,6 +33,8 @@ status=$?
 
 If standard output closes before Rift finishes, as in `rift a b | head`, Rift stops without a message and exits 141. That is the status a shell reports for `diff` killed by SIGPIPE, so `${PIPESTATUS[0]}` in bash holds 141 for both. This applies to the unified diff, `--summary` and `--key` output.
 
+A standard output that is closed before Rift starts, as in `rift a b >&-`, is not detected. The Rust runtime reopens it on `/dev/null` before Rift runs, so Rift writes there and exits 0 or 1 as usual. It cannot tell this apart from a read-write `/dev/null` that a launcher such as Python's `subprocess.DEVNULL` hands it on purpose.
+
 ## Key mode can stop late
 
 A run in [key mode](@/guide/key-mode.md) can stop with status 2 after it printed some changes, for example when a key occurs twice. The message on standard error says the output is incomplete. Check the status before you use the output.
