@@ -1,0 +1,28 @@
+name: Site refresh
+
+# Called by the Release workflow once the release exists (a dist post-announce
+# job). The release is created with the workflow token, which starts no other
+# workflow by its event, so the Site workflow would show the new version only
+# at its next nightly run. A dispatch from the workflow token does start it.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: Passed by the Release workflow, not read here
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    # Only to start the Site workflow on main; it runs no repository code.
+    permissions:
+      actions: write
+    steps:
+      - name: Rebuild the site from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run site.yml --ref main --repo "$GITHUB_REPOSITORY"

@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+  # A release published by hand. One that the Release workflow creates with
+  # the workflow token fires no event here; site-refresh.yml covers it.
+  release:
+    types: [published]
 
 permissions:
   contents: read
