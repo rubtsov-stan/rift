@@ -205,49 +205,53 @@ where
                     // A narrower range cannot help a record that its
                     // shard's share does not hold.
                     solo = true;
-                } else if w <= 1 {
-                    return Err(Error::Budget(BudgetExceeded {
-                        half,
-                        requested: Bytes(1),
-                        available: budget.available(half),
-                    }));
                 } else {
-                    width = narrowed(half, w, progress, fill(&shards), &mut ceiling);
-                    // Keys still to come, at least: those of the range the
-                    // tables met, and the larger of the two files' counts
-                    // of records read so far above the range.
-                    let held: usize = shards.iter().map(|s| s.used).sum();
-                    let keys = held as u64 + ra.above().max(rb.above());
-                    within(
-                        &shards,
-                        budget,
-                        (report.passes, limit),
-                        keys,
-                        END - lo,
-                        ceiling,
-                    )?;
+                    let refused = if w <= 1 {
+                        Err(Error::Budget(BudgetExceeded {
+                            half,
+                            requested: Bytes(1),
+                            available: budget.available(half),
+                        }))
+                    } else {
+                        width = narrowed(half, w, progress, fill(&shards), &mut ceiling);
+                        // Keys still to come, at least: those of the range
+                        // the tables met, and the larger of the two files'
+                        // counts of records read so far above the range.
+                        let held: usize = shards.iter().map(|s| s.used).sum();
+                        let keys = held as u64 + ra.above().max(rb.above());
+                        within(
+                            &shards,
+                            budget,
+                            (report.passes, limit),
+                            keys,
+                            END - lo,
+                            ceiling,
+                        )
+                    };
+                    if let Err(e) = refused {
+                        let mut readers = (&mut ra, &mut rb, &tables);
+                        let dups = settle(
+                            &mut shards,
+                            &mut pending,
+                            &mut readers,
+                            workers.as_ref(),
+                            solo,
+                        );
+                        return Err(or_duplicates(e, dups));
+                    }
                 }
             }
             Outcome::Stop => {
                 let lost = shards.iter().map(|s| u64::from(s.lost)).find(|&b| b > 0);
-                let mut dups = collect_dups(&mut shards, Vec::new());
-                if dups.is_empty() {
-                    // Too many suspects: settle the first of them now, in
-                    // room the records no longer need.
-                    for s in &mut shards {
-                        s.release();
-                    }
-                    pending.replace(&mut shards)?;
-                    for s in &mut shards {
-                        s.release();
-                    }
-                    let mut readers = (&mut ra, &mut rb, &tables);
-                    on(workers.as_ref(), || {
-                        read_pass(&mut readers, &mut shards, END, END, &pending.list, solo)
-                    })
-                    .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
-                    dups = pending.duplicates(&ra, &rb);
-                }
+                let mut readers = (&mut ra, &mut rb, &tables);
+                let dups = settle(
+                    &mut shards,
+                    &mut pending,
+                    &mut readers,
+                    workers.as_ref(),
+                    solo,
+                )
+                .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
                 if let (true, Some(bytes)) = (dups.is_empty(), lost) {
                     // A duplicate went unlisted and no other turned up:
                     // refuse, and the advice gives the list room.
@@ -300,14 +304,24 @@ where
                 // Both files were read whole: their records above the
                 // range are the keys still to come, counted in each.
                 let keys = ra.above().max(rb.above());
-                within(
+                if let Err(e) = within(
                     &shards,
                     budget,
                     (report.passes, limit),
                     keys,
                     END - hi,
                     ceiling,
-                )?;
+                ) {
+                    let mut readers = (&mut ra, &mut rb, &tables);
+                    let dups = settle(
+                        &mut shards,
+                        &mut pending,
+                        &mut readers,
+                        workers.as_ref(),
+                        solo,
+                    );
+                    return Err(or_duplicates(e, dups));
+                }
                 // A range cut short by waiting records may leave the
                 // tables half empty; widen the next pass toward 90%.
                 let grown = scale(hi - lo, (0.9 / fill(&shards).max(f64::EPSILON)).min(2.0));
@@ -706,14 +720,17 @@ where
                 return Err(e);
             }
         }
-        if let Some(half) = shards.iter().find_map(|s| s.overflow) {
-            let alone = shards.iter().any(|s| s.alone);
-            return Ok(Outcome::Overflow(half, progress, alone));
-        }
         let dups: usize = shards.iter().map(|s| s.dups.len()).sum();
         let suspects: usize = shards.iter().map(|s| s.suspects.len()).sum();
-        if dups >= FEW || suspects >= SUSPECTS {
+        let overflow = shards.iter().find_map(|s| s.overflow);
+        // A duplicate found waiting is certain: report it rather than
+        // start the pass over.
+        if dups >= FEW || suspects >= SUSPECTS || (overflow.is_some() && dups > 0) {
             return Ok(Outcome::Stop);
+        }
+        if let Some(half) = overflow {
+            let alone = shards.iter().any(|s| s.alone);
+            return Ok(Outcome::Overflow(half, progress, alone));
         }
     }
 }
@@ -725,6 +742,51 @@ fn both(a: Result<bool>, b: Result<bool>) -> Result<(bool, bool)> {
     match (a, b) {
         (Ok(a), Ok(b)) => Ok((a, b)),
         (Err(Error::Budget(_)) | Ok(_), Err(e)) | (Err(e), _) => Err(e),
+    }
+}
+
+/// The duplicate keys a read that ended early can still name: those the
+/// shards found waiting, else those among the suspects of this read, or
+/// of the last one if this read has none, counted by one more read in
+/// room the records no longer need.
+fn settle<A, B, X: Extra>(
+    shards: &mut [Pass<'_, X>],
+    pending: &mut Pending,
+    readers: &mut Readers<'_, '_, A, B>,
+    workers: Option<&rayon::ThreadPool>,
+    solo: bool,
+) -> Result<Vec<Vec<u8>>>
+where
+    A: Source + ?Sized,
+    B: Source + ?Sized,
+{
+    let dups = collect_dups(shards, Vec::new());
+    if !dups.is_empty() {
+        return Ok(dups);
+    }
+    for s in shards.iter_mut() {
+        s.release();
+    }
+    if shards.iter().any(|s| !s.suspects.is_empty()) {
+        pending.replace(shards)?;
+        for s in shards.iter_mut() {
+            s.release();
+        }
+    }
+    if pending.list.is_empty() {
+        return Ok(dups);
+    }
+    let list = &pending.list;
+    on(workers, || read_pass(readers, shards, END, END, list, solo))?;
+    Ok(pending.duplicates(readers.0, readers.1))
+}
+
+/// A data error before a budget refusal: duplicate keys, if `dups` names
+/// any, else `refusal`.
+fn or_duplicates(refusal: Error, dups: Result<Vec<Vec<u8>>>) -> Error {
+    match dups {
+        Ok(dups) if !dups.is_empty() => KeyError::Duplicate(dups).into(),
+        _ => refusal,
     }
 }
 
@@ -2044,6 +2106,48 @@ mod tests {
         COLLIDES.with(|c| c.set(|_| false));
     }
 
+    /// A `key,value` pair where every key in the top half of the hash
+    /// range comes a second time in A, with other bytes, after all the
+    /// rest.
+    fn duplicated_top_half() -> (Vec<u8>, Vec<u8>) {
+        let (a, b) = pair(60_000, 7);
+        let mut ca = csv(&a);
+        for &(k, v) in &a {
+            if key_hash(k.to_string().as_bytes(), 0) >= END / 2 {
+                ca.extend_from_slice(format!("{k},{}\n", v + 1).as_bytes());
+            }
+        }
+        (ca, csv(&b))
+    }
+
+    /// A budget at which the shrunken ceiling used to refuse after a pass
+    /// had met the late copies.
+    const BUDGETS_WITH_DUPS: [u64; 1] = [128 << 10];
+
+    /// Budgets as the command line gives them for `--mem` in KiB.
+    fn cli_kib(kib: u64) -> u64 {
+        (kib - 48) << 10
+    }
+
+    /// Reruns [`following_the_advice_reaches_the_duplicate_keys`] allows.
+    const STEPS: u32 = 4;
+
+    /// The late copies wait as suspects and crowd the refine half. Once a
+    /// pass has met them, the run reports the duplicates, not a budget
+    /// refusal.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn duplicates_win_over_a_budget_refusal() {
+        let (ca, cb) = duplicated_top_half();
+        for mem in BUDGETS_WITH_DUPS {
+            let err = limited(&ca, &cb, "csv:1", mem, MAX_PASSES).unwrap_err();
+            assert!(
+                matches!(err, Error::Keyed(KeyError::Duplicate(_))),
+                "{mem}: {err}"
+            );
+        }
+    }
+
     /// With no room to list a duplicate, the run must end in an error,
     /// not as if the second record were not there.
     #[test]
@@ -2064,6 +2168,30 @@ mod tests {
             matches!(&err, Error::Keyed(KeyError::Duplicate(k)) if k == &[b"1".to_vec()]),
             "{err}"
         );
+    }
+
+    /// From the smallest budget the command line takes, following the
+    /// advice on the same file reaches the duplicate-key error.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn following_the_advice_reaches_the_duplicate_keys() {
+        let (ca, cb) = duplicated_top_half();
+        let mut mem = cli_kib(64);
+        let mut reruns = 0;
+        loop {
+            match limited(&ca, &cb, "csv:1", mem, MAX_PASSES) {
+                Err(Error::Keyed(KeyError::Duplicate(_))) => break,
+                Err(Error::Budget(refusal)) => {
+                    mem = refusal.mem_advice(Bytes(mem)).unwrap().0;
+                    reruns += 1;
+                    assert!(
+                        reruns <= STEPS,
+                        "no duplicate error within {STEPS} reruns, at {mem}"
+                    );
+                }
+                other => panic!("at {mem}: {other:?}"),
+            }
+        }
     }
 
     #[test]

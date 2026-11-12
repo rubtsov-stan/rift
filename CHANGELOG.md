@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Key mode names duplicate keys instead of refusing the budget once a
+  pass has met them. A refusal can still come first when the duplicates
+  lie in a part of the hash range no pass has reached; following its
+  advice reaches the duplicate-key error.
 - When key mode found a duplicate key but had no room left to list it,
   it dropped the second record without an error and could report the
   key as removed or changed. Such a run now ends in a budget error, and
