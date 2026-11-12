@@ -1,4 +1,7 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Server, RpcError } from '../../client';
 import { Notification, OpenResult, Summary } from '../../protocol';
 import { mockBinary, until } from '../mock';
@@ -6,6 +9,7 @@ import { mockBinary, until } from '../mock';
 function make(extra: Partial<ConstructorParameters<typeof Server>[0]> = {}) {
   const notes: Notification[] = [];
   const crashes: boolean[] = [];
+  const stops: boolean[] = [];
   let restarted = () => {};
   const server = new Server({
     command: mockBinary,
@@ -13,11 +17,11 @@ function make(extra: Partial<ConstructorParameters<typeof Server>[0]> = {}) {
     busyDelaysMs: [5, 5, 5],
     minUptimeMs: 0,
     onNotification: (n) => notes.push(n),
-    onCrash: (_r, restarting) => crashes.push(restarting),
+    onCrash: (_r, restarting, deliberate) => (deliberate ? stops : crashes).push(restarting),
     onRestarted: () => restarted(),
     ...extra,
   });
-  return { server, notes, crashes, onRestarted: (f: () => void) => (restarted = f) };
+  return { server, notes, crashes, stops, onRestarted: (f: () => void) => (restarted = f) };
 }
 
 describe('Server', () => {
@@ -69,5 +73,50 @@ describe('Server', () => {
     await assert.rejects(server.request('open', { a: 'a', b: 'b' }));
     await until(() => crashes.length === 1);
     assert.deepStrictEqual(crashes, [false]);
+  });
+
+  it('reports a restarted server that refuses to initialize', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rift-flag-'));
+    const flag = path.join(dir, 'fail');
+    const failures: string[] = [];
+    const { server } = make({ command: () => mockBinary({ MOCK_FAIL_INIT_FILE: flag }), onRestartFailed: (e) => failures.push(e.message) });
+    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    fs.writeFileSync(flag, '');
+    process.kill((await server.pid())!, 'SIGKILL');
+    await until(() => failures.length === 1);
+    assert.match(failures[0], /initialize failed/);
+    server.dispose();
+  });
+
+  it('fails the request when the server sends a body that is not JSON', async () => {
+    const { server, crashes, stops } = make();
+    await assert.rejects(server.request('open', { a: '/x/garbage.sql', b: '/x/b.sql' }), /not JSON/);
+    // Our own stop is reported as one, never as a crash, and the server is not started again by itself.
+    await until(() => stops.length === 1);
+    assert.deepStrictEqual([crashes, stops], [[], [false]]);
+    // The connection is replaced, not stuck.
+    const open = await server.request<OpenResult>('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    assert.strictEqual(open.state, 'scanning');
+    server.dispose();
+  });
+
+  it('fails the request when the server sends JSON that is not a message', async () => {
+    const { server, crashes, stops } = make();
+    await assert.rejects(server.request('open', { a: '/x/nullbody.sql', b: '/x/b.sql' }), /not JSON/);
+    await until(() => stops.length === 1);
+    assert.deepStrictEqual([crashes, stops], [[], [false]]);
+    server.dispose();
+  });
+
+  it('starts again after initialize was rejected, with the current path', async () => {
+    let broken = true;
+    const { server, crashes } = make({ command: () => (broken ? mockBinary({ MOCK_FAIL_INIT: '1' }) : mockBinary()) });
+    await assert.rejects(server.request('open', { a: '/x/a.sql', b: '/x/b.sql' }), /initialize failed/);
+    broken = false;
+    const open = await server.request<OpenResult>('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    assert.strictEqual(open.state, 'scanning');
+    // Killing the failed process is not a crash to report.
+    assert.deepStrictEqual(crashes, []);
+    server.dispose();
   });
 });

@@ -18,6 +18,10 @@
 //   hunk on segment 1 or 7              -> pending; segment_ready follows (also via set_visible)
 //   hunk on segment 9                   -> B side stored cut at 300 lines: truncated whatever max_lines says
 //   hunk on segment 7                   -> a 10 KB line on A, cut at max_line_bytes; a lossy line on B
+//   open, a path containing "garbage" -> a frame whose body is not JSON, instead of the answer
+//   open, a path containing "nullbody" -> a frame whose body is the JSON value null
+// With MOCK_FAIL_INIT=1 in the environment, or while the file named by MOCK_FAIL_INIT_FILE exists,
+// initialize fails (internal error).
 // Hunks are stored with context 3; a smaller context trims them, a larger
 // one is served as 3. An equal segment reached by line_a starts at that
 // line, as in the server.
@@ -113,6 +117,12 @@ function handle(body) {
   // Every request is answered before the next is read, so a
   // $/cancelRequest always comes too late and does nothing.
   if (msg.id === undefined) return;
+  if (msg.method === 'open' && /garbage|nullbody/.test(`${params.a}`)) {
+    const junk = Buffer.from(`${params.a}`.includes('garbage') ? '{not json' : 'null');
+    process.stdout.write(`Content-Length: ${junk.length}\r\n\r\n`);
+    process.stdout.write(junk);
+    return;
+  }
   const reply = (result) => send({ jsonrpc: '2.0', id: msg.id, result });
   const fail = (e) => send({ jsonrpc: '2.0', id: msg.id, error: errorObject({ code: e.code ?? -32603, message: e.message, data: e.data }) });
   try {
@@ -129,6 +139,7 @@ function handle(body) {
 
 const METHODS = {
   initialize(p) {
+    if (process.env.MOCK_FAIL_INIT || (process.env.MOCK_FAIL_INIT_FILE && fs.existsSync(process.env.MOCK_FAIL_INIT_FILE))) throw new RpcError(-32603, 'initialize failed on purpose');
     if (p.protocol !== 1) throw invalid('protocol', { supported: [1] });
     initialized = true;
     return fixture.initialize;

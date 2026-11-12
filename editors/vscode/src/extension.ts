@@ -41,14 +41,24 @@ export function activate(ctx: vscode.ExtensionContext): Api {
       opening?.handle(n);
       comparison?.handle(n);
     },
-    onCrash: (reason, restarting) => {
+    onCrash: (reason, restarting, deliberate) => {
       comparison?.lost(reason, restarting);
       // A binary that cannot start is reported by the command that needed it.
       if (reason.startsWith('cannot start')) return;
-      void vscode.window.showWarningMessage(restarting ? `Rift: ${reason}. Restarting it.` : `Rift: ${reason}. It stopped right after starting, so it is not restarted.`);
+      const text = deliberate
+        ? `${reason}. Compare the files again.`
+        : restarting
+          ? `${reason}. Restarting it.`
+          : `${reason}. It stopped right after starting, so it is not restarted.`;
+      void vscode.window.showWarningMessage(`Rift: ${text}`);
     },
     onRestarted: () => {
       comparison?.open().catch(showError);
+    },
+    onRestartFailed: (e) => {
+      // Nothing else would say why the pair stays without a session.
+      comparison?.lost(e.message, false);
+      showError(e);
     },
   });
   tree.maxSessionMem = () => server.limits?.max_session_mem;

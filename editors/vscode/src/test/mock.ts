@@ -3,11 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 
 // An executable that runs test/mock-server.js, so the mock can stand in for
-// the `rift` binary, which is called as `rift serve`.
-export function mockBinary(): string {
+// the `rift` binary, which is called as `rift serve`. `env` is passed to the mock.
+export function mockBinary(env: Record<string, string> = {}): string {
+  const vars = Object.entries(env).map(([k, v]) => `${k}=${v} `).join('');
   const mock = path.join(__dirname, '..', '..', 'test', 'mock-server.js');
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-mock-')), 'rift');
-  fs.writeFileSync(file, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${mock}"\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/bin/sh\n${vars}ELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${mock}"\n`, { mode: 0o755 });
   return file;
 }
 
