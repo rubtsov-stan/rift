@@ -90,7 +90,7 @@ $ rift --key csv:id --mem 64K a.csv b.csv
 rift: refine budget exceeded: requested 21504 bytes, 8192 available; rerun with --mem 90K
 ```
 
-Each refusal names a `--mem` about twice as large or more; at 90K that pair takes 42 passes. Following the advice reaches a limit that works in a few reruns. The count is of records already read, so a run that fits in 64 passes is never refused, whatever its keys, and the same files under the same `--mem` get the same answer on any machine. Without the limit, a budget far too small for the files would still finish, after hundreds of passes over both files.
+A budget refusal can come before data errors such as duplicate keys are found, since those keys may lie in a part of the hash range no pass has reached. Each refusal names a `--mem` about twice as large or more; at 90K that pair takes 42 passes. Following the advice reaches a limit that works in a few reruns. The count is of records already read, so a run that fits in 64 passes is never refused, whatever its keys, and the same files under the same `--mem` get the same answer on any machine. Without the limit, a budget far too small for the files would still finish, after hundreds of passes over both files.
 
 Why 64: each pass rereads both files, and a pass takes about the same time at any budget, about 0.14 s on a 128 MiB CSV pair, 0.08 s on a 64 MiB SQL dump and 0.05 s on a 64 MiB NDJSON file (Apple M1, warm page cache). The limit keeps the reading to at most 64 times one pass, whatever the file size. On those pairs it refuses only the CSV and SQL runs at `--mem 256K`, of 8 to 15 s, and the advised limit cuts them to about a third. On large files 64 passes can still take minutes, which is what such a budget asks for.
 
