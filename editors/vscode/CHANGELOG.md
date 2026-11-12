@@ -4,6 +4,14 @@
 
 - A carriage return inside a line is shown as ␍ with a hover note. It used to split
   the line in the editor and shift the lines after it.
+- A reply that is not JSON ends the server connection and fails the request with
+  that reason. It left the request pending and raised an uncaught error. The next
+  request starts the server again. The shown comparison is marked failed, since
+  the new process numbers its sessions from 1 again; the stop is not counted as a
+  crash. A restarted server that refuses to initialize fails the shown comparison with its
+  error.
+- A server that rejects `initialize` is stopped and started again on the next
+  request, with the current `rift.path`. The error used to stay cached.
 - The summary row reads the refine progress from the notifications, so it no
   longer shows "refining 0/287" while the status bar is at 286/287.
 - A `rift:` document address now carries a per-window token, and one that is not
