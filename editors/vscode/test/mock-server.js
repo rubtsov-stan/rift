@@ -22,6 +22,13 @@
 //   open, a path containing "lag"     -> the answer comes 100 ms late, the request is handled at once
 //   open, a path containing "garbage" -> a frame whose body is not JSON, instead of the answer
 //   open, a path containing "nullbody" -> a frame whose body is the JSON value null
+//   open, a path containing "quiet"   -> 150 ms after ready the refinement ends approx for segment 1 with no
+//                                          segment_ready; only a later `segments` page shows it
+//   open, a path containing "coalesce" -> the first `segments` answer and the final refine progress go out in one
+//                                          write, the page as it was before the refinement ended
+//   open, a path containing "settle"  -> 150 ms after ready the pending segments are refined by themselves
+//                                          (segment_ready for each, then progress done/total); `segments`
+//                                          reports approx once refined, as in the server
 //   open, a path containing "evictor" -> when it opens a session, every other session is dropped, as a full
 //                                          server drops the one idle longest
 //   summary, on a session of a path containing "sumfail" -> an internal error, so the session fails to load
@@ -167,6 +174,18 @@ function handle(body) {
       const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }), 'utf8');
       const junk = Buffer.from('{not json');
       process.stdout.write(Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body, Buffer.from(`Content-Length: ${junk.length}\r\n\r\n`), junk]));
+    } else if (co && co.key.includes('coalesce') && !co.coalesced) {
+      co.coalesced = true;
+      for (const r of fixture.refined) co.refined.set(r.index, r.status);
+      co.done = refineTotal;
+      const frames = [
+        { jsonrpc: '2.0', id: msg.id, result },
+        { jsonrpc: '2.0', method: 'progress', params: { session: params.session, phase: 'refine', done: co.done, total: refineTotal } },
+      ];
+      process.stdout.write(Buffer.concat(frames.map((f) => {
+        const body = Buffer.from(JSON.stringify(f), 'utf8');
+        return Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body]);
+      })));
     } else {
       reply(result);
     }
@@ -245,6 +264,18 @@ const METHODS = {
         s.state = 'ready';
         notify('session_state', { session: id, state: 'ready' });
         notify('progress', { session: id, phase: 'refine', done: s.done, total: refineTotal });
+        if (key.includes('quiet')) {
+          setTimeout(() => {
+            for (const r of fixture.refined) s.refined.set(r.index, r.status);
+            s.done = refineTotal;
+            notify('progress', { session: id, phase: 'refine', done: s.done, total: refineTotal });
+          }, 150);
+        }
+        if (key.includes('settle')) {
+          setTimeout(() => {
+            for (const r of fixture.refined) ready(id, r.index);
+          }, 150);
+        }
       }
     };
     s.timer = setTimeout(tick, every);
@@ -347,8 +378,8 @@ const METHODS = {
     if (typeof r !== 'object' || r === null || !Number.isInteger(r.start) || r.start < 1 || !Number.isInteger(r.count) || r.count < 0) {
       throw invalid('a');
     }
-    // The crashy pairs never end their refinement, nor do the sumjunk ones.
-    if (/crashy|crashlate|sumjunk/.test(s.key)) return null;
+    // The settle pairs end their refinement by themselves, the crashy and sumjunk ones never end it.
+    if (/settle|quiet|coalesce|crashy|crashlate|sumjunk/.test(s.key)) return null;
     const end = r.start + Math.max(r.count, 1);
     const shown = fixture.segments.filter((seg) => seg.a.start < end && r.start <= seg.a.start + seg.a.count);
     setImmediate(() => {

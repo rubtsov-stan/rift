@@ -41,6 +41,10 @@
   waiting for good.
 - The summary row reads the refine progress from the notifications, so it no
   longer shows "refining 0/287" while the status bar is at 286/287.
+- Segments already listed are re-read when the refinement ends, so with a server
+  that reports refined approx in `segments` the segments never opened get their
+  approx mark too, also when the last progress notice arrives together with the
+  first page.
 - A `rift:` document address now carries a per-window token, and one that is not
   loaded shows a note instead of another difference's lines or an empty editor.
 

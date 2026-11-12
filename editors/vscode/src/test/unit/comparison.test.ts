@@ -71,6 +71,36 @@ describe('Comparison', () => {
     server.dispose();
   });
 
+  it('keeps a segment approx after the refinement ends and the pages are read again', async () => {
+    const { server, cmp } = setup('/x/settle.sql');
+    await cmp.open();
+    await until(() => cmp.state === 'ready' && cmp.segments.length > 0);
+    // segment_ready marks it, and the re-read after the last progress notice must agree.
+    await until(() => cmp.segments[0].status === 'approx');
+    await until(() => cmp.progress?.phase === 'refine' && cmp.progress.done === cmp.progress.total);
+    // Leave time for the re-read that the last progress notice starts.
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(cmp.segments[0].status, 'approx');
+    server.dispose();
+  });
+
+  it('shows the approx a page read before the refinement did not have', async () => {
+    const { server, cmp } = setup('/x/quiet.sql');
+    await cmp.open();
+    await until(() => cmp.state === 'ready' && cmp.segments.length > 0);
+    assert.strictEqual(cmp.segments[0].status, 'differs');
+    await until(() => cmp.segments[0].status === 'approx');
+    server.dispose();
+  });
+
+  it('reads the page again when the last progress notice comes in the same read as the page', async () => {
+    const { server, cmp } = setup('/x/coalesce.sql');
+    await cmp.open();
+    await until(() => cmp.state === 'ready' && cmp.segments.length > 0);
+    await until(() => cmp.segments[0].status === 'approx');
+    server.dispose();
+  });
+
   it('says so when the server no longer has the session', async () => {
     const { server, cmp, failures } = setup();
     await cmp.open();
