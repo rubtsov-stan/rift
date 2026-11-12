@@ -1,6 +1,6 @@
 +++
 title = "Rift roadmap: what is next, and what is not planned"
-description = "What comes after Rift 0.3.2: 0.3.3, directory diff and field-level key diff. No dates."
+description = "What comes after Rift 0.3.2: a faster 0.4, directory diff, field-level key diff and key mode over MCP. No dates."
 weight = 5
 [extra]
 nav = "Roadmap"
@@ -16,13 +16,20 @@ lead = "What comes after the current release. Nothing here has a date."
 - **`rift serve`.** Rift's protocol for editors: JSON-RPC 2.0 on standard input and output, with a size bound on every answer. The extension runs it; [Clients and protocol](@/design/clients.md) explains how it works.
 - **`rift git-diff`.** Git's external diff for files git calls binary, with Git LFS pointers resolved. See the [git guide](@/guide/git.md).
 
-## Next
+## Next: 0.4
 
-- **0.3.3.** Key mode prints its lines in the same order on every run and every machine for a given `--mem` and input, and runs at `--mem 16M` as fast as 0.3.0 did.
-- **Directory diff.** `rift A/ B/` walks both trees in sorted order in bounded memory and diffs each pair of files under the same `--mem`, with a summary of added, removed and changed files.
-- **Field-level key diff.** Planned for 0.4. In [key mode](@/guide/key-mode.md), name the fields that changed for a changed key: CSV columns, top-level NDJSON keys, COPY columns. Until then, `--show-records` prints both records of a changed key in full.
-- **Exact diff for regions that share only repeated lines.** Today Rift can replace such a region whole and marks it `approx`; an alignment that counts only the line pairs that match would make it exact.
-- **Homebrew tap.** `brew install` from a tap repository, added to the release installers once the tap and its token exist.
+- **Faster, same answers.** A review of 0.3 found places where Rift does more work than it has to. None of these changes alters the output or the memory limit, and each ships only if it is measurably faster on real data.
+  - [Key mode](@/guide/key-mode.md) will stop rereading the input from the start on every pass.
+  - Scanning will stop slowing down at small `--mem` values.
+  - On a cold disk, Rift will ask the OS to read ahead the parts it is about to diff.
+  - Refining a hunk will read larger blocks and stop copying each line.
+  - `rift serve` will answer the VS Code extension with fewer reads.
+- **Directory diff.** `rift old/ new/` compares two trees, such as `pg_dump -Fd` output or sharded exports, under the same `--mem`, even with millions of files. It lists added, removed and changed files and finds renames by content.
+- **Which fields changed.** In key mode, a changed record will show the columns that differ (`price: 10 → 12`), with `--fields` to narrow the output.
+- **Key mode over MCP**, so an agent can compare CSV and NDJSON files by key. See the [MCP guide](@/guide/mcp.md).
+- **Large files from Source Control.** In VS Code, open a big tracked file's changes in Rift straight from the Source Control view. See the [VS Code guide](@/guide/vscode.md).
+
+The order may change with feedback. If something here matters to you, or something is missing, open an issue.
 
 ## Not planned
 

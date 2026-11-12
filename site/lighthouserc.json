@@ -6,7 +6,8 @@
       "url": [
         "http://localhost:8080/",
         "http://localhost:8080/guide/memory/",
-        "http://localhost:8080/guide/mcp/"
+        "http://localhost:8080/guide/mcp/",
+        "http://localhost:8080/roadmap/"
       ],
       "numberOfRuns": 3,
       "settings": {

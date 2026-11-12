@@ -86,6 +86,8 @@ Rift works, the benchmarks with their commands, and the man page:
 <https://rubtsov-stan.github.io/rift/>. The design and its invariants are
 in [DESIGN.md](DESIGN.md).
 
+What's next: <https://rubtsov-stan.github.io/rift/roadmap/>
+
 ## What is guaranteed
 
 - The output is a correct edit script: applied to the first file it
