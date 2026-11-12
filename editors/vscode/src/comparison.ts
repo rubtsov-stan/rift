@@ -132,6 +132,7 @@ export class Comparison {
         if (n.params.phase === 'refine' && n.params.done === n.params.total) {
           this.crashes = 0;
           void this.refreshSummary();
+          void this.refreshStatuses().catch(() => {});
         }
         break;
       case 'session_state':
@@ -175,6 +176,23 @@ export class Comparison {
       if (s.progress) this.progress = s.progress;
       this.events.change();
     }
+  }
+
+  // Reads the loaded pages again once the refinement is done: `segments` reports
+  // approx for a segment whose refinement ended so, whether or not a hunk was asked.
+  private async refreshStatuses(): Promise<void> {
+    // The page that came with the final notice may not be stored yet.
+    await this.loadingSegments?.catch(() => {});
+    const session = this.session;
+    for (let offset = 0; offset < this.segments.length; offset += PAGE) {
+      const r = await this.call<SegmentsResult>('segments', { offset, limit: PAGE });
+      if (!r || session !== this.session) return;
+      r.segments.forEach((fresh, i) => {
+        const seg = this.segments[offset + i];
+        if (seg?.index === fresh.index) seg.status = fresh.status;
+      });
+    }
+    this.events.change();
   }
 
   loadSegments(): Promise<void> {
