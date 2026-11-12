@@ -1,0 +1,38 @@
+{%- set data = load_data(path="data/mcp-session.json") -%}
+{%- set s = data.sessions | filter(attribute="id", value=id) | first -%}
+{%- set input = s.a_bytes + s.b_bytes -%}
+<p>Files: <code>{{ s.rift_gen }}</code>, {{ s.what }}. A is {{ s.a_bytes }} bytes and B is {{ s.b_bytes }} bytes, {{ (input / 1048576) | int }} MiB together.</p>
+{%- for st in s.steps %}{% if st.request.method == "tools/call" %}
+{%- set r = st.response.result -%}
+{%- set sc = r.structuredContent | default(value="") -%}
+<figure class="termwin"><div class="tbar"><span class="dots"><i></i><i></i><i></i></span><span class="ttl">{{ st.request.params.name }}</span></div>
+<pre class="tb"><span class="t-acc">agent: {{ st.note }}</span>
+<span class="pr">-&gt; </span><span class="cmd">{{ st.request.params | json_encode }}</span>
+<span class="pr">&lt;- </span>
+{%- if r.isError %}<span class="t-red">error: {{ r.content[0].text }}</span>
+{%- elif st.request.params.name == "hunks_at" -%}
+{%- set text = sc.text | trim_end | split(pat="\n") -%}
+{{ "{" }} "found": {{ sc.found }}, "range": {{ sc.range | json_encode }}, "lines_shown": {{ sc.lines_shown }}, "lines_total": {{ sc.lines_total }}, "truncated": {{ sc.truncated }},
+  "text":
+{% for l in text | slice(end=12) %}{% if l is starting_with("-") %}<span class="t-red">    {{ l }}</span>{% elif l is starting_with("+") %}<span class="t-grn">    {{ l }}</span>{% else %}<span class="t-mut">    {{ l }}</span>{% endif %}
+{% endfor %}
+{%- if text | length > 12 %}<span class="t-acc">    ... {{ text | length - 12 }} more lines of text</span>
+{% endif -%}
+}
+{%- else -%}
+{{ "{" }}
+{% for k, v in sc %}{% if k == "first_differences" %}  "{{ k }}": [
+{% for x in v | slice(end=2) %}    {{ x | json_encode }},
+{% endfor %}<span class="t-acc">    ... {{ v | length - 2 }} more ranges</span>
+  ],
+{% else %}  "{{ k }}": {{ v | json_encode }}{% if not loop.last %},{% endif %}
+{% endif %}{% endfor %}}
+{%- endif -%}
+</pre>
+<figcaption>Response: {{ st.response_bytes }} bytes. Input: {{ input }} bytes in the two files.</figcaption></figure>
+{%- endif %}{% endfor %}
+<div class="table-wrap"><table><thead><tr><th scope="col">Message</th><th scope="col" class="n">Response in bytes</th></tr></thead><tbody>
+{%- for st in s.steps %}
+<tr><td><code>{{ st.request.method }}{% if st.request.params.name %} {{ st.request.params.name }}{% endif %}</code></td><td class="n">{{ st.response_bytes }}</td></tr>
+{%- endfor %}
+</tbody></table></div>

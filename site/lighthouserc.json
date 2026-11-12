@@ -5,7 +5,8 @@
       "startServerReadyPattern": "Serving HTTP",
       "url": [
         "http://localhost:8080/",
-        "http://localhost:8080/guide/memory/"
+        "http://localhost:8080/guide/memory/",
+        "http://localhost:8080/guide/mcp/"
       ],
       "numberOfRuns": 3,
       "settings": {
