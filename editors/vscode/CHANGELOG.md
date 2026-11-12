@@ -2,16 +2,34 @@
 
 ## [Unreleased]
 
+- Comparing the same pair again no longer closes the session it reuses, which made
+  every hunk fail, and keeps the approx marks the first comparison had.
+- A comparison that finishes late, after busy retries, no longer replaces a newer
+  one, closes its session, or shows its failure. Once replaced, a compare sends
+  nothing more, busy retries included, so it can no longer make the server drop
+  the shown session. A session is closed only when neither the shown comparison
+  nor the newest compare holds it, and never while that compare's open is on its
+  way: the server matches files, not paths, so the same files under another path
+  get the same session. Each attempt of an open, a retry after busy included,
+  waits until the closes already sent are answered. A session id is tied to the
+  server process that issued it, so nothing is sent for one after a restart, and
+  a notice only counts from the process that issued the session. When the server no longer has the shown
+  session, the extension says so instead of ignoring every click. A comparison
+  that failed to load no longer keeps a new comparison of the same pair from
+  replacing it. Closing the comparison also stops a compare that is still opening.
 - A carriage return inside a line is shown as ␍ with a hover note. It used to split
   the line in the editor and shift the lines after it.
 - A reply that is not JSON ends the server connection and fails the request with
   that reason. It left the request pending and raised an uncaught error. The next
   request starts the server again. The shown comparison is marked failed, since
   the new process numbers its sessions from 1 again; the stop is not counted as a
-  crash. A restarted server that refuses to initialize fails the shown comparison with its
+  crash. A compare that was still loading is opened again on a new process.
+  A restarted server that refuses to initialize fails the shown comparison with its
   error.
 - A server that rejects `initialize` is stopped and started again on the next
   request, with the current `rift.path`. The error used to stay cached.
+- A crash during a rerun reopens the pair with the memory the rerun asked for, and
+  shows one message; it used to leave the pair failed.
 - The summary row reads the refine progress from the notifications, so it no
   longer shows "refining 0/287" while the status bar is at 286/287.
 - A `rift:` document address now carries a per-window token, and one that is not

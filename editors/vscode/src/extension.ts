@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Server } from './client';
-import { Comparison, MEMORY_GUIDE, rerunOffer } from './comparison';
+import { Comparison, Compares, MEMORY_GUIDE, rerunOffer } from './comparison';
 import { excerpt, num, title } from './format';
 import { HunkDocs, SCHEME } from './hunk';
 import { RpcErrorObject } from './protocol';
@@ -30,37 +30,23 @@ export function activate(ctx: vscode.ExtensionContext): Api {
   );
   const view = vscode.window.createTreeView('rift.comparison', { treeDataProvider: tree });
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
-  let comparison: Comparison | undefined;
-  // A comparison whose `open` has not answered yet still gets notifications.
-  let opening: Comparison | undefined;
-
   const server: Server = new Server({
     command: () => cfg().get<string>('path')?.trim() || bundled,
     args: ['serve'],
-    onNotification: (n) => {
-      opening?.handle(n);
-      comparison?.handle(n);
-    },
+    onNotification: (n, epoch) => compares.handle(n, epoch),
     onCrash: (reason, restarting, deliberate) => {
-      comparison?.lost(reason, restarting);
+      const reopen = compares.lost(reason, restarting, deliberate);
       // A binary that cannot start is reported by the command that needed it.
       if (reason.startsWith('cannot start')) return;
       const text = deliberate
         ? `${reason}. Compare the files again.`
-        : restarting
+        : reopen
           ? `${reason}. Restarting it.`
           : `${reason}. It stopped right after starting, so it is not restarted.`;
       void vscode.window.showWarningMessage(`Rift: ${text}`);
     },
-    onRestarted: () => {
-      comparison?.open().catch(showError);
-    },
-    onRestartFailed: (e) => {
-      // Nothing else would say why the pair stays without a session.
-      comparison?.lost(e.message, false);
-      showError(e);
-    },
   });
+  const compares = new Compares(server, { change: render, failed, error: showError });
   tree.maxSessionMem = () => server.limits?.max_session_mem;
 
   function showError(e: unknown): void {
@@ -70,7 +56,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
   }
 
   function render(): void {
-    const c = comparison;
+    const c = compares.shown;
     tree.comparison = c;
     tree.refresh();
     void vscode.commands.executeCommand('setContext', 'rift.active', c !== undefined);
@@ -105,26 +91,11 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     }
   }
 
-  async function compare(a: string, b: string): Promise<void> {
-    const next = new Comparison(server, a, b, cfg().get<string>('mem') ?? '256M', { change: render, failed: (e) => failed(e, next) });
-    opening = next;
-    try {
-      await next.open();
-    } catch (e) {
-      showError(e);
-      return;
-    } finally {
-      opening = undefined;
-    }
-    const prev = comparison;
-    comparison = next;
-    void prev?.close();
-    render();
-  }
+  const compare = (a: string, b: string) => compares.compare(a, b, cfg().get<string>('mem') ?? '256M');
 
   // Shows one hunk in the diff editor. `lineA` also puts the cursor on that line of A.
   async function show(target: { segment: number } | { line_a: number }): Promise<HunkResult | undefined> {
-    const c = comparison;
+    const c = compares.shown;
     if (!c) return undefined;
     let h: HunkResult | undefined;
     try {
@@ -133,7 +104,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
       showError(e);
       return undefined;
     }
-    if (!h || c !== comparison) return undefined;
+    if (!h || c !== compares.shown) return undefined;
     const left = docs.add('a', basename(c.a), excerpt(h.a));
     const right = docs.add('b', basename(c.b), excerpt(h.b));
     await vscode.commands.executeCommand('vscode.diff', left, right, title(basename(c.a), basename(c.b), h), { preview: true });
@@ -141,6 +112,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     const seg = h.segment;
     // An equal segment or a moved block is not in the list: stand after the last difference before it.
     const pos = c.segments.findIndex((s) => s.index === seg);
+    if (pos >= 0 && h.status === 'approx') c.segments[pos].status = 'approx';
     c.current = pos >= 0 ? pos : c.segments.reduce((last, s, i) => (s.index < seg ? i : last), -1);
     if ('line_a' in target) {
       const ed = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === left.toString());
@@ -154,7 +126,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
   }
 
   async function step(dir: 1 | -1): Promise<void> {
-    const c = comparison;
+    const c = compares.shown;
     if (!c || c.state !== 'ready') return;
     const pos = c.current < 0 ? 0 : c.current + dir;
     if (pos >= c.segments.length && c.segments.length < c.segmentsTotal) {
@@ -207,7 +179,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
   reg('rift.nextDifference', () => step(1));
   reg('rift.previousDifference', () => step(-1));
   reg('rift.goToLineInA', async () => {
-    const c = comparison;
+    const c = compares.shown;
     if (!c || c.state !== 'ready') return;
     // From a rift: document of A the cursor's own line is the default.
     const ed = vscode.window.activeTextEditor;
@@ -221,40 +193,29 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     });
     if (text) await show({ line_a: Number(text) });
   });
-  reg('rift.closeComparison', async () => {
-    const c = comparison;
-    comparison = undefined;
-    render();
-    await c?.close();
-  });
+  reg('rift.closeComparison', () => compares.close());
   reg('rift.loadMore', async (kind: 'segments' | 'moves') => {
     try {
-      await (kind === 'segments' ? comparison?.loadSegments() : comparison?.loadMoves());
+      await (kind === 'segments' ? compares.shown?.loadSegments() : compares.shown?.loadMoves());
     } catch (e) {
       showError(e);
     }
     render();
   });
   reg('rift.rerunWithMem', async () => {
-    const offer = rerunOffer(comparison?.error, server.limits?.max_session_mem, comparison?.reruns ?? 0);
-    if (!comparison || offer?.kind !== 'rerun') return;
-    comparison.reruns++;
-    try {
-      await comparison.open(offer.mem);
-    } catch (e) {
-      showError(e);
-    }
-    render();
+    const c = compares.shown;
+    const offer = rerunOffer(c?.error, server.limits?.max_session_mem, c?.reruns ?? 0);
+    if (offer?.kind === 'rerun') await compares.rerun(offer.mem);
   });
   reg('rift.openMemoryGuide', () => vscode.env.openExternal(vscode.Uri.parse(MEMORY_GUIDE)));
 
   ctx.subscriptions.push(view, status);
   shutdown = async () => {
     // A server that does not answer must not hold the window open.
-    await Promise.race([comparison?.close(), new Promise((r) => setTimeout(r, 2000))]);
+    await Promise.race([compares.close(), new Promise((r) => setTimeout(r, 2000))]);
     server.dispose();
   };
-  return { tree, docs, comparison: () => comparison, serverPid: () => server.pid() };
+  return { tree, docs, comparison: () => compares.shown, serverPid: () => server.pid() };
 }
 
 export function deactivate(): Promise<void> | undefined {

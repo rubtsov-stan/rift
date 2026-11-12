@@ -2,9 +2,9 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Server, RpcError } from '../../client';
+import { Server, RpcError, Superseded } from '../../client';
 import { Notification, OpenResult, Summary } from '../../protocol';
-import { mockBinary, until } from '../mock';
+import { mockBinary, mockLog, until } from '../mock';
 
 function make(extra: Partial<ConstructorParameters<typeof Server>[0]> = {}) {
   const notes: Notification[] = [];
@@ -49,6 +49,56 @@ describe('Server', () => {
     server.dispose();
   });
 
+  it('stops retrying busy when the caller stops wanting it during the wait', async () => {
+    const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-log-')), 'log');
+    const { server } = make({ command: () => mockBinary({ MOCK_LOG: log }) });
+    // Wanted for the first attempt, not any more after its wait; the pair answers busy twice.
+    let asked = 0;
+    await assert.rejects(server.request('open', { a: '/x/busy-w.sql', b: '/x/b.sql' }, () => ++asked <= 2), Superseded);
+    assert.strictEqual(mockLog(log).filter((r) => r.method === 'open').length, 1);
+    server.dispose();
+  });
+
+  it('never sends for a session of a process that is gone, and does not start one for it', async () => {
+    const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-log-')), 'log');
+    const { server, stops } = make({ command: () => mockBinary({ MOCK_LOG: log }) });
+    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    const epoch = server.epoch;
+    await assert.rejects(server.request('open', { a: '/x/garbage.sql', b: '/x/b.sql' }), /not JSON/);
+    await until(() => stops.length === 1);
+    await assert.rejects(server.request('summary', { session: 1 }, undefined, epoch), Superseded);
+    // No process was started for it.
+    assert.strictEqual(server.epoch, epoch);
+    // A process that came later numbers its sessions from 1 as well, but is another epoch.
+    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    assert.notStrictEqual(server.epoch, epoch);
+    await assert.rejects(server.request('summary', { session: 1 }, undefined, epoch), Superseded);
+    assert.deepStrictEqual(mockLog(log).filter((r) => r.method === 'summary'), []);
+    server.dispose();
+  });
+
+  it('reports a restarted server that refuses to initialize', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rift-flag-'));
+    const flag = path.join(dir, 'fail');
+    const failures: string[] = [];
+    const { server } = make({ command: () => mockBinary({ MOCK_FAIL_INIT_FILE: flag }), onRestartFailed: (e) => failures.push(e.message) });
+    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    fs.writeFileSync(flag, '');
+    process.kill((await server.pid())!, 'SIGKILL');
+    await until(() => failures.length === 1);
+    assert.match(failures[0], /initialize failed/);
+    server.dispose();
+  });
+
+  it('does not send once the caller stops wanting it while the server starts', async () => {
+    const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-log-')), 'log');
+    const { server } = make({ command: () => mockBinary({ MOCK_LOG: log }) });
+    let asked = 0;
+    await assert.rejects(server.request('open', { a: '/x/a.sql', b: '/x/b.sql' }, () => ++asked < 2), Superseded);
+    assert.deepStrictEqual(mockLog(log).filter((r) => r.method === 'open'), []);
+    server.dispose();
+  });
+
   it('fails with busy after the last retry', async () => {
     const { server } = make();
     await assert.rejects(server.request('open', { a: '/x/stuck.sql', b: '/x/b.sql' }), (e: RpcError) => e.code === -32005);
@@ -73,19 +123,6 @@ describe('Server', () => {
     await assert.rejects(server.request('open', { a: 'a', b: 'b' }));
     await until(() => crashes.length === 1);
     assert.deepStrictEqual(crashes, [false]);
-  });
-
-  it('reports a restarted server that refuses to initialize', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rift-flag-'));
-    const flag = path.join(dir, 'fail');
-    const failures: string[] = [];
-    const { server } = make({ command: () => mockBinary({ MOCK_FAIL_INIT_FILE: flag }), onRestartFailed: (e) => failures.push(e.message) });
-    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
-    fs.writeFileSync(flag, '');
-    process.kill((await server.pid())!, 'SIGKILL');
-    await until(() => failures.length === 1);
-    assert.match(failures[0], /initialize failed/);
-    server.dispose();
   });
 
   it('fails the request when the server sends a body that is not JSON', async () => {

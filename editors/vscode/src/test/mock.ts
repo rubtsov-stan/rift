@@ -21,3 +21,8 @@ export async function until(f: () => boolean, ms = 5000): Promise<void> {
 // the mock. The two files of the pair come from RIFT_PAIR_A and RIFT_PAIR_B
 // (src/test/run.ts generates them when they are not set).
 export const REAL = process.env.RIFT_BIN;
+
+// The requests the mock saw, when it runs with MOCK_LOG=`file`.
+export function mockLog(file: string): { method: string; params: Record<string, unknown> }[] {
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+}
