@@ -229,6 +229,7 @@ where
                 }
             }
             Outcome::Stop => {
+                let lost = shards.iter().map(|s| u64::from(s.lost)).find(|&b| b > 0);
                 let mut dups = collect_dups(&mut shards, Vec::new());
                 if dups.is_empty() {
                     // Too many suspects: settle the first of them now, in
@@ -247,6 +248,15 @@ where
                     .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
                     dups = pending.duplicates(&ra, &rb);
                 }
+                if let (true, Some(bytes)) = (dups.is_empty(), lost) {
+                    // A duplicate went unlisted and no other turned up:
+                    // refuse, and the advice gives the list room.
+                    return Err(Error::Budget(BudgetExceeded {
+                        half: Half::Refine,
+                        requested: Bytes(bytes),
+                        available: budget.available(Half::Refine),
+                    }));
+                }
                 return Err(if dups.is_empty() {
                     KeyError::Collisions
                 } else {
@@ -258,6 +268,15 @@ where
                 let dups = collect_dups(&mut shards, pending.duplicates(&ra, &rb));
                 if !dups.is_empty() {
                     return Err(KeyError::Duplicate(dups).into());
+                }
+                if let Some(bytes) = shards.iter().map(|s| u64::from(s.lost)).find(|&b| b > 0) {
+                    // A duplicate went unlisted and no other turned up:
+                    // refuse, and the advice gives the list room.
+                    return Err(Error::Budget(BudgetExceeded {
+                        half: Half::Refine,
+                        requested: Bytes(bytes),
+                        available: budget.available(Half::Refine),
+                    }));
                 }
                 if lo == END {
                     break;
@@ -934,6 +953,10 @@ struct Pass<'b, X: Extra> {
     overflow: Option<Half>,
     /// The overflow came from a record that more than half fills `share`.
     alone: bool,
+    /// Bytes a duplicate needed that its list had no room for, 0 for
+    /// none: the read must end in an error. Four bytes, so the shard
+    /// grows by none.
+    lost: u32,
     fault: Option<Error>,
 }
 
@@ -969,6 +992,7 @@ impl<'b, X: Extra> Pass<'b, X> {
             share: u64::MAX,
             overflow: None,
             alone: false,
+            lost: 0,
             fault: None,
         })
     }
@@ -1003,6 +1027,7 @@ impl<'b, X: Extra> Pass<'b, X> {
         X::base(&mut self.change).key.clear();
         self.overflow = None;
         self.alone = false;
+        self.lost = 0;
         self.fault = None;
     }
 
@@ -1116,7 +1141,12 @@ impl<'b, X: Extra> Pass<'b, X> {
                 let k = self.kept[index(v)];
                 if k.hash == rec.hash && k.table == rec.table && self.key(&k) == key {
                     if k.state == waiting {
-                        self.duplicate(key);
+                        if !self.duplicate(key) {
+                            // The pass must not end as if the second record
+                            // were not there, see `run`.
+                            self.lost =
+                                u32::try_from(size_of::<Vec<u8>>() + key.len()).unwrap_or(u32::MAX);
+                        }
                     } else {
                         self.matched(index(v), i, side, rec, || offset(rec));
                     }
@@ -1170,10 +1200,17 @@ impl<'b, X: Extra> Pass<'b, X> {
         Ok(Flow::Next)
     }
 
-    /// A key found waiting from the same file.
-    fn duplicate(&mut self, key: &[u8]) {
-        if self.dups.len() < FEW
-            && !self.dups.iter().any(|d| d == key)
+    /// A key found waiting from the same file; `false` when it could not
+    /// be listed and none is yet.
+    fn duplicate(&mut self, key: &[u8]) -> bool {
+        if self.dups.len() >= FEW || self.dups.iter().any(|d| d == key) {
+            return true;
+        }
+        #[cfg(test)]
+        let full = tests::DUPS_FULL.with(std::cell::Cell::get);
+        #[cfg(not(test))]
+        let full = false;
+        if !full
             && grow(
                 &mut self.dups,
                 &mut self.res,
@@ -1184,7 +1221,9 @@ impl<'b, X: Extra> Pass<'b, X> {
             && spend(&mut self.res, &mut self.credit, key.len() as u64)
         {
             self.dups.push(key.to_vec());
+            return true;
         }
+        !self.dups.is_empty()
     }
 
     /// The other file's record for a waiting key: compare the bytes.
@@ -1418,6 +1457,8 @@ mod tests {
         /// fingerprint matched a matched key's: collisions on demand.
         pub(super) static COLLIDES: std::cell::Cell<fn(&[u8]) -> bool> =
             const { std::cell::Cell::new(|_| false) };
+        /// Whether this thread's shards find no room to list a duplicate.
+        pub(super) static DUPS_FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     type Change = (ChangeKind, String, Option<u64>, Option<u64>);
@@ -2001,6 +2042,45 @@ mod tests {
             assert!(named, "band {at}: {err}");
         }
         COLLIDES.with(|c| c.set(|_| false));
+    }
+
+    /// With no room to list a duplicate, the run must end in an error,
+    /// not as if the second record were not there.
+    #[test]
+    fn a_duplicate_with_no_room_to_list_it_is_never_dropped() {
+        // Single shard at this budget, so the shards run on this thread.
+        let (a, b) = (b"1,a\n2,x\n1,b\n", b"2,x\n");
+        let mem = 1 << 20;
+        DUPS_FULL.with(|f| f.set(true));
+        let got = run(a, b, "csv:1", mem);
+        DUPS_FULL.with(|f| f.set(false));
+        let Err(Error::Budget(refusal)) = got else {
+            panic!("{got:?}");
+        };
+        // At the advised budget the list has room, and names the key.
+        let advised = refusal.mem_advice(Bytes(mem)).unwrap().0;
+        let err = run(a, b, "csv:1", advised).unwrap_err();
+        assert!(
+            matches!(&err, Error::Keyed(KeyError::Duplicate(k)) if k == &[b"1".to_vec()]),
+            "{err}"
+        );
+    }
+
+    /// A stopped read that names no duplicate, after a duplicate went
+    /// unlisted, ends in a budget error, not in hash collisions.
+    #[test]
+    fn a_stopped_read_with_an_unlisted_duplicate_is_refused() {
+        // Single shard at this budget, so the shards run on this thread.
+        let mut a = String::from("x,1\nx,2\n");
+        for i in 0..70 {
+            writeln!(a, "c{i},v").unwrap();
+        }
+        COLLIDES.with(|c| c.set(|key| key.first() == Some(&b'c')));
+        DUPS_FULL.with(|f| f.set(true));
+        let got = run(a.as_bytes(), b"y,1\n", "csv:1", 1 << 20);
+        DUPS_FULL.with(|f| f.set(false));
+        COLLIDES.with(|c| c.set(|_| false));
+        assert!(matches!(got, Err(Error::Budget(_))), "{got:?}");
     }
 
     #[test]

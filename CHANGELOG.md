@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When key mode found a duplicate key but had no room left to list it,
+  it dropped the second record without an error and could report the
+  key as removed or changed. Such a run now ends in a budget error, and
+  the `--mem` it names has room to list the key.
 - `rift serve` reports a segment whose refinement ended approximate as
   `approx` in `segments` pages, also when no `hunk` was asked for it.
   Before, a page showed only the map's status, so a client that re-read
