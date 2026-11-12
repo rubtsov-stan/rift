@@ -122,4 +122,14 @@ describeMock('after a server crash', () => {
     assert.strictEqual(opens()[opens().length - 1].params.mem, '16M');
   });
 
+  it('does not reopen a pair it gave up on when the server restarts again', async () => {
+    await fresh();
+    clearRequests();
+    // Dies 2.3 s after each open, so each death is a restart that reopens, until the pair is given up.
+    await compare('crashlate.sql', 'b.sql');
+    await until(() => x.comparison()?.state === 'failed', 12000);
+    await sleep(1500);
+    const opens = requests().filter((r) => r.method === 'open' && String(r.params.a).includes('crashlate'));
+    assert.strictEqual(opens.length, 2);
+  });
 });

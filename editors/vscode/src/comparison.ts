@@ -5,6 +5,7 @@ import {
 } from './protocol';
 
 export const PAGE = 100;
+const MAX_CRASHES = 2;
 
 export type ComparisonState = 'opening' | 'scanning' | 'ready' | 'failed';
 
@@ -36,6 +37,8 @@ export class Comparison {
   current = -1;
   // Reruns made after a budget failure of this pair.
   reruns = 0;
+  // Crashes since the refinement of this pair last ended, carried into its reopen.
+  crashes = 0;
   // Asked before every request, the open included. Nothing is sent and nothing changes once it says no.
   live: () => boolean = () => true;
   // Notices that came before the open answered, the latest per kind, session and process:
@@ -103,10 +106,13 @@ export class Comparison {
     this.events.change();
   }
 
-  // The server process died. Returns whether the pair is to be reopened, which is when the server restarts.
+  // The server process died. Returns whether the pair is to be reopened: not after it
+  // took the server down twice without its refinement ending in between, which a
+  // restart would only repeat.
   lost(message: string, restarting: boolean): boolean {
-    this.gone(restarting ? undefined : { code: -32603, message });
-    return restarting;
+    const again = restarting && ++this.crashes < MAX_CRASHES;
+    this.gone(again ? undefined : { code: -32603, message });
+    return again;
   }
 
   // `epoch` is the server process that sent `n`; ids restart with each process.
@@ -122,7 +128,10 @@ export class Comparison {
     switch (n.method) {
       case 'progress':
         this.progress = n.params;
-        if (n.params.phase === 'refine' && n.params.done === n.params.total) void this.refreshSummary();
+        if (n.params.phase === 'refine' && n.params.done === n.params.total) {
+          this.crashes = 0;
+          void this.refreshSummary();
+        }
         break;
       case 'session_state':
         if (n.params.state === 'failed') {
@@ -297,7 +306,10 @@ export class Compares {
       },
     });
     next.live = () => next === this.pending || next === this.shown;
-    if (from) next.reruns = from.reruns;
+    if (from) {
+      next.reruns = from.reruns;
+      next.crashes = from.crashes;
+    }
     this.pending = next;
     this.settle();
     try {
@@ -336,12 +348,13 @@ export class Compares {
   }
 
   // The server process died, or was stopped for what it sent (`deliberate`). Its sessions are
-  // gone. The current pair is reopened after a crash that restarts the server, and after a stop
-  // that cut short a compare still loading. Returns whether it is.
+  // gone. The current pair is reopened after a crash that restarts the server, up to its crash
+  // limit, and after a stop that cut short a compare still loading. Returns whether it is.
   lost(reason: string, restarting: boolean, deliberate: boolean): boolean {
     const target = this.pending ?? this.shown;
     if (!target) return restarting;
-    const again = deliberate ? target === this.pending && target.session !== undefined : target.lost(reason, restarting);
+    // A stop counts toward the crash limit too: a reply the client cannot read comes back on a reopen.
+    const again = deliberate ? target === this.pending && target.session !== undefined && ++target.crashes < MAX_CRASHES : target.lost(reason, restarting);
     const error = { code: -32603, message: deliberate ? `${reason}. Compare the files again.` : reason };
     if (deliberate && !again) target.gone(error);
     if (this.shown && this.shown !== target) this.shown.gone(again ? undefined : error);

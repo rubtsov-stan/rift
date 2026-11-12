@@ -42,7 +42,9 @@ export function activate(ctx: vscode.ExtensionContext): Api {
         ? `${reason}. Compare the files again.`
         : reopen
           ? `${reason}. Restarting it.`
-          : `${reason}. It stopped right after starting, so it is not restarted.`;
+          : restarting
+            ? `${reason}. This comparison crashed it twice, so it is not reopened.`
+            : `${reason}. It stopped right after starting, so it is not restarted.`;
       void vscode.window.showWarningMessage(`Rift: ${text}`);
     },
   });
