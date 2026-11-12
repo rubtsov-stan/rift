@@ -1,0 +1,7 @@
+{%- set data = load_data(path="data/mcp-session.json") -%}
+{%- set tools = data.sessions[0].steps[1].response.result.tools -%}
+<div class="table-wrap"><table><thead><tr><th scope="col">Tool</th><th scope="col">What the server says it does</th><th scope="col">Arguments</th></tr></thead><tbody>
+{%- for t in tools | sort(attribute="name") %}
+<tr><td><code>{{ t.name }}</code></td><td>{{ t.description }}</td><td>{% for k, v in t.inputSchema.properties %}<code>{{ k }}</code>{% if t.inputSchema.required is containing(k) %}{% else %}?{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+{%- endfor %}
+</tbody></table></div>
