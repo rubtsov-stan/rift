@@ -28,7 +28,11 @@
   error.
 - A server that rejects `initialize` is stopped and started again on the next
   request, with the current `rift.path`. The error used to stay cached.
-- A crash during a rerun reopens the pair with the memory the rerun asked for, and
+- A comparison that crashes the server twice without finishing its refinement in
+  between is marked failed. The extension used to restart the server and reopen it
+  without end. A reply that cannot be read counts the same way when it stops the
+  server while a compare loads.
+  A crash during a rerun reopens the pair with the memory the rerun asked for, and
   shows one message; it used to leave the pair failed.
 - The summary row reads the refine progress from the notifications, so it no
   longer shows "refining 0/287" while the status bar is at 286/287.

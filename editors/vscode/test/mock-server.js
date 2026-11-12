@@ -26,6 +26,8 @@
 //                                          server drops the one idle longest
 //   summary, on a session of a path containing "sumfail" -> an internal error, so the session fails to load
 //   open, a path containing "hog"     -> while its session lives, any other new session answers busy
+//   open, a path containing "crashlate" -> the process exits 2300 ms after answering, and its refinement never ends
+//   open, a path containing "crashy"  -> the process exits 100 ms after answering, and its refinement never ends
 //   summary, on a session of a path containing "lagsum" -> the answer comes 150 ms late, "slowsum" 600 ms
 //   summary, on a session of a path containing "sumjunk" -> its second one is answered with a frame
 //                                          whose body is not JSON
@@ -189,6 +191,8 @@ const METHODS = {
     if (pair.includes('stuck') || (pair.includes('busy') && tries <= 2)) {
       throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'sessions' });
     }
+    if (pair.includes('crashy')) setTimeout(() => process.exit(1), 100);
+    if (pair.includes('crashlate')) setTimeout(() => process.exit(1), 2300);
     const mem = p.mem === undefined ? limits.default_mem : parseMem(p.mem);
     if (mem > limits.max_session_mem) {
       throw new RpcError(CODE.too_large, `mem ${mem} is over the limit of ${limits.max_session_mem} per diff`, {
@@ -332,8 +336,8 @@ const METHODS = {
     if (typeof r !== 'object' || r === null || !Number.isInteger(r.start) || r.start < 1 || !Number.isInteger(r.count) || r.count < 0) {
       throw invalid('a');
     }
-    // The sumjunk pairs never end their refinement.
-    if (/sumjunk/.test(s.key)) return null;
+    // The crashy pairs never end their refinement, nor do the sumjunk ones.
+    if (/crashy|crashlate|sumjunk/.test(s.key)) return null;
     const end = r.start + Math.max(r.count, 1);
     const shown = fixture.segments.filter((seg) => seg.a.start < end && r.start <= seg.a.start + seg.a.count);
     setImmediate(() => {

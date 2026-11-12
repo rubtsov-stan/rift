@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { Server, Superseded } from '../../client';
+import { Link, Server, Superseded } from '../../client';
 import { Comparison, Compares, rerunOffer } from '../../comparison';
 import { OpenResult, RpcErrorObject } from '../../protocol';
 import * as fs from 'fs';
@@ -23,7 +23,7 @@ function setup(a = '/x/a.sql', mem = '256M') {
 }
 
 // A window's comparisons on the mock, logging what it is sent.
-function window(env: Record<string, string> = {}, onRestarted?: () => void) {
+function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: string, restarting: boolean) => void, onRestarted?: () => void) {
   const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-log-')), 'log');
   const errors: unknown[] = [];
   const server: Server = new Server({
@@ -31,7 +31,7 @@ function window(env: Record<string, string> = {}, onRestarted?: () => void) {
     args: [],
     minUptimeMs: 0,
     onNotification: (n, epoch) => w.handle(n, epoch),
-    onCrash: () => {},
+    onCrash: (reason, restarting) => crash?.(w, reason, restarting),
     onRestarted,
   });
   const w: Compares = new Compares(server, { change() {}, failed() {}, error: (e) => errors.push(e) });
@@ -127,6 +127,88 @@ describe('Comparison', () => {
   });
 });
 
+describe('Comparison and a server that keeps crashing', function () {
+  // Two mock processes start in it, which takes seconds on a loaded machine.
+  this.timeout(10_000);
+  it('gives up on a pair after it crashed the server twice, instead of reopening it forever', async () => {
+    const { server, w, log } = window({}, (c, reason, restarting) => c.lost(reason, restarting, false));
+    await w.compare('/x/crashy.sql', '/x/b.sql', '256M');
+    await until(() => w.shown?.state === 'failed');
+    // Leave room for a third round, which must not come.
+    await new Promise((r) => setTimeout(r, 600));
+    const reopens = log().filter((r) => r.method === 'open').length - 1;
+    assert.strictEqual(reopens, 1);
+    assert.strictEqual(w.shown!.state, 'failed');
+    assert.match(w.shown!.error!.message, /exited/);
+    server.dispose();
+  });
+});
+
+describe('Comparison and a server whose replies cannot be read', () => {
+  it('stops reopening a pair after its replies stopped the server twice', async () => {
+    let starts = 0;
+    // Every summary is answered with a body that is not JSON, which stops the process.
+    const link = (_n: unknown, onClose: (reason: string, deliberate: boolean) => void): Link => {
+      starts++;
+      let dead = false;
+      const waiting: ((e: Error) => void)[] = [];
+      return {
+        startedAt: Date.now(),
+        pid: undefined,
+        kill: () => {},
+        request: <T>(method: string) =>
+          new Promise<T>((resolve, reject) => {
+            waiting.push(reject);
+            setImmediate(() => {
+              if (dead) return;
+              if (method === 'initialize') return resolve({ protocol: 1, limits: { max_session_mem: 1 << 30 } } as T);
+              if (method === 'open') return resolve({ session: 1, reused: false, mem_bytes: 1, state: 'ready' } as T);
+              dead = true;
+              waiting.forEach((r) => r(new Error('the server sent a reply that is not JSON')));
+              onClose('the server sent a reply that is not JSON', true);
+            });
+          }),
+      };
+    };
+    const server: Server = new Server({ command: () => 'fake', args: [], link, onNotification: (n, e) => w.handle(n, e), onCrash: (r, s, d) => w.lost(r, s, d) });
+    const w: Compares = new Compares(server, { change() {}, failed() {}, error() {} });
+    await w.compare('/a', '/b', '64M');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(starts, 2);
+    assert.strictEqual(w.shown?.state, 'failed');
+    assert.match(w.shown!.error!.message, /not JSON/);
+  });
+});
+
+describe('Comparison crash count', () => {
+  const idle = () => new Comparison(undefined as unknown as Server, '/x/a.sql', '/x/b.sql', '256M', { change() {}, failed() {} });
+
+  it('counts a crash that comes long after the open, so a slow loop ends too', () => {
+    const cmp = idle();
+    const now = Date.now;
+    let t = now();
+    Date.now = () => t;
+    try {
+      assert.strictEqual(cmp.lost('exited', true), true);
+      t += 12_000;
+      assert.strictEqual(cmp.lost('exited', true), false);
+    } finally {
+      Date.now = now;
+    }
+  });
+
+  it('starts counting again once the refinement has ended', async () => {
+    const { server, cmp } = setup();
+    await cmp.open();
+    await until(() => cmp.state === 'ready');
+    assert.strictEqual(cmp.lost('exited', true), true);
+    await cmp.open();
+    cmp.handle({ method: 'progress', params: { session: cmp.session!, phase: 'refine', done: 5, total: 5 } });
+    assert.strictEqual(cmp.lost('exited', true), true);
+    server.dispose();
+  });
+});
+
 describe('Compares', () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const closes = (log: { method: string; params: Record<string, unknown> }[]) => log.filter((r) => r.method === 'close').map((r) => r.params.session);
@@ -208,7 +290,7 @@ describe('Comparison notices before its open answers', () => {
 describe('Comparison and a server that restarted', () => {
   it('sends no close for a session of the process that died', async () => {
     let restarted = false;
-    const { server, w, log } = window({}, () => (restarted = true));
+    const { server, w, log } = window({}, undefined, () => (restarted = true));
     await w.compare('/x/a.sql', '/x/b.sql', '256M');
     process.kill((await server.pid())!, 'SIGKILL');
     await until(() => restarted);
