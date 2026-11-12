@@ -1,0 +1,1014 @@
+{
+ "about": "Recorded by site/scripts/record-mcp.py. Requests and answers as they crossed standard input and output of rift-mcp.",
+ "sessions": [
+  {
+   "id": "sql",
+   "what": "1 GiB pg_dump-like SQL pair with inserts, deletes, edits and moved blocks",
+   "rift_gen": "rift-gen --seed 7 --size 1G --profile sql",
+   "a_bytes": 1073741876,
+   "b_bytes": 1074747414,
+   "server": {
+    "name": "rift-mcp",
+    "version": "0.3.2"
+   },
+   "steps": [
+    {
+     "note": "The client opens the connection.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+       "protocolVersion": "2025-06-18",
+       "capabilities": {},
+       "clientInfo": {
+        "name": "example-client",
+        "version": "1.0"
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "protocolVersion": "2025-06-18",
+       "capabilities": {
+        "tools": {}
+       },
+       "serverInfo": {
+        "name": "rift-mcp",
+        "version": "0.3.2"
+       }
+      }
+     },
+     "response_bytes": 145
+    },
+    {
+     "note": "The client asks which tools the server has.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "tools/list",
+      "params": {}
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+       "tools": [
+        {
+         "name": "hunks_at",
+         "description": "The difference in or next to a 1-based line of A, as unified diff text cut at `max_lines`.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "context": {
+            "description": "Equal lines to show around the change, default 3, at most 20.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "line": {
+            "description": "1-based line of A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "max_lines": {
+            "description": "Most diff lines to return, default 100, at most 500.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "line"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Lines": {
+            "description": "A run of lines.",
+            "properties": {
+             "count": {
+              "description": "Number of lines.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "start": {
+              "description": "First line, 1-based.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "start",
+             "count"
+            ],
+            "type": "object"
+           },
+           "Range": {
+            "description": "A differing range.",
+            "properties": {
+             "a": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of A."
+             },
+             "b": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of B."
+             },
+             "status": {
+              "description": "`differs`, or `approx` when the local diff was cut short.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "a",
+             "b",
+             "status"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "found": {
+            "description": "Whether a difference lies within `context` lines of the line.",
+            "type": "boolean"
+           },
+           "lines_shown": {
+            "description": "Diff lines in `text`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "lines_total": {
+            "description": "Diff lines the whole hunk has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "range": {
+            "anyOf": [
+             {
+              "$ref": "#/$defs/Range"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "description": "The range, with its context, when found."
+           },
+           "text": {
+            "description": "Unified diff text of the range, when found.",
+            "type": "string"
+           },
+           "truncated": {
+            "description": "`text` stops before the end of the hunk.",
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "found",
+           "range",
+           "text",
+           "lines_shown",
+           "lines_total",
+           "truncated"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "next_difference",
+         "description": "The first differing range of A that starts after the 1-based line `after_line` (0 for the first one). Pass a returned a.start to step to the next.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "after_line": {
+            "description": "The answer starts after this 1-based line of A; 0 for the first\ndifference. Pass a returned `a.start` to get the one after it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "after_line"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Lines": {
+            "description": "A run of lines.",
+            "properties": {
+             "count": {
+              "description": "Number of lines.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "start": {
+              "description": "First line, 1-based.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "start",
+             "count"
+            ],
+            "type": "object"
+           },
+           "Range": {
+            "description": "A differing range.",
+            "properties": {
+             "a": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of A."
+             },
+             "b": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of B."
+             },
+             "status": {
+              "description": "`differs`, or `approx` when the local diff was cut short.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "a",
+             "b",
+             "status"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "found": {
+            "description": "Whether another difference follows.",
+            "type": "boolean"
+           },
+           "range": {
+            "anyOf": [
+             {
+              "$ref": "#/$defs/Range"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "description": "The difference, when found."
+           }
+          },
+          "required": [
+           "found",
+           "range"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "summary",
+         "description": "Summarize the diff of two text files: line counts, segment counts by status, the first differing ranges and memory use. Builds the diff and keeps it for the other tools.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Lines": {
+            "description": "A run of lines.",
+            "properties": {
+             "count": {
+              "description": "Number of lines.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "start": {
+              "description": "First line, 1-based.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "start",
+             "count"
+            ],
+            "type": "object"
+           },
+           "Range": {
+            "description": "A differing range.",
+            "properties": {
+             "a": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of A."
+             },
+             "b": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of B."
+             },
+             "status": {
+              "description": "`differs`, or `approx` when the local diff was cut short.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "a",
+             "b",
+             "status"
+            ],
+            "type": "object"
+           },
+           "Tally": {
+            "description": "Segments of one status.",
+            "properties": {
+             "a_lines": {
+              "description": "Their lines in A.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "b_lines": {
+              "description": "Their lines in B.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "segments": {
+              "description": "Segments.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "segments",
+             "a_lines",
+             "b_lines"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a_bytes": {
+            "description": "Bytes in A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "a_lines": {
+            "description": "Lines in A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "approx": {
+            "$ref": "#/$defs/Tally",
+            "description": "Refined segments whose local diff was cut short, out of\n`refined_segments`."
+           },
+           "b_bytes": {
+            "description": "Bytes in B.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "b_lines": {
+            "description": "Lines in B.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "differs": {
+            "$ref": "#/$defs/Tally",
+            "description": "Differing segments not known to be approximate: not refined yet, or\nrefined exactly."
+           },
+           "equal": {
+            "$ref": "#/$defs/Tally",
+            "description": "Equal segments."
+           },
+           "first_differences": {
+            "description": "The first differing ranges in file order, at most 20.",
+            "items": {
+             "$ref": "#/$defs/Range"
+            },
+            "type": "array"
+           },
+           "identical": {
+            "description": "The files hold the same bytes.",
+            "type": "boolean"
+           },
+           "mem_budget_bytes": {
+            "description": "Memory budget of this diff, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "mem_reserved_bytes": {
+            "description": "Bytes of that budget the diff holds now.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "more_differences": {
+            "description": "Differing ranges beyond those listed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "refined_segments": {
+            "description": "Differing segments refined so far. It grows as hunks are asked for.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "a_lines",
+           "b_lines",
+           "a_bytes",
+           "b_bytes",
+           "identical",
+           "equal",
+           "differs",
+           "approx",
+           "refined_segments",
+           "first_differences",
+           "more_differences",
+           "mem_budget_bytes",
+           "mem_reserved_bytes"
+          ],
+          "type": "object"
+         }
+        }
+       ]
+      }
+     },
+     "response_bytes": 7889
+    },
+    {
+     "note": "How different are the two dumps?",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "tools/call",
+      "params": {
+       "name": "summary",
+       "arguments": {
+        "a": "a.sql",
+        "b": "b.sql"
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"a_bytes\":1073741876,\"a_lines\":13327101,\"approx\":{\"a_lines\":0,\"b_lines\":0,\"segments\":0},\"b_bytes\":1074747414,\"b_lines\":13337797,\"differs\":{\"a_lines\":969786,\"b_lines\":980482,\"segments\":6753},\"equal\":{\"a_lines\":12357315,\"b_lines\":12357315,\"segments\":6512},\"first_differences\":[{\"a\":{\"count\":131,\"start\":279},\"b\":{\"count\":130,\"start\":279},\"status\":\"differs\"},{\"a\":{\"count\":139,\"start\":905},\"b\":{\"count\":139,\"start\":904},\"status\":\"differs\"},{\"a\":{\"count\":55,\"start\":1232},\"b\":{\"count\":56,\"start\":1231},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":8096},\"b\":{\"count\":31,\"start\":8096},\"status\":\"differs\"},{\"a\":{\"count\":13,\"start\":9609},\"b\":{\"count\":21,\"start\":9600},\"status\":\"differs\"},{\"a\":{\"count\":49,\"start\":11781},\"b\":{\"count\":57,\"start\":11780},\"status\":\"differs\"},{\"a\":{\"count\":430,\"start\":17446},\"b\":{\"count\":110,\"start\":17453},\"status\":\"differs\"},{\"a\":{\"count\":19,\"start\":21544},\"b\":{\"count\":16,\"start\":21231},\"status\":\"differs\"},{\"a\":{\"count\":316,\"start\":22520},\"b\":{\"count\":319,\"start\":22204},\"status\":\"differs\"},{\"a\":{\"count\":75,\"start\":24979},\"b\":{\"count\":65,\"start\":24666},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":26662},\"b\":{\"count\":77,\"start\":26339},\"status\":\"differs\"},{\"a\":{\"count\":138,\"start\":26923},\"b\":{\"count\":141,\"start\":26610},\"status\":\"differs\"},{\"a\":{\"count\":352,\"start\":27606},\"b\":{\"count\":27,\"start\":27296},\"status\":\"differs\"},{\"a\":{\"count\":190,\"start\":28686},\"b\":{\"count\":520,\"start\":28051},\"status\":\"differs\"},{\"a\":{\"count\":203,\"start\":30592},\"b\":{\"count\":203,\"start\":30287},\"status\":\"differs\"},{\"a\":{\"count\":182,\"start\":31085},\"b\":{\"count\":172,\"start\":30780},\"status\":\"differs\"},{\"a\":{\"count\":197,\"start\":36787},\"b\":{\"count\":187,\"start\":36472},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":36984},\"b\":{\"count\":59,\"start\":36659},\"status\":\"differs\"},{\"a\":{\"count\":142,\"start\":37727},\"b\":{\"count\":133,\"start\":37421},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":38498},\"b\":{\"count\":57,\"start\":38183},\"status\":\"differs\"}],\"identical\":false,\"mem_budget_bytes\":67108864,\"mem_reserved_bytes\":25194913,\"more_differences\":6733,\"refined_segments\":0}"
+        }
+       ],
+       "structuredContent": {
+        "a_bytes": 1073741876,
+        "a_lines": 13327101,
+        "approx": {
+         "a_lines": 0,
+         "b_lines": 0,
+         "segments": 0
+        },
+        "b_bytes": 1074747414,
+        "b_lines": 13337797,
+        "differs": {
+         "a_lines": 969786,
+         "b_lines": 980482,
+         "segments": 6753
+        },
+        "equal": {
+         "a_lines": 12357315,
+         "b_lines": 12357315,
+         "segments": 6512
+        },
+        "first_differences": [
+         {
+          "a": {
+           "count": 131,
+           "start": 279
+          },
+          "b": {
+           "count": 130,
+           "start": 279
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 139,
+           "start": 905
+          },
+          "b": {
+           "count": 139,
+           "start": 904
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 55,
+           "start": 1232
+          },
+          "b": {
+           "count": 56,
+           "start": 1231
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 40,
+           "start": 8096
+          },
+          "b": {
+           "count": 31,
+           "start": 8096
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 13,
+           "start": 9609
+          },
+          "b": {
+           "count": 21,
+           "start": 9600
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 49,
+           "start": 11781
+          },
+          "b": {
+           "count": 57,
+           "start": 11780
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 430,
+           "start": 17446
+          },
+          "b": {
+           "count": 110,
+           "start": 17453
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 19,
+           "start": 21544
+          },
+          "b": {
+           "count": 16,
+           "start": 21231
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 316,
+           "start": 22520
+          },
+          "b": {
+           "count": 319,
+           "start": 22204
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 75,
+           "start": 24979
+          },
+          "b": {
+           "count": 65,
+           "start": 24666
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 67,
+           "start": 26662
+          },
+          "b": {
+           "count": 77,
+           "start": 26339
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 138,
+           "start": 26923
+          },
+          "b": {
+           "count": 141,
+           "start": 26610
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 352,
+           "start": 27606
+          },
+          "b": {
+           "count": 27,
+           "start": 27296
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 190,
+           "start": 28686
+          },
+          "b": {
+           "count": 520,
+           "start": 28051
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 203,
+           "start": 30592
+          },
+          "b": {
+           "count": 203,
+           "start": 30287
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 182,
+           "start": 31085
+          },
+          "b": {
+           "count": 172,
+           "start": 30780
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 197,
+           "start": 36787
+          },
+          "b": {
+           "count": 187,
+           "start": 36472
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 40,
+           "start": 36984
+          },
+          "b": {
+           "count": 59,
+           "start": 36659
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 142,
+           "start": 37727
+          },
+          "b": {
+           "count": 133,
+           "start": 37421
+          },
+          "status": "differs"
+         },
+         {
+          "a": {
+           "count": 67,
+           "start": 38498
+          },
+          "b": {
+           "count": 57,
+           "start": 38183
+          },
+          "status": "differs"
+         }
+        ],
+        "identical": false,
+        "mem_budget_bytes": 67108864,
+        "mem_reserved_bytes": 25194913,
+        "more_differences": 6733,
+        "refined_segments": 0
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 4604
+    },
+    {
+     "note": "Where is the first difference?",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "tools/call",
+      "params": {
+       "name": "next_difference",
+       "arguments": {
+        "a": "a.sql",
+        "b": "b.sql",
+        "after_line": 0
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"found\":true,\"range\":{\"a\":{\"count\":131,\"start\":279},\"b\":{\"count\":130,\"start\":279},\"status\":\"differs\"}}"
+        }
+       ],
+       "structuredContent": {
+        "found": true,
+        "range": {
+         "a": {
+          "count": 131,
+          "start": 279
+         },
+         "b": {
+          "count": 130,
+          "start": 279
+         },
+         "status": "differs"
+        }
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 336
+    },
+    {
+     "note": "What does it change?",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "tools/call",
+      "params": {
+       "name": "hunks_at",
+       "arguments": {
+        "a": "a.sql",
+        "b": "b.sql",
+        "line": 279
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"found\":true,\"lines_shown\":7,\"lines_total\":7,\"range\":{\"a\":{\"count\":1,\"start\":383},\"b\":{\"count\":0,\"start\":383},\"status\":\"differs\"},\"text\":\"@@ -380,7 +380,6 @@\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (380, 514366, 'shipped', 5345.94, 'acxjpn');\\n 381\\t178722\\tcancelled\\t2930.54\\twmojdqnzik\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (382, 679322, 'cancelled', 2566.30, 'mjqkm');\\n-383\\t668107\\tshipped\\t5325.74\\tzu\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (384, 442363, 'new', 6149.49, 'dt');\\n 385\\t359182\\tcancelled\\t475.15\\tztbyhdlmxk\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (386, 967299, 'shipped', 4486.93, 'fbw');\\n\",\"truncated\":false}"
+        }
+       ],
+       "structuredContent": {
+        "found": true,
+        "lines_shown": 7,
+        "lines_total": 7,
+        "range": {
+         "a": {
+          "count": 1,
+          "start": 383
+         },
+         "b": {
+          "count": 0,
+          "start": 383
+         },
+         "status": "differs"
+        },
+        "text": "@@ -380,7 +380,6 @@\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (380, 514366, 'shipped', 5345.94, 'acxjpn');\n 381\t178722\tcancelled\t2930.54\twmojdqnzik\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (382, 679322, 'cancelled', 2566.30, 'mjqkm');\n-383\t668107\tshipped\t5325.74\tzu\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (384, 442363, 'new', 6149.49, 'dt');\n 385\t359182\tcancelled\t475.15\tztbyhdlmxk\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (386, 967299, 'shipped', 4486.93, 'fbw');\n",
+        "truncated": false
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 1714
+    },
+    {
+     "note": "The widest change in the list. Show only the start of it.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "tools/call",
+      "params": {
+       "name": "hunks_at",
+       "arguments": {
+        "a": "a.sql",
+        "b": "b.sql",
+        "line": 28686,
+        "max_lines": 20
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"found\":true,\"lines_shown\":20,\"lines_total\":352,\"range\":{\"a\":{\"count\":16,\"start\":28821},\"b\":{\"count\":346,\"start\":28186},\"status\":\"differs\"},\"text\":\"@@ -28818,22 +28183,352 @@\\n 28443\\t32777\\tcancelled\\t8873.43\\tzhc\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28444, 296278, 'shipped', 7467.66, 'cmmnytdyzsj');\\n 28445\\t913799\\tcancelled\\t3267.56\\tktunr\\n+INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28446, 174168, 'shipped', 1385.70, 'ioovgih');\\n+28447\\t499561\\tcancelled\\t9994.88\\tqizaujbi\\n+INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28448, 704813, 'new', 4859.69, 'dsobpdkqe');\\n+28449\\t828642\\tshipped\\t7342.24\\tqwypvp\\n+INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28450, 908711, 'paid', 5483.73, 'lcqonslap');\\n 28451\\t999303\\tcancelled\\t1512.15\\tuijfqtjcj\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28452, 479486, 'cancelled', 3700.34, 'zqpr');\\n 28453\\t554024\\tcancelled\\t1672.23\\tfalfv\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28454, 9760, 'paid', 6174.98, 'ifwo');\\n 28455\\t991449\\tshipped\\t3319.26\\tvrsjslssmjn\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28456, 157254, 'cancelled', 7496.42, 'aahttrvld');\\n 28457\\t368718\\tnew\\t2459.11\\tcedknmrd\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28458, 369281, 'shipped', 4131.31, 'zyykjjufmln');\\n 28459\\t89205\\tpaid\\t4404.08\\tpoeenyh\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28460, 901705, 'new', 417.00, 'dlvphtmvof');\\n 28461\\t167102\\tpaid\\t3298.59\\thukd\\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28462, 291058, 'shipped', 8200.97, 'it');\\n\",\"truncated\":true}"
+        }
+       ],
+       "structuredContent": {
+        "found": true,
+        "lines_shown": 20,
+        "lines_total": 352,
+        "range": {
+         "a": {
+          "count": 16,
+          "start": 28821
+         },
+         "b": {
+          "count": 346,
+          "start": 28186
+         },
+         "status": "differs"
+        },
+        "text": "@@ -28818,22 +28183,352 @@\n 28443\t32777\tcancelled\t8873.43\tzhc\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28444, 296278, 'shipped', 7467.66, 'cmmnytdyzsj');\n 28445\t913799\tcancelled\t3267.56\tktunr\n+INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28446, 174168, 'shipped', 1385.70, 'ioovgih');\n+28447\t499561\tcancelled\t9994.88\tqizaujbi\n+INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28448, 704813, 'new', 4859.69, 'dsobpdkqe');\n+28449\t828642\tshipped\t7342.24\tqwypvp\n+INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28450, 908711, 'paid', 5483.73, 'lcqonslap');\n 28451\t999303\tcancelled\t1512.15\tuijfqtjcj\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28452, 479486, 'cancelled', 3700.34, 'zqpr');\n 28453\t554024\tcancelled\t1672.23\tfalfv\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28454, 9760, 'paid', 6174.98, 'ifwo');\n 28455\t991449\tshipped\t3319.26\tvrsjslssmjn\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28456, 157254, 'cancelled', 7496.42, 'aahttrvld');\n 28457\t368718\tnew\t2459.11\tcedknmrd\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28458, 369281, 'shipped', 4131.31, 'zyykjjufmln');\n 28459\t89205\tpaid\t4404.08\tpoeenyh\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28460, 901705, 'new', 417.00, 'dlvphtmvof');\n 28461\t167102\tpaid\t3298.59\thukd\n INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (28462, 291058, 'shipped', 8200.97, 'it');\n",
+        "truncated": true
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 3887
+    },
+    {
+     "note": "And the difference after that one?",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "tools/call",
+      "params": {
+       "name": "next_difference",
+       "arguments": {
+        "a": "a.sql",
+        "b": "b.sql",
+        "after_line": 28686
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"found\":true,\"range\":{\"a\":{\"count\":203,\"start\":30592},\"b\":{\"count\":203,\"start\":30287},\"status\":\"differs\"}}"
+        }
+       ],
+       "structuredContent": {
+        "found": true,
+        "range": {
+         "a": {
+          "count": 203,
+          "start": 30592
+         },
+         "b": {
+          "count": 203,
+          "start": 30287
+         },
+         "status": "differs"
+        }
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 344
+    },
+    {
+     "note": "Ask for a bigger memory budget than the server allows.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "tools/call",
+      "params": {
+       "name": "summary",
+       "arguments": {
+        "a": "a.sql",
+        "b": "b.sql",
+        "mem": "1G"
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "mem 1073741824 is over the limit of 268435456 per diff"
+        }
+       ],
+       "isError": true
+      }
+     },
+     "response_bytes": 142
+    }
+   ]
+  }
+ ]
+}
