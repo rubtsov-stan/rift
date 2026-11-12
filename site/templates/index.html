@@ -78,7 +78,7 @@
 <section><h3 class="cap">MCP <span>a diff an MCP client can query</span></h3>
 <p class="prose-lite"><code>rift-mcp</code> lets an MCP client, such as an editor or a chat app, ask about the diff of two huge files without loading them. It has three tools, <code>summary</code>, <code>hunks_at</code> and <code>next_difference</code>, and every answer has a size limit.</p>
 {{ m::term(name="mcp-summary", title="rift-mcp, one tools/call", caption="Captured over standard input and output after the initialize handshake. The call is shown without its jsonrpc and id fields. The answer is cut: its text copy, the byte counts and all but two of the first 20 ranges are left out. rift-mcp builds its diff with a 64 MiB budget unless the call sets <code>mem</code>, so the counts differ from the CLI's.") }}
-<p class="note">Guide: <a href="{{ get_url(path='guide/mcp/') | safe }}">MCP server</a>.</p></section>
+<p class="note">Guide: <a href="{{ get_url(path='guide/mcp/') | safe }}">MCP server to diff large files</a>, with a recorded session on a 1 GiB pair and setup snippets for four MCP clients.</p></section>
 <section id="vscode"><h3 class="cap">VS Code <span>the extension</span></h3>
 <p class="prose-lite">Compare two huge files from VS Code and open any difference in VS Code's own diff editor.</p>
 {#- A video poster downloads with the page, so the demo is a lazy GIF instead. -#}
