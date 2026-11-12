@@ -1,14 +1,22 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { Api } from '../../extension';
 import { Node } from '../../tree';
-import { REAL, mockBinary, until } from '../mock';
+import { REAL, mockBinary, mockLog, until } from '../mock';
 
 export const ID = 'rubtsov-stan.rift-diff';
+
+// The file the mock logs its requests to, for tests that must see what was sent.
+export const MOCK_LOG = path.join(os.tmpdir(), `rift-mock-log-${process.pid}`);
+export const requests = () => mockLog(MOCK_LOG);
+export const clearRequests = () => fs.rmSync(MOCK_LOG, { force: true });
 
 export async function api(): Promise<Api> {
   const ext = vscode.extensions.getExtension<Api>(ID)!;
   const a = await ext.activate();
-  await vscode.workspace.getConfiguration('rift').update('path', REAL ?? mockBinary(), vscode.ConfigurationTarget.Global);
+  await vscode.workspace.getConfiguration('rift').update('path', REAL ?? mockBinary({ MOCK_LOG }), vscode.ConfigurationTarget.Global);
   return a;
 }
 

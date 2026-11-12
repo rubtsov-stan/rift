@@ -18,8 +18,19 @@
 //   hunk on segment 1 or 7              -> pending; segment_ready follows (also via set_visible)
 //   hunk on segment 9                   -> B side stored cut at 300 lines: truncated whatever max_lines says
 //   hunk on segment 7                   -> a 10 KB line on A, cut at max_line_bytes; a lossy line on B
+//   open, a path containing "failscan" -> the scan fails as for a mem below 1M
+//   open, a path containing "lag"     -> the answer comes 100 ms late, the request is handled at once
 //   open, a path containing "garbage" -> a frame whose body is not JSON, instead of the answer
 //   open, a path containing "nullbody" -> a frame whose body is the JSON value null
+//   open, a path containing "evictor" -> when it opens a session, every other session is dropped, as a full
+//                                          server drops the one idle longest
+//   summary, on a session of a path containing "sumfail" -> an internal error, so the session fails to load
+//   open, a path containing "hog"     -> while its session lives, any other new session answers busy
+//   summary, on a session of a path containing "lagsum" -> the answer comes 150 ms late, "slowsum" 600 ms
+//   summary, on a session of a path containing "sumjunk" -> its second one is answered with a frame
+//                                          whose body is not JSON
+//   open, a path containing "freshlag" -> the answer is 100 ms late only when the open created the session
+// With MOCK_LOG set to a file name, every request is appended to it as one JSON line {method, params}.
 // With MOCK_FAIL_INIT=1 in the environment, or while the file named by MOCK_FAIL_INIT_FILE exists,
 // initialize fails (internal error).
 // Hunks are stored with context 3; a smaller context trims them, a larger
@@ -123,7 +134,21 @@ function handle(body) {
     process.stdout.write(junk);
     return;
   }
-  const reply = (result) => send({ jsonrpc: '2.0', id: msg.id, result });
+  if (process.env.MOCK_LOG) fs.appendFileSync(process.env.MOCK_LOG, `${JSON.stringify({ method: msg.method, params })}\n`);
+  const sess = msg.method === 'summary' ? sessions.get(params.session) : undefined;
+  if (sess?.key.includes('sumjunk') && (sess.sums = (sess.sums ?? 0) + 1) > 1) {
+    const junk = Buffer.from('{not json');
+    process.stdout.write(`Content-Length: ${junk.length}\r\n\r\n`);
+    process.stdout.write(junk);
+    return;
+  }
+  const sumLag = sess?.key.includes('slowsum') ? 600 : sess?.key.includes('lagsum') ? 150 : 0;
+  const late = sumLag || (msg.method === 'open' && `${params.a}`.includes('lag') && !`${params.a}`.includes('freshlag') ? 100 : 0);
+  const freshlag = msg.method === 'open' && `${params.a}`.includes('freshlag') ? 100 : 0;
+  const reply = (result) => {
+    const wait = late || (result && !result.reused ? freshlag : 0);
+    return wait ? setTimeout(send, wait, { jsonrpc: '2.0', id: msg.id, result }) : send({ jsonrpc: '2.0', id: msg.id, result });
+  };
   const fail = (e) => send({ jsonrpc: '2.0', id: msg.id, error: errorObject({ code: e.code ?? -32603, message: e.message, data: e.data }) });
   try {
     if (!METHODS[msg.method]) throw new RpcError(CODE.method_not_found, `no method ${msg.method}`);
@@ -172,12 +197,21 @@ const METHODS = {
       });
     }
     const key = `${p.a}\0${p.b}`;
+    if (!key.includes('hog') && ![...sessions.values()].some((s) => s.key === key) && [...sessions.values()].some((s) => s.key.includes('hog'))) {
+      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'memory' });
+    }
     for (const [id, s] of sessions) {
       if (s.key !== key) continue;
       if (s.state !== 'failed') return { session: id, reused: true, mem_bytes: s.mem, state: s.state };
       sessions.delete(id);
     }
     const id = ++lastId;
+    if (key.includes('evictor')) {
+      for (const [other, o] of sessions) {
+        clearTimeout(o.timer);
+        sessions.delete(other);
+      }
+    }
     const s = { key, state: 'scanning', mem, scanned: 0, timer: null, error: null, done: fixture.summary.progress.done, refined: new Map() };
     sessions.set(id, s);
     const every = p.a.includes('slow') || p.b.includes('slow') ? 500 : 10;
@@ -188,7 +222,7 @@ const METHODS = {
       notify('progress', { session: id, phase: 'scan', done: s.scanned, total: scanTotal });
       if (step < fixture.scan_steps) {
         s.timer = setTimeout(tick, every);
-      } else if (mem < 1 << 20) {
+      } else if (mem < 1 << 20 || key.includes('failscan')) {
         s.state = 'failed';
         s.error = errorObject(budgetError(mem));
         notify('session_state', { session: id, state: 'failed', error: s.error });
@@ -204,6 +238,7 @@ const METHODS = {
 
   summary(p) {
     const s = session(p);
+    if (s.key.includes('sumfail')) throw new RpcError(-32603, 'summary failed on purpose');
     if (s.state === 'failed') return { state: 'failed', error: s.error };
     if (s.state === 'scanning') {
       return {
@@ -292,11 +327,13 @@ const METHODS = {
   },
 
   set_visible(p) {
-    const [id] = readySession(p);
+    const [id, s] = readySession(p);
     const r = p.a;
     if (typeof r !== 'object' || r === null || !Number.isInteger(r.start) || r.start < 1 || !Number.isInteger(r.count) || r.count < 0) {
       throw invalid('a');
     }
+    // The sumjunk pairs never end their refinement.
+    if (/sumjunk/.test(s.key)) return null;
     const end = r.start + Math.max(r.count, 1);
     const shown = fixture.segments.filter((seg) => seg.a.start < end && r.start <= seg.a.start + seg.a.count);
     setImmediate(() => {
