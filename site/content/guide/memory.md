@@ -33,11 +33,13 @@ Below the smallest limit that works for a pair, Rift exits with status 2 and a b
 
 {{ term(name="mem-error", title="a limit that is too small") }}
 
-The smallest limit that works depends on the files. The limit in the message is not a lower bound for the whole run. A run at that limit can stop at a later stage and name a higher one:
+The smallest limit that works depends on the files, with one fixed floor: a full diff needs about 10.3 MiB (`10475K`) even for two files of a few bytes, because the buffers that compare the lines of a region are about 5 MiB, and the refinement gets half the limit. `--summary` and key mode do not compare regions and run below it. At exactly `10475K` a region may still come out approximate; `11M` is exact for small files.
+
+Each limit a refusal names is at least twice the one that was refused, so a few reruns reach one that works. The last step can overshoot what the run needs by up to a factor of two. The limit in the message is not a lower bound for the whole run. A run at that limit can stop at a later stage and name a higher one:
 
 {{ term(name="mem-rerun", title="the suggested limit, run again") }}
 
-So take the advice as a direction. Round up and try again, or start from a limit with room, such as `2M` here:
+So take the advice as a direction. Follow it, or start from a limit with room, such as `2M` here:
 
 {{ term(name="mem-ok", kind="summary", title="a limit with room") }}
 

@@ -60,7 +60,10 @@ pub struct Args {
     pub summary: bool,
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),
     /// at least 64K. The output is identical on any machine for the same
-    /// --mem and input.
+    /// --mem and input. A full diff needs about 10.3 MiB
+    /// (10475K), whatever the files hold, for the buffers that compare
+    /// the lines of a region; --summary and --key go lower. A refused run
+    /// names a --mem to rerun with, at least twice the one refused.
     #[arg(long, default_value = "256M", value_parser = parse_mem)]
     pub mem: Bytes,
     /// Browse the diff in the terminal instead of printing it.
