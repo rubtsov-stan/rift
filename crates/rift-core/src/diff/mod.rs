@@ -13,10 +13,11 @@
 //! for the life of the diff; the samples are released once the map is
 //! built. Refine half, in this order: the front end's share (two line
 //! readers, the line buffer and the 1 MiB output buffer of the unified
-//! writer), then two line readers and four line buffers for each worker
-//! the budget allows, whether it starts or not, then the moved blocks and, while they are found, two comparison
-//! buffers (see [`Moves`]), then the scheduler, which takes what is left
-//! for its row table, its hunk cache and the jobs' working sets. Line
+//! writer), then the moved blocks' list, taken with the search off too,
+//! then two line readers and four line buffers for each worker the budget
+//! allows, whether it starts or not, then, while the blocks are found, two
+//! comparison buffers (see [`Moves`]), then the scheduler, which takes what
+//! is left for its row table, its hunk cache and the jobs' working sets. Line
 //! buffers are bounded because a reader returns a line whole only when it
 //! fits its buffer; longer lines travel in pieces of 64 KiB.
 
@@ -82,8 +83,9 @@ fn estimate(n: u64, m: u64) -> Bytes {
 /// thread count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
-    /// Look for moved blocks. When false no seed is compared and nothing
-    /// is reserved for the blocks; the edit script is the same either way.
+    /// Look for moved blocks. When false no seed is compared, but the
+    /// block list's share is set aside all the same, so the edit script
+    /// and its approximate marks are the same either way.
     pub moves: bool,
 }
 
@@ -213,6 +215,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             .into());
         }
         let front = budget.try_reserve(Half::Refine, Bytes(front_bytes))?;
+        let list = move_list(budget, off_chain.pairs().len(), least - front_bytes);
         let free = budget
             .available(Half::Refine)
             .0
@@ -268,9 +271,10 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
                 &mb,
                 WORKER_SCRATCH,
                 budget,
+                list,
             )?
         } else {
-            Moves::off()
+            Moves::off_holding(list)
         };
         let lines_a = IndexedLines::new(a, index_a, budget, Half::Refine, FRONT_SCRATCH)?;
         let lines_b = IndexedLines::new(b, index_b, budget, Half::Refine, FRONT_SCRATCH)?;
@@ -469,6 +473,17 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     fn moves_disabled(&self) -> bool {
         self.moves.disabled()
     }
+}
+
+/// The moved blocks' list for `pairs` seeds, when the Refine half keeps
+/// `rest` free besides it. Sized from the budget and the seeds and taken
+/// with the search off too, before the workers, so neither the search nor
+/// the cores change what the scheduler gets.
+fn move_list(budget: &Budget, pairs: usize, rest: u64) -> Option<Reservation> {
+    let list = Moves::list_bytes(pairs, budget);
+    (budget.available(Half::Refine).0 >= rest + list.0)
+        .then(|| budget.try_reserve(Half::Refine, list).ok())
+        .flatten()
 }
 
 /// A front-end reader that, before each read, points the reader at the

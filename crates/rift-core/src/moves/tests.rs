@@ -12,20 +12,26 @@ fn rows(n: u64, f: impl Fn(u64) -> String) -> Vec<u8> {
     (0..n).flat_map(|i| f(i).into_bytes()).collect()
 }
 
+/// [`Moves::find`] with the block list reserved as `Diff` reserves it.
+fn search(
+    pairs: &[[LineNo; 2]],
+    segments: &[Segment],
+    a: &impl LineAccess,
+    b: &impl LineAccess,
+    budget: &Budget,
+) -> Moves {
+    let list = budget
+        .try_reserve(Half::Refine, Moves::list_bytes(pairs.len(), budget))
+        .ok();
+    Moves::find(pairs, segments, a, b, CAP, budget, list).unwrap()
+}
+
 /// Moved blocks of `a` against `b`, found from the skeleton as `Diff` does.
 fn moves(a: &[u8], b: &[u8]) -> Moves {
     let budget = Budget::new(Bytes(64 << 20));
     let (_, _, map) = build_pair(a, b, &budget).unwrap();
     let (ma, mb) = (MemLines::new(a), MemLines::new(b));
-    Moves::find(
-        map.off_chain().pairs(),
-        map.segments(),
-        &ma,
-        &mb,
-        CAP,
-        &budget,
-    )
-    .unwrap()
+    search(map.off_chain().pairs(), map.segments(), &ma, &mb, &budget)
 }
 
 fn block(a: Range<u64>, b: Range<u64>) -> MovedBlock {
@@ -90,7 +96,7 @@ fn find(a: &[u8], b: &[u8], pairs: &[[LineNo; 2]], budget: &Budget) -> Moves {
         b: LineNo(0)..LineNo(mb.line_count()),
         status: SegmentStatus::Differs,
     };
-    Moves::find(pairs, &[seg], &ma, &mb, CAP, budget).unwrap()
+    search(pairs, &[seg], &ma, &mb, budget)
 }
 
 #[test]
@@ -129,55 +135,76 @@ fn a_run_stops_at_an_equal_segment() {
     let (ma, mb) = (MemLines::new(a), MemLines::new(b));
     let budget = Budget::new(Bytes(16 << 20));
     let pairs = [[LineNo(3), LineNo(9)]];
-    let m = Moves::find(&pairs, &segs, &ma, &mb, CAP, &budget).unwrap();
+    let m = search(&pairs, &segs, &ma, &mb, &budget);
     assert_eq!(m.blocks(), []);
 }
 
 #[test]
-fn a_budget_too_small_skips_moves_and_holds_nothing() {
+fn a_budget_too_small_for_the_buffers_skips_moves() {
     let (a, b) = moved(1000, 100, 20, 600);
     let budget = Budget::new(Bytes(64 << 20));
     let (_, _, map) = build_pair(&a[..], &b[..], &budget).unwrap();
     let (ma, mb) = (MemLines::new(&a), MemLines::new(&b));
-    // Too small for the buffers; then room for the buffers but not a block.
+    let pairs = map.off_chain().pairs();
     for total in [work(CAP).0, 2 * work(CAP).0] {
         let tiny = Budget::new(Bytes(total));
-        let m = Moves::find(
-            map.off_chain().pairs(),
-            map.segments(),
-            &ma,
-            &mb,
-            CAP,
-            &tiny,
-        )
-        .unwrap();
+        let m = search(pairs, map.segments(), &ma, &mb, &tiny);
         assert!(m.skipped());
         assert_eq!(m.blocks(), []);
+        assert_eq!(
+            tiny.used(Half::Refine),
+            Moves::list_bytes(pairs.len(), &tiny)
+        );
+        drop(m);
         assert_eq!(tiny.used(Half::Refine), Bytes(0));
     }
 }
 
 #[test]
-fn the_blocks_found_stay_reserved_and_the_rest_is_returned() {
+fn the_list_stays_reserved_whole_until_dropped() {
     let (a, b) = moved(1000, 100, 20, 600);
     let budget = Budget::new(Bytes(64 << 20));
     let (_, _, map) = build_pair(&a[..], &b[..], &budget).unwrap();
     let (ma, mb) = (MemLines::new(&a), MemLines::new(&b));
     let before = budget.used(Half::Refine);
-    let m = Moves::find(
-        map.off_chain().pairs(),
-        map.segments(),
-        &ma,
-        &mb,
-        CAP,
-        &budget,
-    )
-    .unwrap();
+    let pairs = map.off_chain().pairs();
+    let m = search(pairs, map.segments(), &ma, &mb, &budget);
     assert_eq!(m.blocks().len(), 1);
     assert_eq!(
-        budget.used(Half::Refine).0 - before.0,
-        BLOCK_BYTES * m.blocks.capacity() as u64
+        Bytes(budget.used(Half::Refine).0 - before.0),
+        Moves::list_bytes(pairs.len(), &budget)
     );
     drop(m);
     assert_eq!(budget.used(Half::Refine), before);
+}
+
+/// Ten pairs of five-line runs, swapped in B, each pair between lines that
+/// stay: one moved block per pair.
+fn swapped_runs() -> (Vec<u8>, Vec<u8>) {
+    let run = |s: u64, k: u64| rows(5, |i| format!("row {s} {k} {i}\n"));
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    for s in 0..10 {
+        let sep = format!("stays {s}\n").into_bytes();
+        a.extend([run(s, 0), run(s, 1), sep.clone()].concat());
+        b.extend([run(s, 1), run(s, 0), sep].concat());
+    }
+    (a, b)
+}
+
+#[test]
+fn a_full_list_keeps_the_blocks_found_first() {
+    let (a, b) = swapped_runs();
+    let all = moves(&a, &b);
+    assert!(all.blocks().len() > 4, "{:?}", all.blocks());
+    assert!(!all.full());
+    let budget = Budget::new(Bytes(64 << 20));
+    let (_, _, map) = build_pair(&a[..], &b[..], &budget).unwrap();
+    let (ma, mb) = (MemLines::new(&a), MemLines::new(&b));
+    let list = budget
+        .try_reserve(Half::Refine, Bytes(4 * BLOCK_BYTES))
+        .ok();
+    let pairs = map.off_chain().pairs();
+    let m = Moves::find(pairs, map.segments(), &ma, &mb, CAP, &budget, list).unwrap();
+    assert!(m.full() && !m.skipped());
+    assert_eq!(m.blocks(), &all.blocks()[..4]);
 }

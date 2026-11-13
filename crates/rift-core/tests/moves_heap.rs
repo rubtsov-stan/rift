@@ -41,7 +41,9 @@ fn check(len: usize) {
         .find_map(|budget| {
             let before = alloc::current();
             alloc::reset_peak();
-            let m = Moves::find(pairs, map.segments(), &ra, &rb, CAP, &budget).unwrap();
+            let list = Moves::list_bytes(pairs.len(), &budget);
+            let list = budget.try_reserve(Half::Refine, list).ok();
+            let m = Moves::find(pairs, map.segments(), &ra, &rb, CAP, &budget, list).unwrap();
             let peak = Bytes(alloc::peak().0 - before.0);
             (!m.skipped()).then_some((m, budget, peak))
         })
@@ -50,7 +52,8 @@ fn check(len: usize) {
     let half = budget.capacity(Half::Refine);
     assert!(peak <= half, "{len}: peak {peak} above the half of {half}");
     let held = budget.used(Half::Refine);
-    assert!(held.0 <= 16 * 32, "{len}: {held} held after detection");
+    let list = Moves::list_bytes(pairs.len(), &budget);
+    assert_eq!(held, list, "{len}: {held} held after detection");
     drop(moves);
     assert_eq!(budget.used(Half::Refine), Bytes(0));
 }
