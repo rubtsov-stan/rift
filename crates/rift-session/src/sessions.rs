@@ -235,13 +235,15 @@ impl Session {
         } else {
             None
         };
-        let threads = rift_core::budget::cores().min(4);
         let diff = Diff::with_watch(
             Arc::new(a),
             Arc::new(b),
             &budget,
-            threads,
-            Config::default(),
+            rift_core::budget::cores().min(SESSION_WORKERS),
+            Config {
+                workers: SESSION_WORKERS,
+                ..Config::default()
+            },
             &self.watch,
         )
         .map_err(build)?;
@@ -265,6 +267,10 @@ struct Entry {
     session: Arc<Session>,
     used: Instant,
 }
+
+/// Refine workers a session may start, and holds buffers for whatever
+/// the cores: several sessions share the machine.
+const SESSION_WORKERS: usize = 4;
 
 /// How long an `open` that found only observed sessions to evict waits for
 /// an observer to let go. An observer reads one session for one tick of

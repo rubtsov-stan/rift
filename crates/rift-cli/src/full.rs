@@ -39,7 +39,10 @@ pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, F
         Arc::clone(&files.b),
         &budget,
         threads(mem),
-        Config { moves: files.moves },
+        Config {
+            moves: files.moves,
+            ..Config::default()
+        },
     )?)
 }
 

@@ -607,3 +607,36 @@ fn an_excerpt_of_one_line_fits_an_empty_pool() {
     let e = session.excerpt(&req).unwrap();
     assert_eq!((e.a.lines.len(), e.b.lines.len()), (1, 1));
 }
+
+/// A session holds buffers for the refine workers it may start, 4, not
+/// for the 8 a command-line run may: at 64 MiB the one changed line among
+/// 75 000 equal ones is refined exactly, as in 0.3.2.
+#[test]
+fn a_session_keeps_its_scheduler_share() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = "same line\n".repeat(75_000);
+    let mut b = a.clone();
+    b.replace_range(375_000..375_010, "other line\n");
+    let (a, b) = (
+        write(dir.path(), "a", a.as_bytes()),
+        write(dir.path(), "b", b.as_bytes()),
+    );
+    let s = sessions();
+    let session = s.open(&a, &b, Some(Bytes::mib(64))).unwrap().session;
+    assert_eq!(session.wait(), SessionState::Ready);
+    let diff = session.diff().unwrap();
+    let i = (0..diff.segments().len())
+        .find(|&i| diff.segments()[i].status != SegmentStatus::Equal)
+        .unwrap();
+    let start = Instant::now();
+    let state = loop {
+        match diff.hunk(i) {
+            HunkState::Pending => {
+                assert!(start.elapsed() < Duration::from_secs(60), "still pending");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            other => break other,
+        }
+    };
+    assert!(matches!(state, HunkState::Ready(_)), "{state:?}");
+}

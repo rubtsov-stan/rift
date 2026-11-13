@@ -87,11 +87,18 @@ pub struct Config {
     /// block list's share is set aside all the same, so the edit script
     /// and its approximate marks are the same either way.
     pub moves: bool,
+    /// Most refine workers the Refine half holds buffers for, whether
+    /// they start or not; at most [`MAX_THREADS`]. A fixed number, never
+    /// the machine's, so the diff does not depend on the machine.
+    pub workers: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { moves: true }
+        Self {
+            moves: true,
+            workers: MAX_THREADS,
+        }
     }
 }
 
@@ -138,9 +145,9 @@ pub struct Written {
 impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> Diff<A, B> {
     /// Scans `a` and `b`, builds the segment map and starts up to `threads`
     /// refinement workers. The Refine half holds buffers for as many
-    /// workers as fit half of what it has free, at most [`MAX_THREADS`],
-    /// whatever `threads` is, so the diff does not depend on it; fewer
-    /// workers start when `threads` is smaller.
+    /// workers as fit half of what it has free, at most
+    /// [`Config::workers`], whatever `threads` is, so the diff does not
+    /// depend on it; fewer workers start when `threads` is smaller.
     ///
     /// # Errors
     ///
@@ -226,7 +233,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         // are reserved with them, the rest of the allowance here.
         let allowance = usize::try_from(free / 2 / per_worker)
             .unwrap_or(MAX_THREADS)
-            .clamp(1, MAX_THREADS);
+            .clamp(1, config.workers.clamp(1, MAX_THREADS));
         let threads = threads.clamp(1, allowance);
         let pool = budget.try_reserve(
             Half::Refine,
