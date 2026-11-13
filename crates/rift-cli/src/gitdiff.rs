@@ -191,7 +191,7 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
     let open = |p: &PathBuf| {
         FileSource::open(p)
             .map(Arc::new)
-            .with_context(|| format!("open {}", p.display()))
+            .with_context(|| format!("open {}", crate::source::shown(p)))
     };
     let files = Files {
         a: open(&old)?,

@@ -18,7 +18,7 @@ use rift_core::alloc::CountingAlloc;
 use rift_core::{Budget, BudgetExceeded, Bytes};
 use rift_diff::{Args, Command};
 
-use crate::source::FileSource;
+use crate::source::{FileSource, shown};
 
 #[global_allocator]
 static ALLOC: CountingAlloc = CountingAlloc;
@@ -76,8 +76,8 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
     let (Some(path_a), Some(path_b)) = (&args.a, &args.b) else {
         unreachable!("clap requires both files when no subcommand is given");
     };
-    let a = FileSource::open(path_a).with_context(|| format!("open {}", path_a.display()))?;
-    let b = FileSource::open(path_b).with_context(|| format!("open {}", path_b.display()))?;
+    let a = FileSource::open(path_a).with_context(|| format!("open {}", shown(path_a)))?;
+    let b = FileSource::open(path_b).with_context(|| format!("open {}", shown(path_b)))?;
     if let Some(spec) = &args.key {
         return keyed::run(
             &a,

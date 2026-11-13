@@ -80,6 +80,24 @@ impl Source for FileSource {
     }
 }
 
+/// A path for an error message: all of it up to 256 bytes, else its first
+/// and last 120 with `...` between. The command line is outside the
+/// budget, and a message that copied a path of 200 KB would hold it two or
+/// three times over.
+pub(crate) fn shown(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    const END: usize = 120;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.len() <= 2 * END + 16 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    format!(
+        "{}...{}",
+        String::from_utf8_lossy(&bytes[..END]),
+        String::from_utf8_lossy(&bytes[bytes.len() - END..])
+    )
+}
+
 /// Nothing came back before the length taken at open: the file was cut
 /// while Rift read it, or holds less than it reports. Taking that as the end
 /// would make a wrong diff.
@@ -88,7 +106,7 @@ fn ended_early(path: &Path) -> io::Error {
         io::ErrorKind::UnexpectedEof,
         format!(
             "{} ended before the length it had at open: it was cut while Rift read it, or holds less than it reports",
-            path.display()
+            shown(path)
         ),
     )
 }
@@ -137,6 +155,15 @@ mod tests {
         assert_eq!(src.read_at(&mut buf, ByteOffset(9)).unwrap(), 8);
         assert_eq!(&buf, b"line two");
         assert_eq!(src.read_at(&mut buf, ByteOffset(18)).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_long_path_is_shown_by_its_ends() {
+        assert_eq!(shown(Path::new("a/b")), "a/b");
+        let long = format!("{}z", "y".repeat(5000));
+        let text = shown(Path::new(&long));
+        assert_eq!(text.len(), 243);
+        assert!(text.starts_with("yyy") && text.contains("...y") && text.ends_with("yz"));
     }
 
     #[test]

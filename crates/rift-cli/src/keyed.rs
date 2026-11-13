@@ -105,8 +105,8 @@ impl<W> Out<W> {
 /// rift-core knows only which side it read.
 fn with_path(err: Error, [a, b]: [&Path; 2]) -> anyhow::Error {
     let path = |side| match side {
-        Side::A => a.display(),
-        Side::B => b.display(),
+        Side::A => crate::source::shown(a),
+        Side::B => crate::source::shown(b),
     };
     match err {
         Error::Keyed(KeyError::NoColumn { side, name }) => {
