@@ -377,7 +377,8 @@ Result:
 ```
 
 A moved block is two ranges of the same length holding the same bytes.
-It annotates the diff and never changes the edit script.
+It annotates the diff and never changes the edit script. No line is in
+two blocks.
 
 ### `set_visible`
 

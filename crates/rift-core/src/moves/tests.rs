@@ -208,3 +208,22 @@ fn a_full_list_keeps_the_blocks_found_first() {
     assert!(m.full() && !m.skipped());
     assert_eq!(m.blocks(), &all.blocks()[..4]);
 }
+
+/// No line of B is in two blocks: a later block that starts inside an
+/// earlier one's B range loses those lines, and is dropped when fewer
+/// than the minimum remain.
+#[test]
+fn blocks_do_not_share_lines_of_b() {
+    let u = |r: Range<u64>| rows(r.end - r.start, |i| format!("u{}\n", r.start + i));
+    let a = [
+        u(0..20),
+        b"P\nD\nE\nF\n".to_vec(),
+        u(20..40),
+        b"D\nE\nF\nQ\n".to_vec(),
+        u(40..60),
+    ]
+    .concat();
+    let b = [u(0..60), b"P\nD\nE\nF\nQ\n".to_vec()].concat();
+    let m = moves(&a, &b);
+    assert_eq!(m.blocks(), [block(20..24, 60..64)]);
+}

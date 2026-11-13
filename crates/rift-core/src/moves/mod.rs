@@ -10,6 +10,8 @@
 //! directions while the lines stay equal and outside `Equal` segments.
 //! Runs of at least [`MIN_LINES`] lines are kept. A seed inside a block
 //! already found adds nothing, so consecutive pairs group into one run.
+//! Blocks never share a line of A, and a block that would share lines of B
+//! with another is clipped, so every line is in at most one block.
 //!
 //! A moved block annotates the diff and never changes it: the edit script
 //! still deletes the block on one side and inserts it on the other.
@@ -186,6 +188,7 @@ impl Moves {
                 b: LineNo(y.0 - back)..y + ahead,
             });
         }
+        clip_b(&mut blocks);
         // The reservation keeps its size, so what is left of the half does
         // not depend on how many blocks were found.
         blocks.shrink_to_fit();
@@ -234,6 +237,28 @@ impl Moves {
     pub fn disabled(&self) -> bool {
         self.disabled
     }
+}
+
+/// Clips `blocks`, in A order, so that no line of B is in two of them. A
+/// block's A range never overlaps another's, but a line of B can follow lines of A
+/// from two places. In B order, a block that starts inside the B range of
+/// one kept before it loses its first lines on both sides, which leaves an
+/// exact copy, and is dropped when fewer than [`MIN_LINES`] remain. Sorts
+/// in place, so it takes no heap.
+fn clip_b(blocks: &mut Vec<MovedBlock>) {
+    blocks.sort_unstable_by_key(|m| (m.b.start, m.a.start));
+    let mut end = 0u64;
+    blocks.retain_mut(|m| {
+        let cut = end.saturating_sub(m.b.start.0).min(m.b.end.0 - m.b.start.0);
+        m.a.start = LineNo(m.a.start.0 + cut);
+        m.b.start = LineNo(m.b.start.0 + cut);
+        let keep = m.b.end.0 - m.b.start.0 >= MIN_LINES;
+        if keep {
+            end = m.b.end.0;
+        }
+        keep
+    });
+    blocks.sort_unstable_by_key(|m| m.a.start);
 }
 
 /// What extending a run reads through.
