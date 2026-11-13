@@ -124,7 +124,7 @@ comes through a source trait; tests run on in-memory data.
 | Stage | Algorithm | Data | Cost |
 |---|---|---|---|
 | Scan | line ends via SIMD `memchr`, xxh3 per line, parallel over chunks, line numbers by prefix sum | sample records `(hash, line, offset)`, 24 bytes each | O(n) in bytes |
-| Position index | checkpoints at most `C` lines apart, placed per scan chunk | sparse `(line, offset)` array | line access scans fewer than `C` lines |
+| Position index | one checkpoint per `C` lines: the last line start the scan recorded at or before each multiple of `C`, so the chunk size and thread count do not change its size | sparse `(line, offset)` array | line access scans fewer than `2C` lines |
 | Anchor selection | occurrence counts, uniqueness in both files, byte comparison against hash collisions | open-addressing hash table preallocated from the budget | O(n / 2^L) |
 | Skeleton | longest increasing subsequence (patience sorting) | vector of segments with status Equal / Differs / Approx | O(m log m) in anchors |
 | Equality check | streaming comparison of the segment's byte ranges | two fixed buffers | O(n) |

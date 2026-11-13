@@ -94,6 +94,35 @@ fn chunk_boundaries_do_not_change_the_result() {
     }
 }
 
+/// The index's size, and so the room left in the skeleton half, is the
+/// same whatever the chunk size and thread count: they follow the machine.
+#[test]
+fn chunk_size_does_not_change_the_index_size() {
+    let data = lines(5000);
+    for cap in [1 << 12, 300, 37] {
+        let mut seen = Vec::new();
+        for chunk in [64, 1000, 4096, 1 << 20] {
+            for threads in [1, 3] {
+                let mut cfg = config(0, chunk, threads);
+                cfg.checkpoint_cap = cap;
+                let got = check(&data, &cfg);
+                let index = got.index();
+                let gaps = index
+                    .checkpoints()
+                    .windows(2)
+                    .map(|w| w[1].line - w[0].line);
+                assert!(
+                    gaps.clone().all(|g| g < 2 * index.interval()),
+                    "cap {cap} chunk {chunk}"
+                );
+                seen.push((index.checkpoints().len(), index.interval(), got.held()));
+            }
+        }
+        seen.dedup();
+        assert_eq!(seen.len(), 1, "cap {cap}: {seen:?}");
+    }
+}
+
 #[test]
 fn higher_stratum_is_a_subset() {
     let data = lines(4000);
@@ -127,7 +156,7 @@ fn overflow_doubles_the_interval_in_place() {
         .checkpoints()
         .windows(2)
         .map(|w| w[1].line - w[0].line);
-    assert!(gaps.clone().all(|g| g <= got.index().interval()));
+    assert!(gaps.clone().all(|g| g < 2 * got.index().interval()));
     assert!(gaps.clone().any(|g| g == got.index().interval()));
 }
 
