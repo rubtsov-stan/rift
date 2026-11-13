@@ -170,3 +170,33 @@ fn a_long_record_needs_one_rerun() {
         assert_eq!(String::from_utf8_lossy(&last.stdout), changed, "{spec}");
     }
 }
+
+/// The generator's pairs from 64K: each advice is at least twice the
+/// `--mem` that was refused, so the chain is as long as the doublings to
+/// the pair's need, not as long as the stages that each ask for a little.
+#[test]
+fn following_the_advice_converges_in_a_few_steps() {
+    use rift_gen::{Config, Profile};
+    for (profile, size, ratio) in [
+        (Profile::Nokey, 4 << 20, 0.2),
+        (Profile::Text, 8 << 20, 0.05),
+    ] {
+        let mut config = Config::new(5, size, profile);
+        config.change_ratio = ratio;
+        let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+        rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = pair(
+            dir.path(),
+            &String::from_utf8(a).unwrap(),
+            &String::from_utf8(b).unwrap(),
+        );
+        let (refused, last) = follow(&[], "64K".into(), &a, &b);
+        // 64K doubled 8 times is 16M, past the 10.5M these pairs need.
+        assert!(refused.len() <= 8, "{profile:?}: {refused:?}");
+        for w in refused.windows(2) {
+            assert!(bytes(&w[1]) >= 2 * bytes(&w[0]), "{profile:?}: {refused:?}");
+        }
+        assert_eq!(last.status.code(), Some(1), "{profile:?}");
+    }
+}

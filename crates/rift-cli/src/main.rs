@@ -150,10 +150,10 @@ fn mem_advice(err: &anyhow::Error, mem: Bytes, global_pool: bool) -> Option<Stri
     // `need` plus the largest covers the `--mem` advised.
     let most = reserve(Bytes(u64::MAX), global_pool);
     let reserve = reserve(Bytes(need.0.saturating_add(most.0)), global_pool);
-    Some(format!(
-        "rerun with --mem {}",
-        Bytes(need.0.checked_add(reserve.0)?).to_mem_arg()
-    ))
+    // The reserve is taken out of `mem` before the core doubles it, so
+    // double the whole figure here.
+    let advised = need.0.checked_add(reserve.0)?.max(mem.0.checked_mul(2)?);
+    Some(format!("rerun with --mem {}", Bytes(advised).to_mem_arg()))
 }
 
 #[cfg(test)]
@@ -188,10 +188,10 @@ mod tests {
         let mem = Bytes(Bytes::mib(7).0 + reserve(Bytes::mib(7), true).0);
         // 3.5 MiB per half, 0.5 MiB of it free: 3 MiB held, 5 MiB needed,
         // and the reserve on top.
-        let err = refusal(rift_core::Half::Refine, 2 << 20, 512 << 10);
+        let err = refusal(rift_core::Half::Refine, 8 << 20, 512 << 10);
         let advised = format!(
             "rerun with --mem {}",
-            Bytes(Bytes::mib(10).0 + reserve(Bytes::mib(10), true).0).to_mem_arg()
+            Bytes(Bytes::mib(22).0 + reserve(Bytes::mib(22), true).0).to_mem_arg()
         );
         assert_eq!(mem_advice(&err, mem, true), Some(advised));
         let err = err.context("the changes printed above are incomplete");
@@ -199,6 +199,10 @@ mod tests {
             mem_advice(&err, mem, true).is_some(),
             "found under a context"
         );
+        // A need under twice `mem` is advised as twice `mem`.
+        let err = refusal(rift_core::Half::Refine, 2 << 20, 512 << 10);
+        let advised = format!("rerun with --mem {}", Bytes(2 * mem.0).to_mem_arg());
+        assert_eq!(mem_advice(&err, mem, true), Some(advised));
         let fits = refusal(rift_core::Half::Skeleton, 10, 20);
         assert_eq!(mem_advice(&fits, mem, true), None);
         assert_eq!(mem_advice(&anyhow::anyhow!("other"), mem, true), None);

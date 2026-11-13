@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block list filled up and later moves may be missing; it said `found`.
   Clients must tolerate `moves` values they do not know. The VS Code
   extension shows `partial` and reads an unknown value as `found` when blocks are listed.
+- The `--mem` a refusal advises is at least twice the `--mem` that was
+  refused, in the CLI, `rift serve` and the MCP server, so following it
+  reaches a working budget in a few reruns instead of many small steps
+  (a nokey 4 MiB pair from 64K took 20 refusals, now 5). It can
+  overshoot the real need by up to a factor of two.
 - Documented that a moved block is an exact copy that may be partly
   aligned: lines the diff aligned with another copy print as context.
 - Just above the full diff's smallest `--mem`, more regions can come out
