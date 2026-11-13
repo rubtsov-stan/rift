@@ -270,3 +270,76 @@ fn no_moves_is_reported_where_moves_are() {
     let (_, err) = rift(&["--key", "csv:1", "--no-moves"]);
     assert!(err.contains("cannot be used with"), "{err}");
 }
+
+/// Near the full diff's smallest `--mem`, `--summary` looks for moves
+/// exactly when the full diff does, so both print the same moved line:
+/// 60 000 three-line runs in reversed order.
+#[test]
+fn summary_and_the_full_diff_agree_on_searching() {
+    let runs: Vec<String> = (0..60_000)
+        .map(|i| format!("run-{i:06}-0,alpha\nrun-{i:06}-1,alpha\nrun-{i:06}-2,alpha\n"))
+        .collect();
+    let p = Pair {
+        a: runs.concat().into_bytes(),
+        b: runs.iter().rev().cloned().collect::<String>().into_bytes(),
+        moves: Vec::new(),
+    };
+    let (_dir, a, b) = files(&p);
+    let moved = |text: &[u8]| {
+        let text = String::from_utf8_lossy(text).into_owned();
+        text.lines()
+            .find(|l| l.starts_with("moved"))
+            .map(str::to_owned)
+    };
+    for mem in ["11M", "12M", "13M"] {
+        let summary = moved(&rift(&["--summary", "--mem", mem], &a, &b).stdout);
+        let stats = moved(&rift(&["--stats", "--mem", mem], &a, &b).stderr);
+        assert!(summary.is_some(), "{mem}");
+        assert_eq!(summary, stats, "{mem}");
+    }
+}
+
+/// Files of `size` bytes from the generator, with changes at `ratio`.
+fn generated(
+    seed: u64,
+    size: u64,
+    profile: Profile,
+    ratio: f64,
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let mut config = Config::new(seed, size, profile);
+    config.change_ratio = ratio;
+    let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+    rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+    files(&Pair {
+        a,
+        b,
+        moves: Vec::new(),
+    })
+}
+
+fn moved_line(text: &[u8]) -> String {
+    String::from_utf8_lossy(text)
+        .lines()
+        .find(|l| l.starts_with("moved"))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Below the smallest `--mem` the full diff runs at, `--summary` still
+/// looks for moves when the search itself fits, as 0.3.2 did.
+#[test]
+fn summary_lists_moves_below_the_full_diffs_floor() {
+    let (_dir, a, b) = generated(3, 8 << 20, Profile::Sql, 0.02);
+    let summary = moved_line(&rift(&["--summary", "--mem", "4M"], &a, &b).stdout);
+    assert!(summary.contains(" blocks, "), "{summary}");
+}
+
+/// The full diff looks for moves whenever the refine half holds the list
+/// and what it holds during and after the search; at 11200K this pair's
+/// 199 blocks are listed, as in 0.3.2.
+#[test]
+fn the_full_diff_searches_where_the_half_holds_the_search() {
+    let (_dir, a, b) = generated(7, 16 << 20, Profile::Shuffled, 0.05);
+    let stats = moved_line(&rift(&["--stats", "--mem", "11200K"], &a, &b).stderr);
+    assert!(stats.contains(" blocks, "), "{stats}");
+}

@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Near the full diff's smallest `--mem`, `--summary` listed moved blocks
+  that the full diff under the same `--mem` said it had not searched.
+  Where the full diff runs, `--summary` now looks for moves exactly when
+  it does; below the full diff's smallest `--mem` it still lists moves
+  when the search fits. Within a few tens of KiB above that point the
+  full diff can now skip moves that 0.3.2 listed, since the block list is
+  reserved for one block per seed before the search.
 - Two moved blocks could share lines of B, and `--summary` counted
   those lines twice. A block that starts inside another's B range now
   loses the shared lines, and is dropped when fewer than 3 remain.

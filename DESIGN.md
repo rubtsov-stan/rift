@@ -691,9 +691,17 @@ capacity (`Moves::list_bytes`). The diff reserves that much before the
 workers and holds it for its whole life, with the search on or off, so
 neither the search nor the blocks it finds change what the scheduler
 gets. While the search runs, it also takes two readers with 4 KiB
-buffers and two comparison buffers of 128 KiB. When those do not fit, or
-the list does not, the search keeps nothing and the summary says moves
-were not searched. When the list fills up, the search stops and keeps
+buffers and two comparison buffers of 128 KiB. The diff looks for moves
+only when its refine half holds the list besides the larger of what it
+holds while the search runs (the front end's share, one worker's
+buffers, the search's readers and buffers) and after it (the least the
+diff needs) (`diff::moves_fit`); otherwise the search keeps nothing and
+the summary says moves were not searched. Since the list is reserved for
+its worst case, one block per seed, a diff within a few tens of KiB of
+that point skips moves that 0.3.2, which reserved only the blocks it
+found, listed. `--summary` asks the same question before its own search
+where a full diff would run, so both modes agree on it; below the full
+diff's smallest `--mem` it searches whenever the search itself fits. When the list fills up, the search stops and keeps
 the blocks found so far, and the summary says later moves are not
 listed. `--no-moves` (`diff::Config { moves: false }`) skips the search
 and allocates nothing for it; `--summary` and `--stats` say so, and the

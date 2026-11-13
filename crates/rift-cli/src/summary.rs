@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use rift_core::diff::moves_fit;
 use rift_core::index::IndexedLines;
 use rift_core::moves::Moves;
 use rift_core::skeleton::build_pair;
@@ -27,7 +28,7 @@ pub fn run<A: Source, B: Source>(
     let budget = crate::budget(mem, true);
     let (scan_a, scan_b, map) = build_pair(a, b, &budget)?;
     let off_chain = map.off_chain();
-    let moves = if find_moves {
+    let moves = if find_moves && moves_fit(&budget, map.segments().len(), off_chain.pairs().len()) {
         let lines_a = IndexedLines::new(a, scan_a.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
         let lines_b = IndexedLines::new(b, scan_b.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
         let list = Moves::list_bytes(off_chain.pairs().len(), &budget);
@@ -40,6 +41,9 @@ pub fn run<A: Source, B: Source>(
             &budget,
             budget.try_reserve(Half::Refine, list).ok(),
         )?
+    } else if find_moves {
+        // The full diff would not look either: say so the same way.
+        Moves::not_searched()
     } else {
         Moves::off()
     };
