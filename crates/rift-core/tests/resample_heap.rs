@@ -27,7 +27,17 @@ fn a_repeated_line_in_every_stratum_keeps_the_samples_at_their_cap() {
     let budget = Budget::new(mem);
     let base = alloc::current().0;
     alloc::reset_peak();
-    let diff = Diff::with_config(a, b, &budget, 1, Config { moves: false }).unwrap();
+    let diff = Diff::with_config(
+        a,
+        b,
+        &budget,
+        1,
+        Config {
+            moves: false,
+            ..Config::default()
+        },
+    )
+    .unwrap();
     for i in 0..diff.segments().len() {
         while matches!(diff.try_hunk(i).unwrap(), HunkState::Pending) {
             std::thread::yield_now();

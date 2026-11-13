@@ -313,7 +313,10 @@ fn moves_off_finds_nothing_and_keeps_the_script() {
             Arc::<[u8]>::from(&b[..]),
             &Budget::new(Bytes::mib(64)),
             2,
-            Config { moves },
+            Config {
+                moves,
+                ..Config::default()
+            },
         )
         .unwrap()
     };
@@ -431,7 +434,10 @@ fn the_move_search_does_not_change_the_diff() {
             Arc::<[u8]>::from(&b[..]),
             &Budget::new(Bytes::mib(24)),
             2,
-            Config { moves },
+            Config {
+                moves,
+                ..Config::default()
+            },
         )
         .unwrap();
         let mut out = Vec::new();

@@ -78,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a region came out approximate (300 000 equal lines with one changed, at
   `--mem 192000K`: 11 lines with one thread, 600 000 lines with 64).
 - The full diff and `rift serve` set aside refine workers' buffers for
-  as many workers as half of the free refine half holds, at most 8,
+  as many workers as half of the free refine half holds, at most 8 (4
+  for a session of `rift serve` or `rift-mcp`, which starts at most 4),
   however many start. The scheduler's share used to shrink with each
   worker, so a machine with more cores could mark a region approximate
   where one with fewer cores printed it exactly. Machines with more than
