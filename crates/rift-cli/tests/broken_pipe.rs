@@ -6,7 +6,8 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Mutex, PoisonError};
 
 const BIN: &str = env!("CARGO_BIN_EXE_rift");
 
@@ -45,22 +46,34 @@ impl Pair {
     }
 }
 
-/// Runs `rift args` with standard output already closed at the reader, so
-/// the first write fails whatever the timing.
+/// Held from creating a pipe until the child is spawned. A sibling test that
+/// forks in that window briefly holds a copy of the read end, so a write that
+/// fits in the pipe buffer (`--summary`) succeeds and rift exits 1, not 141.
+static SPAWN: Mutex<()> = Mutex::new(());
+
+fn spawn_locked(cmd: &mut Command) -> io::Result<Child> {
+    let _guard = SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+    cmd.spawn()
+}
+
+/// Runs `cmd` with standard output already closed at the reader, so the
+/// first write fails whatever the timing.
+fn output_closed(cmd: &mut Command) -> Output {
+    let child = {
+        let _guard = SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        cmd.stdout(writer).stderr(Stdio::piped()).spawn().unwrap()
+    };
+    child.wait_with_output().unwrap()
+}
+
 fn run_closed(args: &[&Path]) -> Output {
     run_closed_with(&[], args)
 }
 
 fn run_closed_with(flags: &[&str], args: &[&Path]) -> Output {
-    let (reader, writer) = io::pipe().unwrap();
-    drop(reader);
-    Command::new(BIN)
-        .args(flags)
-        .args(args)
-        .stdout(writer)
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap()
+    output_closed(Command::new(BIN).args(flags).args(args))
 }
 
 fn assert_141_and_silent(out: &Output) {
@@ -113,12 +126,16 @@ fn help_and_version_into_a_closed_pipe_do_not_panic() {
 #[test]
 fn a_reader_that_quits_after_a_little_gives_the_shell_141() {
     let p = Pair::new();
-    let out = Command::new("bash")
-        .arg("-c")
-        .arg(r#""$0" "$1" "$2" | head -c 10 >/dev/null; echo "${PIPESTATUS[0]}""#)
-        .args([BIN])
-        .args([p.a(), p.b()])
-        .output();
+    let out = spawn_locked(
+        Command::new("bash")
+            .arg("-c")
+            .arg(r#""$0" "$1" "$2" | head -c 10 >/dev/null; echo "${PIPESTATUS[0]}""#)
+            .args([BIN])
+            .args([p.a(), p.b()])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .and_then(Child::wait_with_output);
     let Ok(out) = out else {
         eprintln!("skipped: bash is not on PATH");
         return;
@@ -145,14 +162,7 @@ fn git_diff_args(p: &Pair) -> Vec<String> {
 #[test]
 fn git_diff_into_a_closed_pipe_exits_zero_without_a_message() {
     let p = Pair::new();
-    let (reader, writer) = io::pipe().unwrap();
-    drop(reader);
-    let out = Command::new(BIN)
-        .args(git_diff_args(&p))
-        .stdout(writer)
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap();
+    let out = output_closed(Command::new(BIN).args(git_diff_args(&p)));
     assert_eq!(out.status.code(), Some(0), "{:?}", out.status);
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }
