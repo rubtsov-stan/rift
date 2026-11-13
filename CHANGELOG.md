@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A seek hint at the end of a file without a final newline no longer
+  makes a read of an earlier line return the wrong bytes. No caller
+  passed such a hint.
 - Near the full diff's smallest `--mem`, `--summary` listed moved blocks
   that the full diff under the same `--mem` said it had not searched.
   Where the full diff runs, `--summary` now looks for moves exactly when
