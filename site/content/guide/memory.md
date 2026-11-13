@@ -15,7 +15,9 @@ rift --mem 1G a.csv b.csv
 
 `--mem` takes bytes or a number with a `K`, `M`, `G` or `T` unit, in powers of 1024. The default is `256M` and the smallest is `64K`.
 
-Rift keeps 48 KiB of the limit, plus 12 KiB per thread of its thread pool (one per core, or `RAYON_NUM_THREADS`), for heap that no budget counts: the command line, output buffers, messages and the thread pool. Key mode keeps only the 48 KiB: it runs on threads of its own, whose heap it takes from the budget. The rest is the budget. Rift reserves every allocation on the data path from it before it makes it, and reads files with `pread` into fixed buffers. It does not map files into memory. The tests and CI check the peak of the whole process with a counting allocator.
+Rift sizes its work for one thread per MiB of the limit, from 1 to 8, in each of the scan, the refinement and its thread pool, and starts no more threads than the machine has cores; `RAYON_NUM_THREADS` can make the pool smaller. It keeps 48 KiB of the limit, plus 12 KiB for each thread the limit allows, for heap that no budget counts: the command line, output buffers, messages and the thread pool. Key mode keeps only the 48 KiB: it runs on threads of its own, whose heap it takes from the budget. The rest is the budget. Rift reserves every allocation on the data path from it before it makes it, and reads files with `pread` into fixed buffers. It does not map files into memory. The tests and CI check the peak of the whole process with a counting allocator.
+
+The output is identical on any machine for the same `--mem` and input. The cores and `RAYON_NUM_THREADS` change how fast Rift runs, not what it prints.
 
 ## A larger file does not need a larger limit
 

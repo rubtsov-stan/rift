@@ -59,7 +59,8 @@ pub struct Args {
     #[arg(long)]
     pub summary: bool,
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),
-    /// at least 64K.
+    /// at least 64K. The output is identical on any machine for the same
+    /// --mem and input.
     #[arg(long, default_value = "256M", value_parser = parse_mem)]
     pub mem: Bytes,
     /// Browse the diff in the terminal instead of printing it.
@@ -115,7 +116,8 @@ pub struct ServeArgs {
 #[derive(Debug, clap::Args)]
 pub struct GitDiffArgs {
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),
-    /// at least 64K.
+    /// at least 64K. The output is identical on any machine for the same
+    /// --mem and input.
     #[arg(long, default_value = "256M", value_parser = parse_mem)]
     pub mem: Bytes,
     /// After the diff or an error, print the peak heap to standard error.

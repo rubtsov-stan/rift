@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The output is identical on any machine for the same `--mem` and
+  input. A run sizes its work for one thread per MiB of `--mem`, from 1
+  to 8, in each of the scan, the refinement and the shared pool, and
+  starts no more threads than the machine has cores;
+  `RAYON_NUM_THREADS` can make the shared pool smaller. The cores and
+  `RAYON_NUM_THREADS` now change only the speed. The reserve kept out of the budget is 48 KiB plus 12 KiB
+  per thread that `--mem` allows, so it no longer grows with the cores.
+  Below 8 MiB, machines with more cores than MiB of `--mem` run fewer
+  threads than before. On more than 8 cores, the diff and `--summary`
+  run at most 8 scan threads, 8 refine workers and 8 threads in the
+  shared pool.
+- Refusal points moved with the reserve. Measured on an Apple M1 with 8
+  cores, where the reserve at 8 MiB and up is unchanged: the full diff
+  of two one-line files still needs 10475K, `--summary` of them needs
+  285K instead of 369K. `--summary` of a generated 1 GiB SQL pair needs
+  1874K instead of 3020K: a scan cut into many chunks no longer runs out
+  of room for checkpoints. On a machine with fewer cores the reserve at
+  8 MiB and up grows by 12 KiB per missing core, so the same full diff
+  needs up to 84K more than in 0.3.2 (10391K to 10475K on one core).
 - Documented that Rift does not detect binary files: NUL bytes are
   printed in the diff and there is no `Binary files differ` message.
 - Key mode's output order depends on the files and `--mem` only. The
@@ -30,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The full diff, `--summary` and `--stats` could print different, equally
+  valid output under different thread counts: each thread of the pool
+  took 12 KiB from the budget, which moved the stratum or the point where
+  a region came out approximate (300 000 equal lines with one changed, at
+  `--mem 192000K`: 11 lines with one thread, 600 000 lines with 64).
 - The full diff and `rift serve` set aside refine workers' buffers for
   as many workers as half of the free refine half holds, at most 8,
   however many start. The scheduler's share used to shrink with each

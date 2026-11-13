@@ -54,9 +54,15 @@ fn read_frame(out: &mut impl BufRead) -> Option<Value> {
 impl Client {
     /// Starts `rift serve` with `args`.
     pub fn start(args: &[&str]) -> Self {
+        Self::start_with_env(args, &[])
+    }
+
+    /// Starts `rift serve` with `args` and the environment variables `env`.
+    pub fn start_with_env(args: &[&str], env: &[(&str, &str)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rift"))
             .arg("serve")
             .args(args)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

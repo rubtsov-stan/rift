@@ -380,7 +380,7 @@ fn unique_hashes<I: Iterator<Item = (usize, u64)> + Clone + Sync>(
     // Ranges at the full slot count's load, half full, have room to spare
     // for the noise in how many hashes land in each.
     let parts = if small.0 >= PARALLEL_SAMPLES && 2 * slots > 3 * n {
-        rayon::current_num_threads().clamp(1, MAX_PARTS)
+        crate::budget::MAX_THREADS.clamp(1, MAX_PARTS)
     } else {
         1
     };

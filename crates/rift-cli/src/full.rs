@@ -6,7 +6,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::thread;
 use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -27,8 +26,10 @@ pub struct Files<'p> {
     pub moves: bool,
 }
 
-pub fn threads() -> usize {
-    thread::available_parallelism().map_or(1, std::num::NonZero::get)
+/// Refinement workers to start under `--mem mem`: what it allows, at most
+/// one per core. The diff reserves for what `--mem` allows either way.
+fn threads(mem: Bytes) -> usize {
+    rift_core::budget::threads(mem).min(rift_core::budget::cores())
 }
 
 pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
@@ -37,7 +38,7 @@ pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, F
         Arc::clone(&files.a),
         Arc::clone(&files.b),
         &budget,
-        threads(),
+        threads(mem),
         Config { moves: files.moves },
     )?)
 }
