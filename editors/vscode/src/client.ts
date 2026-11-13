@@ -203,7 +203,7 @@ export class Server {
         if (restarting) this.connect().then(() => this.opts.onRestarted?.(), (e) => this.opts.onRestartFailed?.(e));
       };
       const c = this.opts.link?.(onNotification, onClose) ?? new Connection(this.opts.command(), this.opts.args, onNotification, onClose);
-      c.request<InitializeResult>('initialize', { protocol: 1, client: { name: 'rift-vscode', version: '0.3.2' } }).then((r) => {
+      c.request<InitializeResult>('initialize', { protocol: 1, client: { name: 'rift-vscode', version: '0.3.3' } }).then((r) => {
         this.limits = r.limits;
         resolve(c);
       }, (e) => {

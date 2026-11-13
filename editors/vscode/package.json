@@ -2,7 +2,7 @@
   "name": "rift-diff",
   "displayName": "Rift: Diff Huge Files",
   "description": "Compare huge text files in VS Code's own diff editor, one difference at a time.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "rubtsov-stan",
   "license": "MIT OR Apache-2.0",
   "icon": "media/icon.png",

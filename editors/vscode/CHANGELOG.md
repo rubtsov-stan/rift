@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-14
+
+- Bundles `rift` 0.3.3.
+- A move list the server reports as `partial` shows as "N moved, list full". A
+  `moves` value the extension does not know is read as found when blocks are
+  listed, so a newer server stays usable.
 - Comparing the same pair again no longer closes the session it reuses, which made
   every hunk fail, and keeps the approx marks the first comparison had.
 - A comparison that finishes late, after busy retries, no longer replaces a newer
