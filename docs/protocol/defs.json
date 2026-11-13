@@ -131,6 +131,7 @@
     "moves_state": {
       "enum": [
         "found",
+        "partial",
         "off",
         "skipped"
       ]

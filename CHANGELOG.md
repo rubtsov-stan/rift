@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `rift serve` reports `moves: "partial"` in `summary` and `moves` when the
+  block list filled up and later moves may be missing; it said `found`.
+  Clients must tolerate `moves` values they do not know. The VS Code
+  extension shows `partial` and shows an unknown value as `found`.
 - Documented that a moved block is an exact copy that may be partly
   aligned: lines the diff aligned with another copy print as context.
 - Just above the full diff's smallest `--mem`, more regions can come out
