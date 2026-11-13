@@ -46,6 +46,9 @@ pub struct Tally {
 pub enum MovesState {
     /// The search ran; the list may be empty.
     Found,
+    /// The list filled up and the search stopped, so moves past the last
+    /// block listed may be missing.
+    Partial,
     /// Move detection was switched off.
     Off,
     /// The budget did not allow the search; an empty list says nothing.
@@ -304,6 +307,8 @@ impl Session {
                 MovesState::Off
             } else if moves.skipped() {
                 MovesState::Skipped
+            } else if moves.full() {
+                MovesState::Partial
             } else {
                 MovesState::Found
             },

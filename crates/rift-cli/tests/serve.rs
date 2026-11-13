@@ -395,6 +395,33 @@ fn the_summary_counts_approx_among_refined_segments() {
     clean_exit(c);
 }
 
+/// B holds A's 250,000 runs of three lines in reverse order: one differing
+/// segment with more moved seeds than the block list holds at 13M, whose
+/// cap is 26,624 blocks. 13M is about the smallest `mem` where the search
+/// is not skipped for this pair.
+#[test]
+fn a_full_move_list_is_reported_partial() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |s: u32| -> Vec<u8> {
+        (0..3)
+            .flat_map(|i| format!("{s:x}{i}\n").into_bytes())
+            .collect()
+    };
+    let a: Vec<u8> = (0..250_000).flat_map(run).collect();
+    let b: Vec<u8> = (0..250_000).rev().flat_map(run).collect();
+    let (a, b) = (write(dir.path(), "a", &a), write(dir.path(), "b", &b));
+    let mut c = Client::start(&[]);
+    c.initialize();
+    let s = open_ready(&mut c, &a, &b, "13M");
+    let sum = c.ok("summary", json!({"session": s}));
+    assert_eq!(sum["moves"], "partial", "{sum}");
+    assert!(sum["moved_blocks"].as_u64().unwrap() > 0, "{sum}");
+    let moves = c.ok("moves", json!({"session": s, "limit": 1}));
+    assert_eq!(moves["moves"], "partial", "{moves}");
+    assert_eq!(moves["total"], sum["moved_blocks"], "{moves}");
+    clean_exit(c);
+}
+
 #[test]
 fn segments_report_approx_for_segments_nobody_opened() {
     let dir = tempfile::tempdir().unwrap();

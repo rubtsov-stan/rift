@@ -251,7 +251,9 @@ error object:
   did not allow the search, so 0 blocks says nothing about the files).
   The list holds about one block per 512 bytes of the session's
   `mem`; a search that fills it stops and keeps what it found, and the
-  state is still `found`.
+  state is `partial`: the blocks listed are real, later ones may be
+  missing. Clients must tolerate values they do not know, and treat them
+  as they treat `found` when `moved_blocks` is above 0.
 - `progress`: in phase `refine`, segments refined so far, of those that
   need it.
 
@@ -359,7 +361,8 @@ A line:
 
 ### `moves`
 
-A page of the moved blocks, ordered by their line in A.
+A page of the moved blocks, ordered by their line in A. `moves` is the
+same state as in `summary`.
 
 ```json
 {"session": 1, "offset": 0, "limit": 100}

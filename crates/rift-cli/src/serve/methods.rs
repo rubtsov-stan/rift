@@ -356,6 +356,7 @@ pub fn touching(segs: &[Segment], lines: Range<LineNo>) -> Range<usize> {
 fn moves_name(m: MovesState) -> &'static str {
     match m {
         MovesState::Found => "found",
+        MovesState::Partial => "partial",
         MovesState::Off => "off",
         MovesState::Skipped => "skipped",
     }
@@ -477,6 +478,7 @@ impl Serialize for MovesPage {
         let state = match diff.map(rift_core::diff::Diff::moves) {
             Some(m) if m.disabled() => "off",
             Some(m) if m.skipped() => "skipped",
+            Some(m) if m.full() => "partial",
             _ => "found",
         };
         let mut st = ser.serialize_struct("moves", 4)?;
