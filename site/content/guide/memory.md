@@ -43,6 +43,8 @@ So take the advice as a direction. Follow it, or start from a limit with room, s
 
 {{ term(name="mem-ok", kind="summary", title="a limit with room") }}
 
+A run that finishes can still mark regions approximate for lack of budget. The plain diff says so only in the hunk header; `--stats` also prints a `--mem` to try, twice the one used, on the line that counts those regions.
+
 ## What the limit does not cover
 
 Only the heap is bounded by `--mem`. The resident set also holds the binary, thread stacks and whatever page cache the kernel counts against the process. On the 1 GiB pair the resident set peaked at 113 MiB with the heap at 83.6 MiB, both at the default limit: see the [benchmarks](@/benchmarks.md).
