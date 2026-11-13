@@ -32,6 +32,8 @@
 //   open, a path containing "evictor" -> when it opens a session, every other session is dropped, as a full
 //                                          server drops the one idle longest
 //   summary, on a session of a path containing "sumfail" -> an internal error, so the session fails to load
+//   summary and moves, on a session of a path containing "movespartial" -> moves is "partial"; "movesfuture" ->
+//                                          a state the schemas do not list (clients must tolerate it)
 //   open, a path containing "hog"     -> while its session lives, any other new session answers busy
 //   open, a path containing "crashlate" -> the process exits 2300 ms after answering, and its refinement never ends
 //   open, a path containing "crashy"  -> the process exits 100 ms after answering, and its refinement never ends
@@ -119,6 +121,7 @@ let lastId = 0;
 // refined maps a segment index to its status once segment_ready was sent.
 const sessions = new Map();
 const busyTries = new Map();
+const movesState = (s) => (s.key.includes('movespartial') ? 'partial' : s.key.includes('movesfuture') ? 'from-the-future' : fixture.summary.moves);
 const scanTotal = 2 * (fixture.summary.a.bytes + fixture.summary.b.bytes);
 const refineTotal = fixture.summary.progress.total;
 
@@ -295,7 +298,7 @@ const METHODS = {
         progress: { phase: 'scan', done: s.scanned, total: scanTotal },
       };
     }
-    return { ...fixture.summary, mem_bytes: s.mem, progress: { phase: 'refine', done: s.done, total: refineTotal } };
+    return { ...fixture.summary, moves: movesState(s), mem_bytes: s.mem, progress: { phase: 'refine', done: s.done, total: refineTotal } };
   },
 
   segments(p) {
@@ -362,12 +365,12 @@ const METHODS = {
   },
 
   moves(p) {
-    readySession(p);
+    const [, sess] = readySession(p);
     const { offset, limit } = page(p);
     return {
       total: fixture.moves.length,
       offset,
-      moves: fixture.summary.moves,
+      moves: movesState(sess),
       blocks: fixture.moves.slice(offset, offset + limit),
     };
   },

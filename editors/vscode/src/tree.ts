@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Comparison, rerunOffer } from './comparison';
-import { fmtRange, num } from './format';
+import { fmtRange, movedNote, num } from './format';
 import { MoveBlock, Segment } from './protocol';
 
 export type Node =
@@ -130,10 +130,12 @@ export class RiftTree implements vscode.TreeDataProvider<Node> {
       }
       case 'moves': {
         const skipped = c.summary?.moves === 'skipped';
-        const item = new vscode.TreeItem(skipped ? 'Moved blocks (not searched)' : `Moved blocks (${num(c.movesTotal)})`, skipped ? vscode.TreeItemCollapsibleState.None : vscode.TreeItemCollapsibleState.Collapsed);
+        const partial = c.summary?.moves === 'partial';
+        const item = new vscode.TreeItem(skipped ? 'Moved blocks (not searched)' : `Moved blocks (${num(c.movesTotal)}${partial ? ', list full' : ''})`, skipped ? vscode.TreeItemCollapsibleState.None : vscode.TreeItemCollapsibleState.Collapsed);
         item.id = 'moves';
         if (skipped) item.tooltip = 'The budget did not allow the search, so the absence of moved blocks says nothing about the files.';
         else item.iconPath = new vscode.ThemeIcon('arrow-swap');
+        if (partial) item.tooltip = 'The list of moved blocks filled up at this memory limit, so more moves may exist than are listed.';
         return item;
       }
       case 'move': {
@@ -174,8 +176,8 @@ export class RiftTree implements vscode.TreeDataProvider<Node> {
         `${num(s?.approx?.segments ?? 0)} approx`,
         `${num(s?.equal?.segments ?? 0)} equal`,
       ];
-      if (s?.moves === 'found') parts.push(`${num(s.moved_blocks ?? 0)} moved`);
-      else if (s?.moves === 'skipped') parts.push('moves not searched');
+      const moved = movedNote(s?.moves, s?.moved_blocks ?? 0);
+      if (moved) parts.push(moved);
       const p = c.progress ?? s?.progress;
       if (p?.phase === 'refine' && p.done < p.total) parts.push(`refining ${num(p.done)}/${num(p.total)}`);
       item.description = parts.join(' · ');

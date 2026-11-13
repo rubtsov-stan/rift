@@ -1,11 +1,20 @@
 import * as assert from 'assert';
-import { excerpt, fmtRange, title } from '../../format';
+import { excerpt, fmtRange, movedNote, title } from '../../format';
 
 describe('format', () => {
   it('writes ranges', () => {
     assert.strictEqual(fmtRange({ start: 1204880, count: 61 }), '1,204,880–1,204,940');
     assert.strictEqual(fmtRange({ start: 7, count: 1 }), '7');
     assert.strictEqual(fmtRange({ start: 8, count: 0 }), 'before 8');
+  });
+
+  it('notes the move search, and reads a state it does not know as found', () => {
+    assert.strictEqual(movedNote('found', 3), '3 moved');
+    assert.strictEqual(movedNote('partial', 1200), '1,200 moved, list full');
+    assert.strictEqual(movedNote('skipped', 0), 'moves not searched');
+    assert.strictEqual(movedNote('off', 0), undefined);
+    assert.strictEqual(movedNote('from-the-future', 2), '2 moved');
+    assert.strictEqual(movedNote('from-the-future', 0), undefined);
   });
 
   it('titles a hunk with both original ranges', () => {
