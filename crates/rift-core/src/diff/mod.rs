@@ -13,8 +13,8 @@
 //! for the life of the diff; the samples are released once the map is
 //! built. Refine half, in this order: the front end's share (two line
 //! readers, the line buffer and the 1 MiB output buffer of the unified
-//! writer), then each worker's two line readers and four line buffers,
-//! then the moved blocks and, while they are found, two comparison
+//! writer), then two line readers and four line buffers for each worker
+//! the budget allows, whether it starts or not, then the moved blocks and, while they are found, two comparison
 //! buffers (see [`Moves`]), then the scheduler, which takes what is left
 //! for its row table, its hunk cache and the jobs' working sets. Line
 //! buffers are bounded because a reader returns a line whole only when it
@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
-use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
+use crate::budget::{Budget, BudgetExceeded, Half, MAX_THREADS, Reservation};
 use crate::edit::{ApproxReason, Edit, Hunk};
 use crate::error::{Error, Result};
 use crate::index::{IndexedLines, LineIndex};
@@ -135,8 +135,10 @@ pub struct Written {
 
 impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> Diff<A, B> {
     /// Scans `a` and `b`, builds the segment map and starts up to `threads`
-    /// refinement workers, fewer when the Refine half cannot hold their
-    /// buffers.
+    /// refinement workers. The Refine half holds buffers for as many
+    /// workers as fit half of what it has free, at most [`MAX_THREADS`],
+    /// whatever `threads` is, so the diff does not depend on it; fewer
+    /// workers start when `threads` is smaller.
     ///
     /// # Errors
     ///
@@ -215,13 +217,17 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             .available(Half::Refine)
             .0
             .saturating_sub(2 * FRONT_SCRATCH.0);
-        let threads = threads.clamp(
-            1,
-            usize::try_from(free / 2 / per_worker).unwrap_or(1).max(1),
-        );
+        // The allowance follows the budget alone, so the scheduler's share
+        // does too; `threads`, the machine's cores, only decides how many of
+        // the allowed workers start. The readers of the workers that start
+        // are reserved with them, the rest of the allowance here.
+        let allowance = usize::try_from(free / 2 / per_worker)
+            .unwrap_or(MAX_THREADS)
+            .clamp(1, MAX_THREADS);
+        let threads = threads.clamp(1, allowance);
         let pool = budget.try_reserve(
             Half::Refine,
-            Bytes(threads as u64 * (per_worker - 2 * WORKER_SCRATCH.0)),
+            Bytes(allowance as u64 * per_worker - threads as u64 * 2 * WORKER_SCRATCH.0),
         )?;
         let workers = (0..threads)
             .map(|_| {

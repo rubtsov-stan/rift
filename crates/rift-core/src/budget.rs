@@ -63,6 +63,12 @@ impl BudgetExceeded {
     }
 }
 
+/// The most threads a scan, the skeleton or the refinement uses. What a
+/// run is allowed is sized from `--mem` up to this, never from the
+/// machine, so the output is the same on any machine; the cores only cap
+/// how many of the allowed threads start.
+pub const MAX_THREADS: usize = 8;
+
 /// The threads rayon's global pool starts, by rayon's own rule
 /// (`ThreadPoolBuilder::get_num_threads` in rayon-core): a positive
 /// `RAYON_NUM_THREADS`, else, unless that is 0, a positive

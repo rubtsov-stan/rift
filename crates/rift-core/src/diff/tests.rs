@@ -348,3 +348,42 @@ fn a_refine_half_too_small_for_one_worker_is_refused_whole() {
     let held = budget.capacity(Half::Refine).0 - e.available.0;
     check(&a, &b, Bytes(2 * (held + e.requested.0)), 2);
 }
+
+/// What the workers may hold follows the budget, not how many start, so
+/// the machine's core count does not change the diff. At 24 MiB this pair
+/// was exact with one worker and approximate with eight.
+#[test]
+fn the_worker_count_does_not_change_the_diff() {
+    let a = rows(20_000, |_| "same line\n".into());
+    let b = rows(20_000, |i| {
+        if i == 10_000 {
+            "other line\n"
+        } else {
+            "same line\n"
+        }
+        .into()
+    });
+    for mib in [24, 40] {
+        let outputs: Vec<_> = [1, 2, 8]
+            .into_iter()
+            .map(|threads| {
+                let d = Diff::new(
+                    Arc::<[u8]>::from(&a[..]),
+                    Arc::<[u8]>::from(&b[..]),
+                    &Budget::new(Bytes::mib(mib)),
+                    threads,
+                )
+                .unwrap();
+                let mut out = Vec::new();
+                d.write_unified(&opts(), &mut out).unwrap();
+                (d.sched.work_cap(), out)
+            })
+            .collect();
+        assert!(
+            outputs.windows(2).all(|w| w[0] == w[1]),
+            "{mib} MiB: work_cap {:?}, output lengths {:?}",
+            outputs.iter().map(|o| o.0).collect::<Vec<_>>(),
+            outputs.iter().map(|o| o.1.len()).collect::<Vec<_>>()
+        );
+    }
+}
