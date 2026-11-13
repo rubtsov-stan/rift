@@ -109,13 +109,19 @@ pub struct IndexedLines<S, I> {
     _reservation: Reservation,
 }
 
-/// The read buffer, the line start the last read reached, and the one
-/// the caller last pointed to with `seek`.
+/// The read buffer, the line start the last read reached, the one the
+/// caller last pointed to with `seek`, and the start of the line after
+/// the last one read in pieces to its end.
 #[derive(Debug)]
 struct Scratch {
     buf: Vec<u8>,
     memo: Option<Checkpoint>,
     hint: Option<Checkpoint>,
+    /// The start of the line after the last one `read_line_part` read to
+    /// its end. Kept apart from `memo`, which still names that line's own
+    /// start, so the next line and the same line again are both one step
+    /// away: the index may hold no checkpoint near either.
+    next: Option<Checkpoint>,
     /// What the last `read_lines` left at the front of `buf`: the line
     /// that starts there and how many bytes follow, so the next read can
     /// start from them instead of reading them again.
@@ -132,7 +138,7 @@ impl Scratch {
         let (first, len) = self.held?;
         let end = first.offset.0 + len as u64;
         let inside = |c: &Checkpoint| c.offset.0 >= first.offset.0 && c.offset.0 <= end;
-        let known = [self.memo, self.hint, Some(cp)];
+        let known = [self.memo, self.hint, self.next, Some(cp)];
         let known = known.iter().flatten();
         let before = *known
             .clone()
@@ -160,7 +166,7 @@ const BACK_LINES: u64 = 16;
 fn scan_start<S: Source>(
     source: &S,
     index: &LineIndex,
-    known: [Option<Checkpoint>; 2],
+    known: [Option<Checkpoint>; 3],
     line: LineNo,
     scratch: &mut [u8],
 ) -> Result<Option<Checkpoint>> {
@@ -253,6 +259,7 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
                 buf: vec![0; scratch.as_usize()],
                 memo: None,
                 hint: None,
+                next: None,
                 held: None,
             }),
             _reservation: reservation,
@@ -343,6 +350,13 @@ impl<S: Source, I: Borrow<LineIndex> + Sync> LineAccess for IndexedLines<S, I> {
                     // the file's unterminated last one.
                     if read_retrying(&self.source, &mut [0u8; 1], ByteOffset(pos + end as u64))? > 0
                     {
+                        // The caller reads it next in pieces, from here.
+                        if first == Some(LineNo(line)) {
+                            *memo = Some(Checkpoint {
+                                line: LineNo(line),
+                                offset: ByteOffset(pos),
+                            });
+                        }
                         return Err(Error::LineTooLong {
                             line: LineNo(line),
                             cap: Bytes(cap as u64),
@@ -416,7 +430,14 @@ impl<S: Source, I: Borrow<LineIndex> + Sync> LineAccess for IndexedLines<S, I> {
         if start >= self.source.len().0 {
             return ended(line.0, line + 1).map(|()| true);
         }
-        self.line_part(start, from.0, max.0, &mut scratch.buf, buf)
+        let end = self.line_part(start, from.0, max.0, &mut scratch.buf, buf)?;
+        if let Some(end) = end {
+            scratch.next = Some(Checkpoint {
+                line: line + 1,
+                offset: ByteOffset(end),
+            });
+        }
+        Ok(end.is_some())
     }
 }
 
@@ -450,7 +471,7 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
         let start = scan_start(
             &self.source,
             index,
-            [scratch.memo, scratch.hint],
+            [scratch.memo, scratch.hint, scratch.next],
             line,
             &mut scratch.buf,
         )?
@@ -459,8 +480,9 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
     }
 
     /// Reads up to `max` bytes of the line starting at file offset `start`,
-    /// from `from` bytes into it, into `buf` through `scratch`. True when
-    /// the piece ends the line: it holds the terminator, or the file ends.
+    /// from `from` bytes into it, into `buf` through `scratch`. When the
+    /// piece ends the line, because it holds the terminator or the file
+    /// ends, returns the offset just past it: where the next line starts.
     fn line_part(
         &self,
         start: u64,
@@ -468,7 +490,7 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
         max: u64,
         scratch: &mut [u8],
         buf: &mut LineBuf,
-    ) -> Result<bool> {
+    ) -> Result<Option<u64>> {
         let end = self.source.len().0;
         let mut at = start + from;
         let mut left = max;
@@ -484,7 +506,7 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
                 ByteOffset(at - back as u64),
             )?;
             if n == 0 || (back > 0 && scratch[0] == b'\n') {
-                return Ok(true);
+                return Ok(Some(at));
             }
             let got = &scratch[back..n];
             back = 0;
@@ -496,13 +518,13 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
                 None => (got.len(), false),
             };
             buf.extend_last(&got[..part])?;
-            if done {
-                return Ok(true);
-            }
             at += part as u64;
+            if done {
+                return Ok(Some(at));
+            }
             left -= part as u64;
         }
-        Ok(at >= end)
+        Ok((at >= end).then_some(at))
     }
 
     /// Byte offset where `line` starts: from the checkpoint before it, scan
@@ -514,7 +536,7 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
         let start = scan_start(
             &self.source,
             index,
-            [scratch.memo, scratch.hint],
+            [scratch.memo, scratch.hint, scratch.next],
             line,
             &mut scratch.buf,
         )?
@@ -830,8 +852,12 @@ mod tests {
         }
     }
 
-    /// A source that counts its reads.
-    struct Counted<'d>(&'d [u8], std::sync::atomic::AtomicU64);
+    /// A source that counts its reads and the bytes they return.
+    struct Counted<'d>(
+        &'d [u8],
+        std::sync::atomic::AtomicU64,
+        std::sync::atomic::AtomicU64,
+    );
 
     impl Source for Counted<'_> {
         fn len(&self) -> Bytes {
@@ -840,42 +866,11 @@ mod tests {
 
         fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
             self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.0.read_at(buf, offset)
+            let n = self.0.read_at(buf, offset)?;
+            self.2
+                .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+            Ok(n)
         }
-    }
-
-    #[test]
-    fn reads_inside_the_last_buffer_do_not_touch_the_source() {
-        let data: Vec<u8> = (0..400)
-            .flat_map(|i| format!("{i}\n").into_bytes())
-            .collect();
-        let mem = MemLines::new(&data);
-        let index = index_of(&data, 64);
-        let budget = Budget::new(Bytes::mib(1));
-        let src = Counted(&data, 0.into());
-        let access = IndexedLines::new(&src, &index, &budget, Half::Refine, Bytes(256)).unwrap();
-        let mut buf = LineBuf::new();
-        let reads = || src.1.load(std::sync::atomic::Ordering::Relaxed);
-        access.read_lines(LineNo(10)..LineNo(12), &mut buf).unwrap();
-        let first = reads();
-        // The same lines, the next ones and a prefix that starts inside
-        // the buffer cost nothing; a prefix read empties the buffer.
-        for r in [10..12, 12..20, 14..30] {
-            access
-                .read_lines(LineNo(r.start)..LineNo(r.end), &mut buf)
-                .unwrap();
-            for (k, line) in buf.iter().enumerate() {
-                assert_eq!(line, mem.line(r.start + k as u64).unwrap(), "{r:?}");
-            }
-        }
-        assert_eq!(reads(), first);
-        access
-            .read_line_prefix(LineNo(31), Bytes(8), &mut buf)
-            .unwrap();
-        let after = reads();
-        access.read_lines(LineNo(31)..LineNo(33), &mut buf).unwrap();
-        assert!(reads() > after);
-        assert_eq!(buf.iter().next().unwrap(), mem.line(31).unwrap());
     }
 
     /// A part read from the end of a line, as the trait allows, is empty
@@ -902,6 +897,112 @@ mod tests {
                 assert_eq!(buf.line(0), mem.line(i + 1).unwrap(), "line {}", i + 1);
             }
         }
+    }
+
+    /// A long line `read_lines` refuses is read next in pieces; finding
+    /// its start must not scan the lines before it a second time.
+    #[test]
+    fn a_long_line_refused_by_read_lines_is_not_sought_again() {
+        let data: Vec<u8> = (0..8u8)
+            .flat_map(|i| {
+                let mut line = vec![b'a' + i; 100_000];
+                line.push(b'\n');
+                line
+            })
+            .collect();
+        let index = index_of(&data, 16);
+        let budget = Budget::new(Bytes::mib(1));
+        let src = Counted(&data, 0.into(), 0.into());
+        let access = IndexedLines::new(&src, &index, &budget, Half::Refine, Bytes(4096)).unwrap();
+        let mut buf = LineBuf::new();
+        let mut seen = Vec::new();
+        crate::script::for_each_piece(&access, LineNo(3)..LineNo(8), &mut buf, |piece, _, _| {
+            seen.extend_from_slice(piece);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, data[3 * 100_001..]);
+        let read = src.2.load(std::sync::atomic::Ordering::Relaxed);
+        // Lines 0 to 2 skipped once, then the same reads as in
+        // `long_lines_read_in_pieces_are_read_once`.
+        assert!(
+            read <= data.len() as u64 + 5 * (2 * 4096 + 1),
+            "read {read} bytes of {}",
+            data.len()
+        );
+    }
+
+    /// Hashing a segment reads each long line in pieces, then asks for the
+    /// next lines. With no checkpoint near them, as when the index holds
+    /// only line 0, the reader must still find each line from where the
+    /// last read ended instead of scanning the line before it again.
+    #[test]
+    fn long_lines_read_in_pieces_are_read_once() {
+        let data: Vec<u8> = (0..8u8)
+            .flat_map(|i| {
+                let mut line = vec![b'a' + i; 100_000];
+                line.push(b'\n');
+                line
+            })
+            .collect();
+        let index = index_of(&data, 16);
+        assert_eq!(index.checkpoints().len(), 1);
+        let budget = Budget::new(Bytes::mib(1));
+        let src = Counted(&data, 0.into(), 0.into());
+        let access = IndexedLines::new(&src, &index, &budget, Half::Refine, Bytes(4096)).unwrap();
+        let mut buf = LineBuf::new();
+        let mut seen = Vec::new();
+        crate::script::for_each_piece(&access, LineNo(0)..LineNo(8), &mut buf, |piece, _, _| {
+            seen.extend_from_slice(piece);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, data);
+        let read = src.2.load(std::sync::atomic::Ordering::Relaxed);
+        // Each line once, plus per line the buffer `read_lines` fills
+        // before it finds the line too long, its one-byte probe, the byte
+        // before each resumed piece, and the last piece's read past the
+        // newline. Scanning the line before again would cost a whole line
+        // more each time.
+        assert!(
+            read <= data.len() as u64 + 8 * (2 * 4096 + 1),
+            "read {read} bytes of {}",
+            data.len()
+        );
+    }
+
+    #[test]
+    fn reads_inside_the_last_buffer_do_not_touch_the_source() {
+        let data: Vec<u8> = (0..400)
+            .flat_map(|i| format!("{i}\n").into_bytes())
+            .collect();
+        let mem = MemLines::new(&data);
+        let index = index_of(&data, 64);
+        let budget = Budget::new(Bytes::mib(1));
+        let src = Counted(&data, 0.into(), 0.into());
+        let access = IndexedLines::new(&src, &index, &budget, Half::Refine, Bytes(256)).unwrap();
+        let mut buf = LineBuf::new();
+        let reads = || src.1.load(std::sync::atomic::Ordering::Relaxed);
+        access.read_lines(LineNo(10)..LineNo(12), &mut buf).unwrap();
+        let first = reads();
+        // The same lines, the next ones and a prefix that starts inside
+        // the buffer cost nothing; a prefix read empties the buffer.
+        for r in [10..12, 12..20, 14..30] {
+            access
+                .read_lines(LineNo(r.start)..LineNo(r.end), &mut buf)
+                .unwrap();
+            for (k, line) in buf.iter().enumerate() {
+                assert_eq!(line, mem.line(r.start + k as u64).unwrap(), "{r:?}");
+            }
+        }
+        assert_eq!(reads(), first);
+        access
+            .read_line_prefix(LineNo(31), Bytes(8), &mut buf)
+            .unwrap();
+        let after = reads();
+        access.read_lines(LineNo(31)..LineNo(33), &mut buf).unwrap();
+        assert!(reads() > after);
+        assert_eq!(buf.iter().next().unwrap(), mem.line(31).unwrap());
     }
 
     proptest::proptest! {
