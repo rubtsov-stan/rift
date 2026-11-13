@@ -108,7 +108,12 @@ at most 30 KiB outside the pool and 7.5 KiB per pool thread (macOS, 1 to
 with no more threads than `R` pays for. `--mem` is at least 64K,
 since parsing the command line takes about 28 KiB before any budget
 exists. The advice `rerun with --mem N` adds `R` to what the halves
-need. Key mode keeps only the 48 KiB: it never starts rayon's global
+need and is at least twice the `--mem` refused, so a chain of reruns
+reaches the need in about log2 steps; the last step can overshoot it by
+up to about a factor of two. A full diff needs about 10.3 MiB whatever
+the files hold: the refine half must hold the comparison buffers of one
+worker, about 5 MiB (`--mem 10475K`); `--summary` and key mode do not
+refine. Key mode keeps only the 48 KiB: it never starts rayon's global
 pool and holds its own pool's heap in the refine half. `rift serve`
 keeps its own 8 MiB for the protocol out of
 `--max-total-mem` and takes no further reserve per session.
@@ -509,11 +514,12 @@ and in B.
 
 A dump without an id column gives the skeleton few unique lines, so it
 ends up with few anchors and large `Approx` regions. A shingle is the hash
-of a window of `w` consecutive lines, combined from line hashes instead of
-hashing the bytes again. Shingles are sampled by the strata rule, and one
-that occurs once in each file becomes a candidate pointing at its first
-line. They come from a second `CandidateSource` and are paid from the
-skeleton half; when they do not fit, the skeleton falls back to unique
+of a window of `w` consecutive samples, combined from line hashes instead
+of hashing the bytes again; at stratum 0 every line is a sample, so a
+window is `w` consecutive lines. The strata rule picks the samples, and
+every window of them is hashed, none is dropped. A shingle that occurs once
+in each file becomes a candidate pointing at the first line of its window. They come from a second `CandidateSource` and
+are paid from the skeleton half; when they do not fit, the skeleton falls back to unique
 lines alone and does not fail. A shingle anchor is confirmed like any
 other, by comparing its first line byte by byte; the rest of its window
 lies in the gaps after it, which are compared or refined.
