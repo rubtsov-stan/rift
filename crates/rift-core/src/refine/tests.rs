@@ -625,3 +625,32 @@ fn lines_longer_than_the_reader_are_compared_in_pieces() {
         .unwrap();
     assert_eq!(apply(&hunk, &seg, &lines(&a), &lines(&b)).concat(), b);
 }
+
+/// At the deepest patience level a gap whose sides share no line is still
+/// replaced exactly: no chain is followed, but the shared-hash check runs,
+/// so the replacement is not marked `Cutoff` for want of a proof.
+#[test]
+fn a_gap_without_a_common_line_is_exact_at_the_deepest_level() {
+    let a: Vec<LineHash> = (0..300).map(|i| i % 3).collect();
+    let b: Vec<LineHash> = (0..280).map(|i| 10 + i % 4).collect();
+    for depth in [0, MAX_DEPTH - 1, MAX_DEPTH] {
+        let mut ws = Workspace::new(a.len(), b.len()).unwrap();
+        let mut diff = Diff {
+            a: &a,
+            b: &b,
+            ws: &mut ws,
+            cutoff: 1,
+            dp_max: DP_MAX,
+            patience: true,
+            limit: 0,
+            spent: 0,
+            approx: None,
+        };
+        diff.solve(0..a.len(), 0..b.len(), depth);
+        assert_eq!(diff.approx, None, "depth {depth}");
+        assert!(
+            ws.removed.iter().chain(&ws.added).all(|&x| x),
+            "depth {depth}"
+        );
+    }
+}
