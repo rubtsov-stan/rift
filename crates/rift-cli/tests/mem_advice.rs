@@ -200,3 +200,59 @@ fn following_the_advice_converges_in_a_few_steps() {
         assert_eq!(last.status.code(), Some(1), "{profile:?}");
     }
 }
+
+/// Just above the full diff's smallest `--mem`, segments can come out
+/// approximate for lack of budget. `--stats` then names a `--mem` to try,
+/// and at that value there are none. Every budget of the band that the
+/// move list's reserve opened (10300K to 11800K) on the two pairs that
+/// showed it.
+#[test]
+#[ignore = "generates 16 and 4 MiB pairs and runs about 200 diffs; run in release"]
+fn approx_for_lack_of_budget_names_a_mem_that_removes_it() {
+    use rift_gen::{Config, Profile};
+    let cases = [
+        ("shuffled", Profile::Shuffled, 7, 16 << 20, 0.05),
+        ("nokey", Profile::Nokey, 5, 4 << 20, 0.2),
+    ];
+    // Segments that ran out of budget; the other reasons do not follow
+    // --mem, and the nokey pair keeps two of them at any budget.
+    let approx = |out: &Output| -> u64 {
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .filter(|l| l.contains("too large to align within --mem"))
+            .map(|l| l.split_whitespace().next().unwrap().parse::<u64>().unwrap())
+            .sum()
+    };
+    for (name, profile, seed, size, ratio) in cases {
+        let mut config = Config::new(seed, size, profile);
+        config.change_ratio = ratio;
+        let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+        rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (a_path, b_path) = (dir.path().join("a"), dir.path().join("b"));
+        std::fs::write(&a_path, &a).unwrap();
+        std::fs::write(&b_path, &b).unwrap();
+        let mut seen = 0;
+        for k in (10_300..=11_800).step_by(32) {
+            let mem = format!("{k}K");
+            let out = rift(&["--stats"], &mem, &a_path, &b_path);
+            // Under the full diff's smallest --mem the run is refused.
+            if out.status.code() == Some(2) || approx(&out) == 0 {
+                continue;
+            }
+            seen += 1;
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let (_, rest) = stderr
+                .split_once("; try --mem ")
+                .unwrap_or_else(|| panic!("{name} {mem}: approx without a figure:\n{stderr}"));
+            let next = rest.lines().next().unwrap();
+            assert!(bytes(next) > bytes(&mem), "{name} {mem} names {next}");
+            let again = rift(&["--stats"], next, &a_path, &b_path);
+            assert_eq!(approx(&again), 0, "{name}: {mem} names {next}");
+        }
+        assert!(
+            seen > 0,
+            "{name}: no budget of the band came out approximate"
+        );
+    }
+}
