@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   segments that came out approximate for lack of budget. On the shuffled
   16 MiB and nokey 4 MiB pairs, every budget in 32K steps from 10300K to 11800K that
   showed such segments is clear at the figure named.
+- Documented that a full diff needs about 10.3 MiB (`--mem 10475K`)
+  whatever the files hold, in `--help`, the man page and the memory
+  guide.
 - Documented that a moved block is an exact copy that may be partly
   aligned: lines the diff aligned with another copy print as context.
 - Just above the full diff's smallest `--mem`, more regions can come out

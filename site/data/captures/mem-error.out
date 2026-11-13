@@ -1,1 +1,1 @@
-rift: skeleton budget exceeded: requested 253960 bytes, 122856 available; rerun with --mem 769K
+rift: skeleton budget exceeded: requested 253960 bytes, 165864 available; rerun with --mem 1024K
