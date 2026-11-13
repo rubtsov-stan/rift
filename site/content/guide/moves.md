@@ -17,7 +17,7 @@ A dump written in a different order, or a function cut from one place and pasted
 - The terminal view marks both ends of a block, and `m` jumps from one end to the other.
 - The unified diff does not change, byte for byte.
 
-A block counts as moved when it has at least three lines and appears in both files at different positions. No line is in two blocks. In the summary of the generated pair:
+A block counts as moved when it has at least three lines and appears in both files at different positions. Some of its lines can also print as context, when the diff aligned them with another copy, and no line is in two blocks. In the summary of the generated pair:
 
 {{ term(name="sql-summary", kind="summary", title="the moved section is near the end") }}
 

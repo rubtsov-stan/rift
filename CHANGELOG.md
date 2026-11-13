@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documented that a moved block is an exact copy that may be partly
+  aligned: lines the diff aligned with another copy print as context.
 - Just above the full diff's smallest `--mem`, more regions can come out
   approximate than in 0.3.2, and the diff can skip moved blocks 0.3.2
   listed: the block list is now set aside for one block per seed before

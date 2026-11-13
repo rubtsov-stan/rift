@@ -150,7 +150,8 @@ pub struct Line {
     pub truncated: bool,
     /// The bytes shown are not valid UTF-8.
     pub lossy: bool,
-    /// The line lies in a moved block on its side.
+    /// The line lies in a moved block on its side. It can be a context
+    /// line, when the diff aligned it with another copy.
     pub moved: bool,
 }
 

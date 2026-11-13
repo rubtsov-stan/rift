@@ -13,8 +13,12 @@
 //! Blocks never share a line of A, and a block that would share lines of B
 //! with another is clipped, so every line is in at most one block.
 //!
-//! A moved block annotates the diff and never changes it: the edit script
-//! still deletes the block on one side and inserts it on the other.
+//! A moved block annotates the diff and never changes it. It is an exact
+//! copy, not a promise about the edit script: the script deletes and
+//! inserts the lines the diff could not align, and some lines of a block
+//! may be aligned elsewhere and print as context. In `P D E F` moved from
+//! A to the end of B, with `D E F` also kept in place in B, only `P` is
+//! deleted.
 //!
 //! Seeds come from the skeleton's samples, so at stratum `L` a block of
 //! `n` lines is missed when none of its lines was sampled, with chance
