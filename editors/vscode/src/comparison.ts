@@ -159,7 +159,7 @@ export class Comparison {
     try {
       await this.refreshSummary();
       await this.loadSegments();
-      if (this.summary?.moves === 'found' && (this.summary.moved_blocks ?? 0) > 0) await this.loadMoves();
+      if (this.summary?.moves && this.summary.moves !== 'off' && this.summary.moves !== 'skipped' && (this.summary.moved_blocks ?? 0) > 0) await this.loadMoves();
     } catch (e) {
       if (!(e instanceof RpcError)) throw e;
       this.state = 'failed';

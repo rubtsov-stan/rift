@@ -26,6 +26,16 @@ describeMock('tree', () => {
     assert.deepStrictEqual(labels(x, moves), ['A 20–24 → B 47–51 | 5 lines']);
   });
 
+  for (const [name, file, note] of [['partial', 'movespartial.sql', ', list full'], ['an unknown state', 'movesfuture.sql', '']]) {
+    it(`lists the moved blocks when the server reports ${name}`, async () => {
+      await compare(file, 'b.sql');
+      await ready(x);
+      const root = labels(x);
+      assert.match(root[0], new RegExp(`\\| 4 differ · 1 approx · 6 equal · 1 moved${note}$`));
+      assert.strictEqual(root[2], `Moved blocks (1${note})`);
+    });
+  }
+
   it('shows the refine progress the notifications reported, not the one in the last summary', () => {
     const refine = (done: number) => ({ phase: 'refine' as const, done, total: 287 });
     const tree = new RiftTree();

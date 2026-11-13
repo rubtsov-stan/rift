@@ -49,6 +49,17 @@ describe('Comparison', () => {
     server.dispose();
   });
 
+  for (const [name, moves] of [['partial', 'partial'], ['a state it does not know', 'from-the-future']]) {
+    it(`loads the moves when the server reports ${name}`, async () => {
+      const { server, cmp, failures } = setup(`/x/moves${moves === 'partial' ? 'partial' : 'future'}.sql`);
+      await cmp.open();
+      await until(() => cmp.state === 'ready' && cmp.movesTotal === 1);
+      assert.strictEqual(cmp.summary?.moves, moves);
+      assert.deepStrictEqual(failures, []);
+      server.dispose();
+    });
+  }
+
   it('fails a scan that does not fit and keeps the suggestion', async () => {
     const { server, cmp, failures } = setup('/x/a.sql', '512K');
     await cmp.open();

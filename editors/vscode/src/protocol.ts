@@ -58,7 +58,7 @@ export interface Summary {
   differs?: Count;
   approx?: Count;
   differing_segments?: number;
-  moves?: 'found' | 'off' | 'skipped';
+  moves?: MovesState;
   moved_blocks?: number;
   mem_bytes: number;
   progress?: Progress;
@@ -110,10 +110,14 @@ export interface MoveBlock {
   b: Range;
 }
 
+// `partial`: the list filled up and later moves may be missing. A server newer
+// than the extension may send other values; they are read as `found`.
+export type MovesState = 'found' | 'partial' | 'off' | 'skipped' | (string & {});
+
 export interface MovesResult {
   total: number;
   offset: number;
-  moves: 'found' | 'off' | 'skipped';
+  moves: MovesState;
   blocks: MoveBlock[];
 }
 

@@ -2,6 +2,17 @@ import { HunkResult, Line, Range, Side } from './protocol';
 
 export const num = (n: number): string => n.toLocaleString('en-US');
 
+// The summary's note on the move search, or nothing when it says nothing of
+// the blocks. A state this extension does not know is read as `found` when it
+// lists blocks and is not mentioned when it lists none, so a newer server
+// stays usable and nothing claims "no moves" it cannot know.
+export function movedNote(moves: string | undefined, blocks: number): string | undefined {
+  if (moves === 'skipped') return 'moves not searched';
+  if (!moves || moves === 'off') return undefined;
+  if (moves !== 'found' && moves !== 'partial' && blocks === 0) return undefined;
+  return `${num(blocks)} moved${moves === 'partial' ? ', list full' : ''}`;
+}
+
 // Lines 5-9 are "5–9", one line is "5", an empty range sits before its start.
 export function fmtRange(r: Range): string {
   if (r.count === 0) return `before ${num(r.start)}`;

@@ -279,6 +279,12 @@ async function main() {
   assert.strictEqual(sum.state, 'ready');
   assert.strictEqual(sum.differing_segments, fixture.segments.length);
 
+  // A session of a "movespartial" path reports a full block list in both methods.
+  const part = await ok('open', { a: '/x/movespartial.sql', b: '/x/b.sql', mem: '256M' });
+  assert.strictEqual((await stateOf(part.session)).state, 'ready');
+  assert.strictEqual((await ok('summary', { session: part.session })).moves, 'partial');
+  assert.strictEqual((await ok('moves', { session: part.session })).moves, 'partial');
+
   // Paging.
   const p1 = await ok('segments', { session: s, offset: 0, limit: 2 });
   const p2 = await ok('segments', { session: s, offset: 2, limit: 100 });

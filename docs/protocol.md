@@ -246,7 +246,8 @@ error object:
   is final once `done` reaches `total`. In Rift 0.3.0, `approx` counted
   segments by their status in the map, which never holds `approx`, so it
   was always 0 and `differs` counted every differing segment.
-- `moves`: `found` (the search ran; `moved_blocks` may be 0), `off` (the
+- `moves`: `found` (the search ran; `moved_blocks` may be 0), `partial`
+  (the list filled up, see below), `off` (the
   server was started without move detection), or `skipped` (the budget
   did not allow the search, so 0 blocks says nothing about the files).
   The list holds about one block per 512 bytes of the session's
