@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The line index's size no longer depends on the scan's chunk size,
+  which followed the core count. Near some `--mem` values a few bytes of
+  difference picked another stratum, so two machines printed different,
+  equally valid diffs. The index now keeps one checkpoint per multiple
+  of its interval, so two checkpoints can be up to twice the interval
+  apart.
 - Key mode: a duplicate key could be dropped without an error under a
   tight `--mem`; it is now always an error. With no room left to list
   the duplicate, 0.3.2 and earlier skipped the second record and could

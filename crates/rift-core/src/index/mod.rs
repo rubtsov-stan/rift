@@ -1,10 +1,10 @@
-//! Sparse line index: a checkpoint offset at least every C lines.
+//! Sparse line index: one checkpoint offset per C lines.
 //!
-//! The scanner records one checkpoint per `interval` lines inside each of
-//! its chunks, so consecutive checkpoints are at most `interval` lines apart
-//! and a chunk boundary only brings them closer. [`IndexedLines`] turns the
-//! index plus a [`Source`] into [`LineAccess`]: reaching any line costs one
-//! binary search and a forward scan of fewer than `interval` lines.
+//! The scanner keeps one checkpoint per multiple of `interval`: the last
+//! line start it recorded at or before it, so consecutive checkpoints are
+//! fewer than `2 * interval` lines apart. [`IndexedLines`] turns the index
+//! plus a [`Source`] into [`LineAccess`]: reaching any line costs one
+//! binary search and a forward scan of fewer than `2 * interval` lines.
 
 use std::borrow::Borrow;
 use std::io;
@@ -42,8 +42,8 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
-    /// Builds an index from sorted checkpoints at most `interval` lines
-    /// apart. Lives in the skeleton half together with the samples; the
+    /// Builds an index from sorted checkpoints fewer than `2 * interval`
+    /// lines apart. Lives in the skeleton half together with the samples; the
     /// scanner holds the reservation.
     #[must_use]
     pub(crate) fn new(checkpoints: Vec<Checkpoint>, lines: u64, interval: u64) -> Self {
@@ -52,7 +52,7 @@ impl LineIndex {
         debug_assert!(
             checkpoints
                 .windows(2)
-                .all(|w| w[1].line - w[0].line <= interval)
+                .all(|w| w[1].line - w[0].line < 2 * interval)
         );
         Self {
             checkpoints,
@@ -67,7 +67,8 @@ impl LineIndex {
         self.lines
     }
 
-    /// Upper bound on the lines between two consecutive checkpoints.
+    /// Lines per checkpoint; consecutive checkpoints are fewer than twice
+    /// this apart.
     #[must_use]
     pub fn interval(&self) -> u64 {
         self.interval

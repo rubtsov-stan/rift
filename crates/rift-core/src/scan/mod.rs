@@ -15,10 +15,18 @@
 //! refuses to grow, the stratum is raised, or the checkpoint interval
 //! doubled, and the vectors are thinned in place; nothing is reread.
 //!
+//! Checkpoints are first taken every `interval` lines of each chunk, from
+//! its first line, since a worker does not know where its chunk starts in
+//! lines. Once the scan ends, the index keeps the last of them at or
+//! before each multiple of `interval`, so its size depends only on the line
+//! count, never on the chunk size or the thread count, and consecutive
+//! checkpoints are fewer than `2 * interval` lines apart. While the scan
+//! runs, the cap has room for one more checkpoint per chunk.
+//!
 //! Memory, all from the skeleton half: the sample and checkpoint vectors for
 //! the lifetime of the result, and for the duration of the scan only, the
 //! per-worker buffers, at most one chunk plus a tail and never more than the
-//! file, plus one counter per chunk. Nothing is sized from the budget alone:
+//! file, one counter per chunk and room for one checkpoint per chunk. Nothing is sized from the budget alone:
 //! a small file costs little whatever `--mem` says.
 //!
 //! A [`Watch`] follows the scan from another thread: before every read the
@@ -364,6 +372,7 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
         level: AtomicU32::new(cfg.level),
         checkpoints: Mutex::new(Vec::with_capacity(to_usize(checkpoint_start))),
         checkpoint_cap: cfg.checkpoint_cap,
+        chunk_starts: to_usize(chunks),
         interval: AtomicU64::new(cfg.checkpoint_interval),
         keep: Mutex::new(keep),
         buf_len: to_usize(buf_len),
@@ -426,6 +435,7 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
         c.line += base(c.offset);
     }
     checkpoints.sort_unstable_by_key(|c| c.line);
+    let interval = one_per_multiple(&mut checkpoints, total, interval, cfg.checkpoint_cap)?;
 
     release_slack(&mut samples, &mut keep);
     release_slack(&mut checkpoints, &mut keep);
@@ -438,6 +448,41 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
     })
 }
 
+/// Thins `checkpoints`, sorted and absolute, of a file of `total` lines to
+/// one per multiple of the interval, doubling `interval` until that fits
+/// `cap`, and returns the interval.
+fn one_per_multiple(
+    checkpoints: &mut Vec<Checkpoint>,
+    total: u64,
+    mut interval: u64,
+    cap: usize,
+) -> Result<u64> {
+    // Unless the budget refused it room, the scan doubled the interval only
+    // while its checkpoints, at most `total / interval` plus one per chunk,
+    // overflowed the cap plus one per chunk, so `total / interval` alone
+    // overflowed the cap too: the interval reached here is the smallest
+    // that fits, whatever the chunks.
+    while total.div_ceil(interval) > cap as u64 {
+        if interval >= MAX_INTERVAL {
+            return Err(exceeded(to_usize(total.div_ceil(interval)), checkpoints));
+        }
+        interval *= 2;
+    }
+    // Keep the last checkpoint at or before each multiple of `interval`
+    // below the line count. No two multiples share one, since the scan left
+    // fewer than `interval` lines after each: exactly one per multiple.
+    let mut kept = 0;
+    for i in 0..checkpoints.len() {
+        let end = checkpoints.get(i + 1).map_or(total, |c| c.line.0);
+        if checkpoints[i].line.0.div_ceil(interval) * interval < end {
+            checkpoints[kept] = checkpoints[i];
+            kept += 1;
+        }
+    }
+    checkpoints.truncate(kept);
+    Ok(interval)
+}
+
 /// State the workers share. Lines in `samples` and `checkpoints` are
 /// chunk-local until the scan ends.
 struct Shared<'m> {
@@ -446,8 +491,12 @@ struct Shared<'m> {
     sample_cap: usize,
     level: AtomicU32,
     checkpoints: Mutex<Vec<Checkpoint>>,
-    /// Most checkpoints before the interval is doubled.
+    /// Checkpoints the index may keep.
     checkpoint_cap: usize,
+    /// Chunks: each starts with a checkpoint the index may drop later, so
+    /// the vector may hold this many past the cap before the interval is
+    /// doubled.
+    chunk_starts: usize,
     interval: AtomicU64,
     /// Bytes held for both vectors. Locked only while a vector's own lock is
     /// held, always in that order, so the two cannot deadlock.
@@ -486,6 +535,18 @@ impl Shared<'_> {
         Ok(level)
     }
 
+    /// The most checkpoints the vector may grow to while it needs room for
+    /// `need`: the cap, and past it one more per chunk. Growth stops at
+    /// the cap first, so a scan that fits the cap takes no more than it
+    /// did before the extra room existed.
+    fn checkpoint_room(&self, need: usize) -> usize {
+        if need <= self.checkpoint_cap {
+            self.checkpoint_cap
+        } else {
+            self.checkpoint_cap.saturating_add(self.chunk_starts)
+        }
+    }
+
     /// Appends `staging`, doubling the interval as needed, and returns the
     /// interval now in force.
     fn push_checkpoints(&self, staging: &mut Vec<Checkpoint>) -> Result<u64> {
@@ -495,9 +556,10 @@ impl Shared<'_> {
             .unwrap_or_else(PoisonError::into_inner);
         let mut interval = self.interval.load(Ordering::Relaxed);
         staging.retain(|c| c.line.0.is_multiple_of(interval));
-        while out.len() + staging.len() > out.capacity()
-            && !self.grow(&mut out, staging.len(), self.checkpoint_cap)
-        {
+        while out.len() + staging.len() > out.capacity() && {
+            let room = self.checkpoint_room(out.len() + staging.len());
+            !self.grow(&mut out, staging.len(), room)
+        } {
             if interval >= MAX_INTERVAL {
                 return Err(exceeded(out.len() + staging.len(), &out));
             }
