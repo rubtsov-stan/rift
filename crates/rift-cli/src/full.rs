@@ -140,7 +140,7 @@ pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
 fn label(path: &Path) -> anyhow::Result<(Vec<u8>, Timestamp)> {
     let modified = std::fs::metadata(path)
         .and_then(|m| m.modified())
-        .with_context(|| format!("stat {}", path.display()))?;
+        .with_context(|| format!("stat {}", crate::source::shown(path)))?;
     let (secs, nanos) = match modified.duration_since(UNIX_EPOCH) {
         Ok(d) => (
             i64::try_from(d.as_secs()).unwrap_or(i64::MAX),

@@ -49,7 +49,7 @@ impl Pointer {
             .read(true)
             .custom_flags(libc::O_NONBLOCK)
             .open(path)
-            .with_context(|| format!("open {}", path.display()))?;
+            .with_context(|| format!("open {}", crate::source::shown(path)))?;
         let meta = file.metadata()?;
         let len = meta.len();
         if !meta.is_file() || len > MAX_POINTER || len < MAGIC.len() as u64 {
@@ -79,9 +79,11 @@ impl Pointer {
                 "{name} is a Git LFS pointer and object {} is not in {}; \
                  run `git lfs fetch`",
                 self.oid,
-                object.display()
+                crate::source::shown(&object)
             ),
-            Err(e) => return Err(e).with_context(|| format!("stat {}", object.display())),
+            Err(e) => {
+                return Err(e).with_context(|| format!("stat {}", crate::source::shown(&object)));
+            }
         };
         if len != self.size {
             bail!(
@@ -89,7 +91,7 @@ impl Pointer {
                  run `git lfs fetch` after removing {}",
                 self.oid,
                 self.size,
-                object.display()
+                crate::source::shown(&object)
             );
         }
         Ok(object)

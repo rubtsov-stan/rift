@@ -74,6 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An error that names a path longer than 256 bytes shows its first and
+  last 120 bytes, so a command line of 200 KB no longer prints back whole.
+  The command line is still outside the budget.
 - A seek hint at the end of a file without a final newline no longer
   makes a read of an earlier line return the wrong bytes. No caller
   passed such a hint.

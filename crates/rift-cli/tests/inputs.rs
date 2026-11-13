@@ -115,3 +115,23 @@ fn dev_null_is_an_empty_file() {
     fs::write(&b, "x\n").unwrap();
     assert_eq!(rift(&[Path::new("/dev/null"), &b]).status.code(), Some(1));
 }
+
+/// An operand of 120 KB (a Linux argument stops at 128 KiB) that names no file: the error names its start and
+/// end, not all of it, because the command line is the one thing the
+/// budget does not hold and a message must not copy it two or three times.
+#[test]
+fn a_very_long_operand_is_named_by_its_ends() {
+    let long = format!("{}end", "d/".repeat(60_000));
+    let ok = tempfile::NamedTempFile::new().unwrap();
+    let ok = ok.path().to_str().unwrap();
+    for args in [[long.as_str(), ok], [ok, long.as_str()]] {
+        let mut cmd = Command::new(BIN);
+        cmd.args(["--mem", "64K"]).args(args);
+        let out = finish(cmd);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{args:.1?}");
+        assert!(stderr.len() < 1024, "{} bytes of error", stderr.len());
+        assert!(stderr.contains("d/d/"), "{stderr}");
+        assert!(stderr.contains("end"), "{stderr}");
+    }
+}
