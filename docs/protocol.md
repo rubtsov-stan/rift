@@ -355,7 +355,7 @@ A line:
 | `eol` | `lf`, `crlf`, or `none` for a last line without a terminator |
 | `truncated` | `text` holds only the first `max_line_bytes` bytes; a UTF-8 sequence cut by that limit is dropped, not replaced |
 | `lossy` | the shown bytes are not valid UTF-8, so `text` does not give them back exactly |
-| `moved` | the line lies in a moved block on its side |
+| `moved` | the line lies in a moved block on its side; it can be a context line when the diff aligned it with another copy |
 
 ### `moves`
 
@@ -377,8 +377,9 @@ Result:
 ```
 
 A moved block is two ranges of the same length holding the same bytes.
-It annotates the diff and never changes the edit script. No line is in
-two blocks.
+It annotates the diff and never changes the edit script. Some of its
+lines may be aligned by the diff with another copy and come as context
+lines with `moved` set. No line is in two blocks.
 
 ### `set_visible`
 
