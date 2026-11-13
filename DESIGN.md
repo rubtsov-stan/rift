@@ -485,7 +485,7 @@ prints the changes described under "Key mode".
 **`MovedBlock`** (`moves`). Two line ranges of the same length, one in A
 and one in B, holding the same bytes. `DiffView::moved_blocks` returns
 them ordered by A, and its default returns none. A moved block annotates
-the diff and never changes the edit script.
+the diff and never changes the edit script. No line is in two blocks.
 
 **`rift-mcp`**. A crate with an MCP server on standard input and output,
 built on `rmcp`. It answers `initialize` and serves the tools described

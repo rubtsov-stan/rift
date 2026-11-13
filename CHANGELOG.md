@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Two moved blocks could share lines of B, and `--summary` counted
+  those lines twice. A block that starts inside another's B range now
+  loses the shared lines, and is dropped when fewer than 3 remain.
 - Looking for moved blocks could change the diff: the block list took
   its room from the refine half before the scheduler, so a region could
   be approximate for one reason with the search and another without it.
