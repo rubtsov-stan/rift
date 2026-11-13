@@ -74,7 +74,11 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
         );
         for (reason, n) in ApproxReason::ALL.iter().zip(written.approx_reasons) {
             if n > 0 {
-                eprintln!("  {n} segments: {}", reason.describe());
+                eprintln!(
+                    "  {n} segments: {}{}",
+                    reason.describe(),
+                    rerun(*reason, mem)
+                );
             }
         }
         print_moves(
@@ -87,6 +91,17 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
         Verdict::Identical => ExitCode::SUCCESS,
         Verdict::Different => ExitCode::from(1),
     })
+}
+
+/// For a segment that ran out of budget, a `--mem` to try: twice this one,
+/// the step a refusal advises. Other reasons do not depend on `--mem`.
+fn rerun(reason: ApproxReason, mem: Bytes) -> String {
+    match (reason, mem.0.checked_mul(2)) {
+        (ApproxReason::Budget, Some(twice)) => {
+            format!("; try --mem {}", Bytes(twice).to_mem_arg())
+        }
+        _ => String::new(),
+    }
 }
 
 /// Without the `tui` feature there is no terminal interface to open.
