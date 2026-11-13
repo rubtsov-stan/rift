@@ -249,6 +249,9 @@ error object:
 - `moves`: `found` (the search ran; `moved_blocks` may be 0), `off` (the
   server was started without move detection), or `skipped` (the budget
   did not allow the search, so 0 blocks says nothing about the files).
+  The list holds about one block per 512 bytes of the session's
+  `mem`; a search that fills it stops and keeps what it found, and the
+  state is still `found`.
 - `progress`: in phase `refine`, segments refined so far, of those that
   need it.
 

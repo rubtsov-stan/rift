@@ -387,3 +387,56 @@ fn the_worker_count_does_not_change_the_diff() {
         );
     }
 }
+
+/// Pairs of three-line runs swapped in B, each its own segment, then a
+/// large region with no line in common: many moved blocks next to one
+/// segment that only fits the scheduler near some budgets.
+fn swaps(swaps: u64, big: u64) -> (Vec<u8>, Vec<u8>) {
+    use std::fmt::Write;
+    let (mut a, mut b) = (String::new(), String::new());
+    for s in 0..swaps {
+        let run = |k: u64| -> String {
+            (0..3).fold(String::new(), |mut t, i| {
+                writeln!(t, "row-{:09},alpha", 6 * s + k + i).unwrap();
+                t
+            })
+        };
+        let (x, y) = (run(0), run(3));
+        writeln!(a, "{x}{y}sep-{s:09}").unwrap();
+        writeln!(b, "{y}{x}sep-{s:09}").unwrap();
+    }
+    for i in 0..big {
+        writeln!(a, "old-{i:09},{}", "z".repeat(20)).unwrap();
+        writeln!(b, "new-{i:09},{}", "q".repeat(20)).unwrap();
+    }
+    for i in 0..1000 {
+        writeln!(a, "tail-{i}").unwrap();
+        writeln!(b, "tail-{i}").unwrap();
+    }
+    (a.into_bytes(), b.into_bytes())
+}
+
+/// Looking for moved blocks leaves the diff as it is, approximate marks
+/// included: the scheduler gets the same share with and without it. At
+/// 24 MiB this pair's large region was approximate for lack of budget
+/// with the search and for lack of anchors without it. Before the list
+/// was set aside in both modes, a sweep of 22 to 26 MiB in steps of
+/// 512 KiB found no other budget where they differed.
+#[test]
+fn the_move_search_does_not_change_the_diff() {
+    let (a, b) = swaps(20_000, 80_000);
+    let run = |moves| {
+        let d = Diff::with_config(
+            Arc::<[u8]>::from(&a[..]),
+            Arc::<[u8]>::from(&b[..]),
+            &Budget::new(Bytes::mib(24)),
+            2,
+            Config { moves },
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        d.write_unified(&opts(), &mut out).unwrap();
+        out
+    };
+    assert_eq!(xxh3_64(&run(true)), xxh3_64(&run(false)));
+}

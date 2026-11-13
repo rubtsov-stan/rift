@@ -70,12 +70,12 @@ Sources: `crates/rift-core/src/diff/mod.rs`, `Config` (`moves`); `crates/rift-cl
 
 ## What it costs
 
-Moved blocks are paid from the refine half, before the scheduler takes the rest: 32 bytes per block for the life of the diff, capped at an eighth of what the half has free when the search starts, and, while the search runs, two readers with 4 KiB buffers and two comparison buffers of up to 128 KiB each. When either does not fit, the search keeps nothing, and `--summary` says so:
+Moved blocks are paid from the refine half. The list takes 32 bytes per block, for at most one block per seed and at most an eighth of the half's capacity. The diff reserves it before the workers and the scheduler and holds it for its whole life, with the search on or off, so the search never changes what the scheduler gets, and with it which regions come out approximate. While the search runs, it also takes two readers with 4 KiB buffers and two comparison buffers of up to 128 KiB each. When those or the list do not fit, the search keeps nothing, and `--summary` says so:
 
 ```
 moved    not searched, the budget is too small
 ```
 
-That line is from the 2,000-line pair of the [memory budget](@/design/memory.md) page at `--mem 304K`. `--no-moves` skips the search and reserves nothing for it; `--summary`, `--stats` and the terminal status line say that moves are off.
+That line is from the 2,000-line pair of the [memory budget](@/design/memory.md) page at `--mem 304K`. When the list fills up, the search stops and keeps the blocks it found, and the moved line ends with `the list is full at this --mem, later moves are not listed`. `--no-moves` skips the search and allocates nothing for it, though the diff still sets the list's share aside; `--summary`, `--stats` and the terminal status line say that moves are off.
 
-Sources: `moves/mod.rs`, `Moves::find`, `work`, `BLOCK_SHARE`, `Moves::skipped`; `diff/mod.rs`, `Diff::with_watch`.
+Sources: `moves/mod.rs`, `Moves::find`, `Moves::list_bytes`, `work`, `BLOCK_SHARE`, `Moves::skipped`, `Moves::full`; `diff/mod.rs`, `Diff::with_watch`.

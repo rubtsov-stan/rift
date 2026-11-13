@@ -682,13 +682,18 @@ line, so at stratum `L` a block of `n` lines has no seed, and goes
 unreported, with chance at least `(1 - 2^-L)^n`. On `gen1g`
 (stratum 4) that leaves 424 of the 1 062 moves of 3 lines or more found.
 
-Memory comes from the refine half and is taken before the scheduler
-takes what is left: 32 bytes per block for the life of the diff, capped
-at 1/8 of what the half has free, and while the search runs two readers
-with 4 KiB buffers and two comparison buffers of 128 KiB. When either does
-not fit, the search keeps nothing and the summary says moves were not
-searched. `--no-moves` (`diff::Config { moves: false }`) skips the search
-and takes no memory for it; `--summary` and `--stats` say so, and the
+Memory comes from the refine half. The block list takes 32 bytes per
+block, for at most one block per seed and at most 1/8 of the half's
+capacity (`Moves::list_bytes`). The diff reserves that much before the
+workers and holds it for its whole life, with the search on or off, so
+neither the search nor the blocks it finds change what the scheduler
+gets. While the search runs, it also takes two readers with 4 KiB
+buffers and two comparison buffers of 128 KiB. When those do not fit, or
+the list does not, the search keeps nothing and the summary says moves
+were not searched. When the list fills up, the search stops and keeps
+the blocks found so far, and the summary says later moves are not
+listed. `--no-moves` (`diff::Config { moves: false }`) skips the search
+and allocates nothing for it; `--summary` and `--stats` say so, and the
 terminal status line shows `moves off`. `--summary` and `--stats` print the block count, the first ten
 blocks as `a` and `b` ranges, and how many candidates the skeleton
 dropped, when it dropped any. The terminal view marks both sides of a

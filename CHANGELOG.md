@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Just above the full diff's smallest `--mem`, more regions can come out
+  approximate than in 0.3.2, and the diff can skip moved blocks 0.3.2
+  listed: the block list is now set aside for one block per seed before
+  the workers, with or without `--no-moves`. On the pairs measured this
+  ended within 1.2 MiB of the smallest `--mem` (0.45 MiB on a shuffled
+  pair, 1.13 MiB on a nokey pair); from there up the output matched
+  0.3.2.
 - The output is identical on any machine for the same `--mem` and
   input. A run sizes its work for one thread per MiB of `--mem`, from 1
   to 8, in each of the scan, the refinement and the shared pool, and
@@ -49,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Looking for moved blocks could change the diff: the block list took
+  its room from the refine half before the scheduler, so a region could
+  be approximate for one reason with the search and another without it.
+  The list's room is now sized from `--mem` and the seeds alone and set
+  aside before the workers, with or without `--no-moves`. So a region
+  that 0.3.2 refined exactly under `--no-moves` can now come out
+  approximate near the same `--mem`, as it does with the search on.
+- A move search whose list filled up dropped every block and reported
+  `moved    not searched, the budget is too small`. It now keeps the
+  blocks found so far and says the list is full and later moves are not
+  listed. The list holds about one block per 512 bytes of `--mem`.
 - The full diff, `--summary` and `--stats` could print different, equally
   valid output under different thread counts: each thread of the pool
   took 12 KiB from the budget, which moved the stratum or the point where

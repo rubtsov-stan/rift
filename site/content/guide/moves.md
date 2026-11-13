@@ -27,7 +27,7 @@ Each range is `a start..end  b start..end`, counted from 0 with the end excluded
 
 Detection starts from sampled lines, so it finds only the blocks that contain a sampled line. Some moves are missed. Do not use the list to prove that nothing else moved.
 
-When the budget leaves no room for the search, the output says so.
+When the budget leaves no room for the search, the output says so. When the list of blocks fills up, the search keeps the blocks found so far and the output says later moves are not listed.
 
 ## Turn it off
 

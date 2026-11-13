@@ -30,6 +30,7 @@ pub fn run<A: Source, B: Source>(
     let moves = if find_moves {
         let lines_a = IndexedLines::new(a, scan_a.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
         let lines_b = IndexedLines::new(b, scan_b.index(), &budget, Half::Refine, MOVES_SCRATCH)?;
+        let list = Moves::list_bytes(off_chain.pairs().len(), &budget);
         Moves::find(
             off_chain.pairs(),
             map.segments(),
@@ -37,6 +38,7 @@ pub fn run<A: Source, B: Source>(
             &lines_b,
             MOVES_SCRATCH,
             &budget,
+            budget.try_reserve(Half::Refine, list).ok(),
         )?
     } else {
         Moves::off()
@@ -140,6 +142,12 @@ pub fn print_moves(out: &mut impl Write, moves: &Moves, dropped: u64) -> io::Res
     let blocks = moves.blocks();
     let lines: u64 = blocks.iter().map(|m| m.a.end - m.a.start).sum();
     write!(out, "moved    {} blocks, {lines} lines", blocks.len())?;
+    if moves.full() {
+        write!(
+            out,
+            "; the list is full at this --mem, later moves are not listed"
+        )?;
+    }
     if dropped > 0 {
         write!(
             out,

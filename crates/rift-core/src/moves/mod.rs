@@ -27,7 +27,6 @@ use crate::budget::{Budget, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::lines::{LineAccess, LineBuf};
 use crate::refine::same_line;
-use crate::scan::release_slack;
 use crate::script::PIECE;
 use crate::segment::{Segment, SegmentStatus};
 use crate::types::{Bytes, LineNo};
@@ -60,7 +59,7 @@ fn work(line_cap: Bytes) -> Bytes {
     Bytes(2 * 2 * one)
 }
 /// The block list takes at most this fraction, `1 / BLOCK_SHARE`, of the
-/// refine half that is free when detection starts.
+/// refine half's capacity.
 const BLOCK_SHARE: u64 = 8;
 /// The block list grows by at least this many blocks at a time.
 const BLOCK_STEP: usize = 16;
@@ -68,17 +67,22 @@ const BLOCK_STEP: usize = 16;
 /// Moved blocks of a diff, ordered by their line in A, or the note that
 /// the budget did not allow looking for them.
 ///
-/// Memory, from the refine half: 32 bytes per block for as long as the
-/// list lives, at most `1 / 8` of what that half has free when detection
-/// starts, and while it runs two comparison buffers of 16 lines, or of
-/// 64 KiB when that is more, doubled for growth: 256 KiB for readers that
-/// return lines of up to 4 KiB whole.
-/// When either does not fit, detection stops, keeps nothing and reports
-/// itself [`skipped`](Self::skipped).
+/// Memory, from the refine half: the block list's reservation,
+/// [`list_bytes`](Self::list_bytes), taken by the caller and held for as
+/// long as the list lives, and while detection runs two comparison buffers
+/// of 16 lines, or of 64 KiB when that is more, doubled for growth:
+/// 256 KiB for readers that return lines of up to 4 KiB whole. The list's
+/// size depends on the budget and the seeds alone, so a caller that takes
+/// it with detection off too leaves the same budget to what comes after.
+/// When the buffers do not fit, or the list's reservation was refused,
+/// detection keeps nothing and reports itself [`skipped`](Self::skipped).
+/// When the list fills up, detection stops and keeps the blocks found so
+/// far, reported as [`full`](Self::full).
 #[derive(Debug)]
 pub struct Moves {
     blocks: Vec<MovedBlock>,
     skipped: bool,
+    full: bool,
     disabled: bool,
     _reservation: Option<Reservation>,
 }
@@ -88,17 +92,37 @@ impl Moves {
     /// [`disabled`](Self::disabled). Reserves nothing.
     #[must_use]
     pub fn off() -> Self {
+        Self::off_holding(None)
+    }
+
+    /// [`off`](Self::off) that holds `list`, the reservation the search
+    /// would have used, so the budget left after it is the same either way.
+    #[must_use]
+    pub fn off_holding(list: Option<Reservation>) -> Self {
         Self {
             blocks: Vec::new(),
             skipped: false,
+            full: false,
             disabled: true,
-            _reservation: None,
+            _reservation: list,
         }
+    }
+
+    /// What the block list for `pairs` seeds may take under `budget`: 32
+    /// bytes per block, at most one block per seed and at most `1 / 8` of
+    /// the refine half's capacity. The caller reserves it from the refine
+    /// half and hands it to [`find`](Self::find).
+    #[must_use]
+    pub fn list_bytes(pairs: usize, budget: &Budget) -> Bytes {
+        let most = budget.capacity(Half::Refine).0 / BLOCK_SHARE / BLOCK_BYTES;
+        Bytes((pairs as u64).min(most) * BLOCK_BYTES)
     }
 
     /// Finds the moved blocks seeded by `pairs`, `[line in A, line in B]`
     /// in A order, over the segment map `segments` of the files `a` and
     /// `b`, whose readers return lines of up to `line_cap` bytes whole.
+    /// `list` holds [`list_bytes`](Self::list_bytes) of `pairs`; `None`, a
+    /// refused reservation, skips the search.
     ///
     /// Reads 16 lines per side and seed and then as a block extends, and
     /// each line of A at most once as part of a block: `O(pairs + moved
@@ -115,21 +139,15 @@ impl Moves {
         b: &impl LineAccess,
         line_cap: Bytes,
         budget: &Budget,
+        list: Option<Reservation>,
     ) -> Result<Self> {
-        let skipped = Self {
-            blocks: Vec::new(),
-            skipped: true,
-            disabled: false,
-            _reservation: None,
+        let Some(list) = list else {
+            return Ok(Self::not_searched(None));
         };
-        let limit = budget.available(Half::Refine).0 / BLOCK_SHARE / BLOCK_BYTES;
-        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         let Ok(_work) = budget.try_reserve(Half::Refine, work(line_cap)) else {
-            return Ok(skipped);
+            return Ok(Self::not_searched(Some(list)));
         };
-        let Ok(mut held) = budget.try_reserve(Half::Refine, Bytes(0)) else {
-            return Ok(skipped);
-        };
+        let limit = usize::try_from(list.bytes().0 / BLOCK_BYTES).unwrap_or(usize::MAX);
         let mut run = Run {
             segments,
             a,
@@ -138,6 +156,7 @@ impl Moves {
             buf_b: LineBuf::new(),
         };
         let mut blocks: Vec<MovedBlock> = Vec::new();
+        let mut full = false;
         for &[x, y] in pairs {
             let floor = blocks.last().map_or(LineNo(0), |l| l.a.end);
             if x < floor {
@@ -156,12 +175,10 @@ impl Moves {
             if blocks.len() == blocks.capacity() {
                 let len = blocks.len();
                 let extra = (2 * len).max(BLOCK_STEP).min(limit).saturating_sub(len);
-                let bytes = Bytes(extra as u64 * BLOCK_BYTES);
-                if extra == 0 || held.grow(bytes).is_err() {
-                    return Ok(skipped);
-                }
-                if blocks.try_reserve_exact(extra).is_err() {
-                    return Ok(skipped);
+                // `list` pays for `limit` blocks, the growth included.
+                if extra == 0 || blocks.try_reserve_exact(extra).is_err() {
+                    full = true;
+                    break;
                 }
             }
             blocks.push(MovedBlock {
@@ -169,13 +186,26 @@ impl Moves {
                 b: LineNo(y.0 - back)..y + ahead,
             });
         }
-        release_slack(&mut blocks, &mut held);
+        // The reservation keeps its size, so what is left of the half does
+        // not depend on how many blocks were found.
+        blocks.shrink_to_fit();
         Ok(Self {
             blocks,
             skipped: false,
+            full,
             disabled: false,
-            _reservation: Some(held),
+            _reservation: Some(list),
         })
+    }
+
+    fn not_searched(list: Option<Reservation>) -> Self {
+        Self {
+            blocks: Vec::new(),
+            skipped: true,
+            full: false,
+            disabled: false,
+            _reservation: list,
+        }
     }
 
     /// The blocks, ordered by their line in A.
@@ -189,6 +219,13 @@ impl Moves {
     #[must_use]
     pub fn skipped(&self) -> bool {
         self.skipped
+    }
+
+    /// Whether the list filled up and detection stopped, so moves past the
+    /// last block listed may be missing.
+    #[must_use]
+    pub fn full(&self) -> bool {
+        self.full
     }
 
     /// Whether detection was switched off, so the empty list says nothing
