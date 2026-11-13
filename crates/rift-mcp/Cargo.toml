@@ -19,6 +19,7 @@ serde.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
+rift-core = { path = "../rift-core", features = ["counting-alloc"] }
 rmcp = { workspace = true, features = ["client"] }
 serde_json.workspace = true
 tempfile.workspace = true

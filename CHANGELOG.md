@@ -74,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift-mcp` renders a cached hunk without copying its edit script, so a
+  call no longer raises the heap by the size of the script.
 - An error that names a path longer than 256 bytes shows its first and
   last 120 bytes, so a command line of 200 KB no longer prints back whole.
   The command line is still outside the budget.

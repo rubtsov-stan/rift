@@ -1,6 +1,7 @@
 //! A segment's edit script as bounded unified-diff text.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rift_core::diff::Diff;
@@ -42,14 +43,14 @@ pub struct Rendered {
 }
 
 /// Waits until segment `i` has a script.
-fn script(diff: &Diff<FileSource, FileSource>, i: usize) -> Result<rift_core::Hunk, String> {
+fn script(diff: &Diff<FileSource, FileSource>, i: usize) -> Result<Arc<rift_core::Hunk>, String> {
     let seg = &diff.segments()[i];
     let start = seg.a.start.0.saturating_sub(1);
     diff.set_visible(LineNo(start)..LineNo(seg.a.end.0.max(start + 1)));
     let began = Instant::now();
     loop {
         match diff.hunk(i) {
-            HunkState::Ready(h) | HunkState::Approx(h) => return Ok((*h).clone()),
+            HunkState::Ready(h) | HunkState::Approx(h) => return Ok(h),
             HunkState::Pending if began.elapsed() > HUNK_WAIT => {
                 return Err("the hunk was not computed in time".into());
             }
