@@ -777,6 +777,27 @@ fn same_line<A: Source + ?Sized, B: Source + ?Sized>(
     }
 }
 
+/// Block size for [`mismatch`]: a slice `==` is a `memcmp` and vectorizes,
+/// a per-byte `zip().position()` does not.
+const BLOCK: usize = 256;
+
+/// Index of the first byte where `a` and `b` differ, over their common
+/// length. Blocks are compared with `==`; only the first differing block
+/// is scanned byte by byte.
+fn mismatch(a: &[u8], b: &[u8]) -> Option<usize> {
+    mismatch_in(a, b, BLOCK)
+}
+
+fn mismatch_in(a: &[u8], b: &[u8], block: usize) -> Option<usize> {
+    let n = a.len().min(b.len());
+    a[..n]
+        .chunks(block)
+        .zip(b[..n].chunks(block))
+        .enumerate()
+        .find(|(_, (x, y))| x != y)
+        .and_then(|(k, (x, y))| Some(k * block + x.iter().zip(y).position(|(p, q)| p != q)?))
+}
+
 /// Position of the first byte that differs between `len` bytes at
 /// `starts.0` in A and at `starts.1` in B, or `None` if all match. Streams
 /// through the two buffers. Reads start at `first` bytes and double up to
@@ -807,7 +828,7 @@ fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
         // Only the bytes before a mismatch: a restart may read the rest
         // again, and a byte counted twice would push the total past both
         // files.
-        let same = a.iter().zip(b.iter()).position(|(x, y)| x != y);
+        let same = mismatch(a, b);
         let checked = same.unwrap_or(n) as u64;
         meter.add(2 * checked);
         *counted += 2 * checked;
@@ -823,6 +844,152 @@ fn first_mismatch<A: Source + ?Sized, B: Source + ?Sized>(
 mod tests {
     use super::*;
     use crate::lines::{LineAccess, MemLines};
+    use proptest::prelude::*;
+
+    fn old_mismatch(a: &[u8], b: &[u8]) -> Option<usize> {
+        a.iter().zip(b.iter()).position(|(x, y)| x != y)
+    }
+
+    /// The wrong version: off by one at the first byte of every block but
+    /// the first.
+    fn mismatch_off_by_one(a: &[u8], b: &[u8], block: usize) -> Option<usize> {
+        let at = mismatch_in(a, b, block)?;
+        Some(if at > 0 && at % block == 0 {
+            at - 1
+        } else {
+            at
+        })
+    }
+
+    /// Two inputs that agree up to a chosen point, then differ (or not),
+    /// with lengths that may differ.
+    fn pair() -> impl Strategy<Value = (Vec<u8>, Vec<u8>, usize)> {
+        (
+            prop::collection::vec(any::<u8>(), 0..300),
+            prop::option::of(any::<prop::sample::Index>()),
+            0usize..20,
+            1usize..9,
+        )
+            .prop_map(|(a, at, extra, block)| {
+                let mut b = a.clone();
+                if let Some(at) = at.filter(|_| !a.is_empty()) {
+                    let i = at.index(a.len());
+                    b[i] ^= 0x55;
+                }
+                b.extend(std::iter::repeat_n(7, extra));
+                (a, b, block)
+            })
+    }
+
+    fn agrees(a: &[u8], b: &[u8], block: usize, f: fn(&[u8], &[u8], usize) -> Option<usize>) {
+        assert_eq!(f(a, b, block), old_mismatch(a, b));
+        assert_eq!(f(b, a, block), old_mismatch(b, a));
+    }
+
+    proptest! {
+        #[test]
+        fn mismatch_equals_the_bytewise_scan((a, b, block) in pair()) {
+            agrees(&a, &b, block, mismatch_in);
+            prop_assert_eq!(mismatch(&a, &b), old_mismatch(&a, &b));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion")]
+    fn the_property_catches_an_off_by_one_at_a_block_boundary() {
+        // A mismatch exactly at the start of the second block.
+        let a = vec![0u8; 12];
+        let mut b = a.clone();
+        b[4] = 1;
+        agrees(&a, &b, 4, mismatch_off_by_one);
+    }
+
+    #[test]
+    fn mismatch_edge_cases() {
+        for block in [1, 3, 4] {
+            agrees(b"", b"", block, mismatch_in);
+            agrees(b"", b"x", block, mismatch_in);
+            agrees(b"abcdefgh", b"abcdefgh", block, mismatch_in);
+            agrees(b"xbcdefgh", b"abcdefgh", block, mismatch_in);
+            agrees(b"abcdefgx", b"abcdefgh", block, mismatch_in);
+            agrees(b"abcdxfgh", b"abcdefgh", block, mismatch_in);
+            agrees(b"abcd", b"abcdefgh", block, mismatch_in);
+        }
+        assert_eq!(mismatch(&vec![1; 5 * BLOCK], &vec![1; 5 * BLOCK]), None);
+        let mut b = vec![1; 5 * BLOCK];
+        b[2 * BLOCK] = 2;
+        assert_eq!(mismatch(&vec![1; 5 * BLOCK], &b), Some(2 * BLOCK));
+        b[5 * BLOCK - 1] = 2;
+        b[2 * BLOCK] = 1;
+        assert_eq!(mismatch(&vec![1; 5 * BLOCK], &b), Some(5 * BLOCK - 1));
+    }
+
+    /// `first_mismatch` as it was before blocks: the reference for the
+    /// meter test.
+    fn old_first_mismatch(
+        src_a: &[u8],
+        src_b: &[u8],
+        starts: (u64, u64),
+        len: u64,
+        (buf_a, buf_b): (&mut [u8], &mut [u8]),
+        first: u64,
+        (meter, counted): (&Meter<'_>, &mut u64),
+    ) -> Result<Option<u64>> {
+        let max = buf_a.len().min(buf_b.len()) as u64;
+        let mut step = first.clamp(1, max);
+        let mut pos = 0;
+        while pos < len {
+            let n = Bytes((len - pos).min(step)).as_usize();
+            step = (2 * step).min(max);
+            let (a, b) = (&mut buf_a[..n], &mut buf_b[..n]);
+            src_a.read_exact_at(a, ByteOffset(starts.0 + pos))?;
+            src_b.read_exact_at(b, ByteOffset(starts.1 + pos))?;
+            let same = old_mismatch(a, b);
+            let checked = same.unwrap_or(n) as u64;
+            meter.add(2 * checked);
+            *counted += 2 * checked;
+            if let Some(i) = same {
+                return Ok(Some(pos + i as u64));
+            }
+            pos += n as u64;
+        }
+        Ok(None)
+    }
+
+    proptest! {
+        #[test]
+        fn first_mismatch_counts_the_same_bytes(
+            a in prop::collection::vec(0u8..3, 0..2000),
+            flips in prop::collection::vec(any::<prop::sample::Index>(), 0..3),
+            buf in 1usize..700,
+            first in 0u64..800,
+            skip in 0usize..50,
+        ) {
+            let mut b = a.clone();
+            for f in &flips {
+                if !b.is_empty() {
+                    let i = f.index(b.len());
+                    b[i] ^= 4;
+                }
+            }
+            let skip = skip.min(a.len());
+            let len = (a.len() - skip) as u64;
+            let (wa, wb) = (Watch::new(), Watch::new());
+            let (ma, mb) = (Meter::new(&wa, 0), Meter::new(&wb, 0));
+            let (mut ca, mut cb) = (0, 0);
+            let new = first_mismatch(
+                &a[..], &b[..], (skip as u64, skip as u64), len,
+                (&mut vec![0; buf], &mut vec![0; buf]), first, (&ma, &mut ca),
+            ).unwrap();
+            let old = old_first_mismatch(
+                &a[..], &b[..], (skip as u64, skip as u64), len,
+                (&mut vec![0; buf], &mut vec![0; buf]), first, (&mb, &mut cb),
+            ).unwrap();
+            prop_assert_eq!(new, old);
+            prop_assert_eq!(ca, cb);
+            prop_assert_eq!(wa.done(), wb.done());
+        }
+    }
 
     /// A meter on a watch nobody reads or cancels.
     fn meter() -> Meter<'static> {
