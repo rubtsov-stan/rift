@@ -211,7 +211,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         // reservation at a time, so the error names the whole amount. The
         // readers of the move search are released before the front end's
         // larger ones are taken, so they add nothing to the peak.
-        let least = front_bytes + per_worker + 2 * FRONT_SCRATCH.0 + least_bytes(segments.len()).0;
+        let least = least(segments.len());
         let free = budget.available(Half::Refine);
         if free.0 < least {
             return Err(BudgetExceeded {
@@ -221,8 +221,8 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
             }
             .into());
         }
+        let list = move_list(budget, segments.len(), off_chain.pairs().len());
         let front = budget.try_reserve(Half::Refine, Bytes(front_bytes))?;
-        let list = move_list(budget, off_chain.pairs().len(), least - front_bytes);
         let free = budget
             .available(Half::Refine)
             .0
@@ -482,15 +482,50 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     }
 }
 
-/// The moved blocks' list for `pairs` seeds, when the Refine half keeps
-/// `rest` free besides it. Sized from the budget and the seeds and taken
-/// with the search off too, before the workers, so neither the search nor
-/// the cores change what the scheduler gets.
-fn move_list(budget: &Budget, pairs: usize, rest: u64) -> Option<Reservation> {
-    let list = Moves::list_bytes(pairs, budget);
-    (budget.available(Half::Refine).0 >= rest + list.0)
-        .then(|| budget.try_reserve(Half::Refine, list).ok())
+/// The smallest free Refine half a diff of `segments` segments accepts:
+/// the front end's share, one worker, the front end's readers and the
+/// scheduler's least.
+fn least(segments: usize) -> u64 {
+    let per_worker = 2 * WORKER_SCRATCH.0 + 4 * line_buf_bytes(WORKER_SCRATCH);
+    let front_bytes = WRITER_BUF.0 + line_buf_bytes(FRONT_SCRATCH);
+    front_bytes + per_worker + 2 * FRONT_SCRATCH.0 + least_bytes(segments).0
+}
+
+/// The moved blocks' list for `pairs` seeds, when [`moves_fit`]. Sized
+/// from the budget and the seeds and taken with the search off too, before
+/// the workers, so neither the search nor the cores change what the
+/// scheduler gets.
+fn move_list(budget: &Budget, segments: usize, pairs: usize) -> Option<Reservation> {
+    moves_fit(budget, segments, pairs)
+        .then(|| {
+            budget
+                .try_reserve(Half::Refine, Moves::list_bytes(pairs, budget))
+                .ok()
+        })
         .flatten()
+}
+
+/// Whether moves are looked for under `budget`, whose Refine half nothing
+/// holds yet, for a map of `segments` segments and `pairs` seeds. Where a
+/// [`Diff`] would run, as it decides: when the half holds the moved
+/// blocks' list besides the larger of what the diff holds during the
+/// search (the front end's share, one worker's buffers, the search's two
+/// readers and comparison buffers) and after it (the least it needs). With
+/// more than one worker allowed, the workers take at most half of what is
+/// free, which leaves more than that. Where no diff runs, always: only
+/// the search's own reservations decide. `--summary` asks this before its
+/// search, so both modes agree on whether moves were searched.
+#[must_use]
+pub fn moves_fit(budget: &Budget, segments: usize, pairs: usize) -> bool {
+    let free = budget.available(Half::Refine).0;
+    let least = least(segments);
+    if free < least {
+        return true;
+    }
+    let per_worker = 2 * WORKER_SCRATCH.0 + 4 * line_buf_bytes(WORKER_SCRATCH);
+    let front = WRITER_BUF.0 + line_buf_bytes(FRONT_SCRATCH);
+    let search = 2 * WORKER_SCRATCH.0 + crate::moves::work(WORKER_SCRATCH).0;
+    free >= Moves::list_bytes(pairs, budget).0 + least.max(front + per_worker + search)
 }
 
 /// A front-end reader that, before each read, points the reader at the

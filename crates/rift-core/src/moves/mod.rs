@@ -60,7 +60,7 @@ const READ_LINES: u64 = 16;
 /// `line_cap` bytes whole: each holds [`READ_LINES`] such lines, or one
 /// piece of a longer line, at most [`PIECE`] bytes, and may double while
 /// it grows to that.
-fn work(line_cap: Bytes) -> Bytes {
+pub(crate) fn work(line_cap: Bytes) -> Bytes {
     let one = (READ_LINES * line_cap.0).max(PIECE.0) + READ_LINES * size_of::<usize>() as u64;
     Bytes(2 * 2 * one)
 }
@@ -148,10 +148,10 @@ impl Moves {
         list: Option<Reservation>,
     ) -> Result<Self> {
         let Some(list) = list else {
-            return Ok(Self::not_searched(None));
+            return Ok(Self::skipped_holding(None));
         };
         let Ok(_work) = budget.try_reserve(Half::Refine, work(line_cap)) else {
-            return Ok(Self::not_searched(Some(list)));
+            return Ok(Self::skipped_holding(Some(list)));
         };
         let limit = usize::try_from(list.bytes().0 / BLOCK_BYTES).unwrap_or(usize::MAX);
         let mut run = Run {
@@ -205,7 +205,14 @@ impl Moves {
         })
     }
 
-    fn not_searched(list: Option<Reservation>) -> Self {
+    /// No search, because the budget did not allow one: an empty list that
+    /// reports itself [`skipped`](Self::skipped). Reserves nothing.
+    #[must_use]
+    pub fn not_searched() -> Self {
+        Self::skipped_holding(None)
+    }
+
+    fn skipped_holding(list: Option<Reservation>) -> Self {
         Self {
             blocks: Vec::new(),
             skipped: true,
