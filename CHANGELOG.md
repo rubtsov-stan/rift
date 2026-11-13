@@ -30,14 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Key mode: a duplicate key could be dropped without an error under a
+  tight `--mem`; it is now always an error. With no room left to list
+  the duplicate, 0.3.2 and earlier skipped the second record and could
+  report the key as removed or changed. Such a run now ends in a budget
+  error whose `--mem` has room to list the key, and a rerun there names
+  the duplicate.
 - Key mode names duplicate keys instead of refusing the budget once a
   pass has met them. A refusal can still come first when the duplicates
   lie in a part of the hash range no pass has reached; following its
   advice reaches the duplicate-key error.
-- When key mode found a duplicate key but had no room left to list it,
-  it dropped the second record without an error and could report the
-  key as removed or changed. Such a run now ends in a budget error, and
-  the `--mem` it names has room to list the key.
 - `rift serve` reports a segment whose refinement ended approximate as
   `approx` in `segments` pages, also when no `hunk` was asked for it.
   Before, a page showed only the map's status, so a client that re-read
