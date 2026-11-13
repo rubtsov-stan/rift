@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The full diff and `rift serve` set aside refine workers' buffers for
+  as many workers as half of the free refine half holds, at most 8,
+  however many start. The scheduler's share used to shrink with each
+  worker, so a machine with more cores could mark a region approximate
+  where one with fewer cores printed it exactly. Machines with more than
+  8 cores start at most 8 refine workers.
 - The line index's size no longer depends on the scan's chunk size,
   which followed the core count. Near some `--mem` values a few bytes of
   difference picked another stratum, so two machines printed different,
