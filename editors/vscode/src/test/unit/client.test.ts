@@ -137,11 +137,60 @@ describe('Server', () => {
     server.dispose();
   });
 
+  it('reports the stop for a reply that is not JSON before what waits fails', async () => {
+    const { server, stops } = make();
+    // The handler of the failure must find the stop already reported, or it takes it for its own error.
+    let reported = -1;
+    await server.request('open', { a: '/x/garbage.sql', b: '/x/b.sql' }).catch(() => (reported = stops.length));
+    assert.strictEqual(reported, 1);
+    server.dispose();
+  });
+
+  it('dispatches nothing of a read that holds a frame that is not JSON', async () => {
+    const { server, stops } = make();
+    // The answer comes in the same write as the junk: taken, its handler would run after the stop.
+    let reported = -1;
+    await assert.rejects(
+      server.request('open', { a: '/x/openjunk.sql', b: '/x/b.sql' }).catch((e) => {
+        reported = stops.length;
+        throw e;
+      }),
+      /not JSON/,
+    );
+    assert.strictEqual(reported, 1);
+    server.dispose();
+  });
+
   it('fails the request when the server sends JSON that is not a message', async () => {
     const { server, crashes, stops } = make();
     await assert.rejects(server.request('open', { a: '/x/nullbody.sql', b: '/x/b.sql' }), /not JSON/);
     await until(() => stops.length === 1);
     assert.deepStrictEqual([crashes, stops], [[], [false]]);
+    server.dispose();
+  });
+
+  it('reports a stop as deliberate, and none once disposed', async () => {
+    const { server, crashes, stops } = make();
+    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    server.stop('it stopped answering');
+    assert.deepStrictEqual([crashes, stops], [[], [false]]);
+    await server.request('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    // Closing the window must not raise a warning about the server.
+    server.dispose();
+    server.stop('it stopped answering');
+    assert.deepStrictEqual(stops, [false]);
+  });
+
+  it('drops what a stopped process still had in the pipe', async () => {
+    const { server } = make();
+    const open = await server.request<OpenResult>('open', { a: '/x/a.sql', b: '/x/b.sql' });
+    const summary = server.request('summary', { session: open.session }, undefined, server.epoch);
+    await new Promise((r) => setImmediate(r));
+    // The answer reaches the pipe while the window is busy, and the process is stopped first.
+    const end = Date.now() + 300;
+    while (Date.now() < end);
+    server.stop('it stopped answering');
+    await assert.rejects(summary, /stopped/);
     server.dispose();
   });
 

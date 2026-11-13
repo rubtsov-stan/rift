@@ -71,7 +71,8 @@ export class Comparison {
       this.events.change();
       throw e;
     }
-    // Nothing can intervene between the answer and this read, so it is the process that answered.
+    // The process that answered is the current one: a process is replaced only after it closed
+    // or was stopped, and the replies of either are dropped (see Connection.kill).
     this.session = r.session;
     this.epoch = this.server.epoch;
     this.events.opened?.();
@@ -271,10 +272,20 @@ export class Compares {
   // and it runs requests in parallel: a close and the pending open are never on the wire together.
   private closing: Promise<unknown> = Promise.resolve();
   private wire?: Comparison;
+  // The closes on the wire, each marked once its wait ran out, and the pending compare while
+  // it waits for them.
+  private closes = new Set<{ overdue: boolean }>();
+  private gated?: Comparison;
 
   constructor(
     private server: Server,
     private events: WindowEvents,
+    // How long an open waits for a close; past it the process is stopped, its sessions with it.
+    // The slowest close measured on `rift serve` took 110 ms (31,000+ closes on an M1 MacBook
+    // Air at load 27 to 45, during the scan of a 10 GiB pair; 38.8 ms in another run under
+    // load), but the extension host can stall for seconds behind other extensions, and a stop
+    // for nothing costs every comparison and a strike against the crash limit.
+    private closeWaitMs = 10_000,
   ) {}
 
   handle(n: Notification, epoch: number): void {
@@ -295,8 +306,11 @@ export class Compares {
         if (next !== this.pending) return;
         this.wire = undefined;
         this.settle();
+        this.gated = next;
+        this.overdue();
         // A close sent while this waits must be answered too.
         for (let c; c !== this.closing; ) await (c = this.closing);
+        if (this.gated === next) this.gated = undefined;
         if (next === this.pending) this.wire = next;
       },
       opened: () => {
@@ -305,7 +319,9 @@ export class Compares {
         this.settle();
       },
     });
-    next.live = () => next === this.pending || next === this.shown;
+    // A comparison failed without a session has nothing left to ask: an open of it that still
+    // waits for a backoff or for closes is not sent.
+    next.live = () => (next === this.pending || next === this.shown) && !(next.state === 'failed' && next.session === undefined);
     if (from) {
       next.reruns = from.reruns;
       next.crashes = from.crashes;
@@ -353,14 +369,48 @@ export class Compares {
   lost(reason: string, restarting: boolean, deliberate: boolean): boolean {
     const target = this.pending ?? this.shown;
     if (!target) return restarting;
-    // A stop counts toward the crash limit too: a reply the client cannot read comes back on a reopen.
-    const again = deliberate ? target === this.pending && target.session !== undefined && ++target.crashes < MAX_CRASHES : target.lost(reason, restarting);
+    // A stop counts toward the crash limit too: the reopen asks the server the same thing again.
+    const again = deliberate ? target === this.pending && ++target.crashes < MAX_CRASHES : target.lost(reason, restarting);
     const error = { code: -32603, message: deliberate ? `${reason}. Compare the files again.` : reason };
-    if (deliberate && !again) target.gone(error);
     if (this.shown && this.shown !== target) this.shown.gone(again ? undefined : error);
+    if (!again) {
+      if (deliberate) target.gone(error);
+      // Given up: shown failed, where nothing more is sent for it.
+      if (target === this.pending) {
+        this.pending = undefined;
+        this.shown = target;
+      }
+    }
     if (again) void this.compare(target.a, target.b, target.mem, target);
     this.settle();
     return again;
+  }
+
+  private closeSession(id: number, epoch: number): Promise<void> {
+    const c = { overdue: false };
+    this.closes.add(c);
+    const late = setTimeout(() => {
+      c.overdue = true;
+      this.overdue();
+    }, this.closeWaitMs);
+    const done = () => {
+      clearTimeout(late);
+      this.closes.delete(c);
+    };
+    return this.server.request('close', { session: id }, undefined, epoch).then(done, done);
+  }
+
+  // A close past its wait stops the process, its sessions with it, so that a late close cannot
+  // end a session the server hands to the open that waited. Only while an open does wait for
+  // it, and only once a turn of I/O has had the chance to bring its answer: a blocked event
+  // loop runs a timer late even when the answer is already in the pipe. A close of a process
+  // that is gone was rejected and is no longer in `closes`.
+  private overdue(): void {
+    const stuck = () => this.gated !== undefined && this.gated === this.pending && [...this.closes].some((c) => c.overdue);
+    if (!stuck()) return;
+    setImmediate(() => {
+      if (stuck()) this.server.stop(`the server did not answer close within ${this.closeWaitMs / 1000} s`);
+    });
   }
 
   // Closes every noted session that no current comparison holds, unless the pending open is
@@ -374,7 +424,7 @@ export class Compares {
     for (const [key, s] of this.sessions) {
       if (this.server.alive(s.epoch)) {
         if (sending || holds(this.shown, s) || holds(p, s)) continue;
-        closes.push(this.server.request('close', { session: s.id }, undefined, s.epoch).catch(() => {}));
+        closes.push(this.closeSession(s.id, s.epoch));
       }
       this.sessions.delete(key);
     }

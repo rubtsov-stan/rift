@@ -32,6 +32,9 @@
 //   summary, on a session of a path containing "sumjunk" -> its second one is answered with a frame
 //                                          whose body is not JSON
 //   open, a path containing "freshlag" -> the answer is 100 ms late only when the open created the session
+//   open, a path containing "openjunk" -> the answer and a frame whose body is not JSON go out in one write
+//   segments, on a session of a path containing "segjunk" -> the answer and a frame whose body is not JSON
+//                                          go out in one write
 // With MOCK_LOG set to a file name, every request is appended to it as one JSON line {method, params}.
 // With MOCK_FAIL_INIT=1 in the environment, or while the file named by MOCK_FAIL_INIT_FILE exists,
 // initialize fails (internal error).
@@ -158,7 +161,15 @@ function handle(body) {
       throw new RpcError(CODE.not_initialized, 'initialize first');
     }
     if (typeof params !== 'object' || params === null || Array.isArray(params)) throw invalid('params');
-    reply(METHODS[msg.method](params));
+    const result = METHODS[msg.method](params);
+    const co = msg.method === 'segments' ? sessions.get(params.session) : undefined;
+    if ((msg.method === 'open' && `${params.a}`.includes('openjunk')) || co?.key.includes('segjunk')) {
+      const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }), 'utf8');
+      const junk = Buffer.from('{not json');
+      process.stdout.write(Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body, Buffer.from(`Content-Length: ${junk.length}\r\n\r\n`), junk]));
+    } else {
+      reply(result);
+    }
   } catch (e) {
     fail(e);
   }

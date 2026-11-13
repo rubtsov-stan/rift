@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { Link, Server, Superseded } from '../../client';
+import { Link, RpcError, Server, Superseded } from '../../client';
 import { Comparison, Compares, rerunOffer } from '../../comparison';
 import { OpenResult, RpcErrorObject } from '../../protocol';
 import * as fs from 'fs';
@@ -145,6 +145,29 @@ describe('Comparison and a server that keeps crashing', function () {
 });
 
 describe('Comparison and a server whose replies cannot be read', () => {
+  // Every end of a process in these is a stop for a reply that is not JSON.
+  const stopped = () => window({}, (c, reason, restarting) => c.lost(reason, restarting, true));
+
+  it('takes no answer that came in one read with a frame that is not JSON: open', async () => {
+    const { server, w } = stopped();
+    await w.compare('/x/openjunk.sql', '/x/b.sql', '256M');
+    await new Promise((r) => setTimeout(r, 500));
+    // Given up after two stops, and not left spinning on a session of a stopped process.
+    assert.strictEqual(w.pending, undefined);
+    assert.strictEqual(w.shown?.state, 'failed');
+    assert.strictEqual(w.shown?.session, undefined);
+    server.dispose();
+  });
+
+  it('takes no answer that came in one read with a frame that is not JSON: segments', async () => {
+    const { server, w } = stopped();
+    await w.compare('/x/segjunk.sql', '/x/b.sql', '256M');
+    await new Promise((r) => setTimeout(r, 800));
+    assert.strictEqual(w.shown?.state, 'failed');
+    assert.deepStrictEqual(w.shown?.segments, []);
+    server.dispose();
+  });
+
   it('stops reopening a pair after its replies stopped the server twice', async () => {
     let starts = 0;
     // Every summary is answered with a body that is not JSON, which stops the process.
@@ -259,6 +282,189 @@ describe('Compares', () => {
     assert.ok(!mk(1, 1).sameSession(mk(1, 2)));
     assert.ok(!mk(1, 1).sameSession(mk(2, 1)));
     assert.ok(!mk(1, 1).sameSession(undefined));
+  });
+});
+
+// A fake process with room for one session, as the real server: a new pair drops a ready
+// session and answers busy while one scans. A pair whose path holds "hold" scans until its
+// open is answered, 30 ms late. `close` is answered after `closeAfterMs`, or never; at 0 in
+// the next turn of I/O, as an answer already in the pipe would be. The
+// ordering test cannot express this: its scheduler answers every request.
+function fakeServer(closeWaitMs?: number, closeAfterMs?: number) {
+  let procs = 0;
+  let closes = 0;
+  let crash = () => {};
+  const opens: { a: string; at: number }[] = [];
+  const closed: number[] = [];
+  const link = (_n: unknown, onClose: (reason: string, deliberate: boolean) => void): Link => {
+    procs++;
+    const sessions = new Map<number, { pair: string; scanning: boolean }>();
+    const waiting = new Set<(e: Error) => void>();
+    let last = 0;
+    let dead = false;
+    crash = () => {
+      dead = true;
+      onClose('rift server exited (SIGKILL)', false);
+    };
+    return {
+      startedAt: Date.now(),
+      pid: undefined,
+      // As Connection.kill: what waits fails at once.
+      kill: () => {
+        if (!dead) setImmediate(() => onClose('killed', false));
+        dead = true;
+        waiting.forEach((r) => r(new Error('the server was stopped')));
+      },
+      request: <T>(method: string, params: object) =>
+        new Promise<T>((resolve, reject) => {
+          waiting.add(reject);
+          const p = params as { a: string; b: string; session: number };
+          const answer = (v: unknown, ms = 0, then = () => {}): void => {
+            setTimeout(() => {
+              if (dead) return;
+              then();
+              resolve(v as T);
+            }, ms);
+          };
+          if (method === 'initialize') return answer({ protocol: 1, limits: { max_session_mem: 1 << 30 } });
+          if (method === 'close') {
+            closes++;
+            if (closeAfterMs === 0) {
+              setImmediate(() => {
+                if (dead) return;
+                closed.push(Date.now());
+                resolve({ closed: sessions.delete(p.session) } as T);
+              });
+            } else if (closeAfterMs !== undefined) {
+              answer({ closed: sessions.delete(p.session) }, closeAfterMs, () => closed.push(Date.now()));
+            }
+            return;
+          }
+          if (method === 'open') {
+            opens.push({ a: p.a, at: Date.now() });
+            const pair = `${p.a}\0${p.b}`;
+            for (const [id, k] of sessions) if (k.pair === pair) return answer({ session: id, reused: true, mem_bytes: 1, state: 'ready' });
+            if ([...sessions.values()].some((k) => k.scanning)) {
+              setImmediate(() => {
+                if (!dead) reject(new RpcError(-32005, 'busy'));
+              });
+              return;
+            }
+            sessions.clear();
+            const k = { pair, scanning: pair.includes('hold') };
+            sessions.set(++last, k);
+            return answer({ session: last, reused: false, mem_bytes: 1, state: 'ready' }, k.scanning ? 30 : 0, () => (k.scanning = false));
+          }
+          if (method === 'summary') return answer({ state: 'ready', a: { bytes: 1 }, b: { bytes: 1 }, mem_bytes: 1, moves: 'off' });
+          if (method === 'segments') return answer({ total: 0, offset: 0, segments: [] });
+          answer(null);
+        }),
+    };
+  };
+  const server: Server = new Server({ command: () => 'fake', args: [], busyDelaysMs: Array(20).fill(5), link, onNotification: (n, e) => w.handle(n, e), onCrash: (r, s, d) => w.lost(r, s, d) });
+  const w: Compares = new Compares(server, { change() {}, failed() {}, error() {} }, closeWaitMs);
+  return { w, procs: () => procs, closes: () => closes, opens, closed, crash: () => crash() };
+}
+
+describe('Compares and a close the server answers late or never', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('opens a compare after a close on a new process once the close wait runs out', async () => {
+    const { w, procs } = fakeServer(50);
+    await w.compare('/p/a', '/p/b', '1M');
+    // Its close is never answered, and the next open waits for it.
+    void w.close();
+    void w.compare('/p/b', '/p/a', '1M');
+    await sleep(300);
+    assert.strictEqual(w.shown?.a, '/p/b');
+    assert.strictEqual(w.shown?.state, 'ready');
+    assert.strictEqual(procs(), 2);
+  });
+
+  it('opens a compare that replaced two others on a new process once the close wait runs out', async () => {
+    const { w, procs } = fakeServer(50);
+    await w.compare('/p/x', '/p/b', '1M');
+    // The close of the first session is never answered.
+    await w.compare('/p/y', '/p/b', '1M');
+    void w.compare('/p/z', '/p/b', '1M');
+    await sleep(300);
+    assert.strictEqual(w.shown?.a, '/p/z');
+    assert.strictEqual(w.shown?.state, 'ready');
+    assert.strictEqual(procs(), 2);
+  });
+
+  it('retries a busy open on a new process once the close wait runs out', async () => {
+    const { w, procs } = fakeServer(50);
+    // The first open scans until it answers late, while the second is retrying busy.
+    void w.compare('/p/hold-a', '/p/b', '1M');
+    await sleep(10);
+    void w.compare('/p/b', '/p/a', '1M');
+    await sleep(400);
+    assert.strictEqual(w.shown?.a, '/p/b');
+    assert.strictEqual(w.shown?.state, 'ready');
+    assert.strictEqual(procs(), 2);
+  });
+
+  it('waits for a close that answers late, without stopping the server', async () => {
+    // 220 ms is twice the slowest close measured on the real server; the wait is the default.
+    const { w, procs, opens, closed } = fakeServer(undefined, 220);
+    await w.compare('/p/a', '/p/b', '1M');
+    void w.close();
+    void w.compare('/p/b', '/p/a', '1M');
+    await sleep(500);
+    assert.strictEqual(w.shown?.a, '/p/b');
+    assert.strictEqual(w.shown?.state, 'ready');
+    assert.strictEqual(procs(), 1);
+    assert.ok(opens[1].at >= closed[0], 'the open went out once the close was answered');
+  });
+
+  it('does not stop the server when the window stalls past the wait and the answer is in', async () => {
+    const { w, procs, closes } = fakeServer(50, 0);
+    await w.compare('/p/a', '/p/b', '1M');
+    void w.close();
+    void w.compare('/p/b', '/p/a', '1M');
+    for (let i = 0; i < 100 && closes() === 0; i++) await null;
+    // A GC pause or another extension: the wait runs out before the answer is read.
+    const end = Date.now() + 120;
+    while (Date.now() < end);
+    await sleep(200);
+    assert.strictEqual(procs(), 1);
+    assert.strictEqual(w.shown?.a, '/p/b');
+    assert.strictEqual(w.shown?.state, 'ready');
+  });
+
+  it('does not stop the server for a close nothing waits for, until a compare does', async () => {
+    const { w, procs } = fakeServer(50);
+    await w.compare('/p/x', '/p/b', '1M');
+    // The close of the first session is never answered; nothing waits for it.
+    await w.compare('/p/y', '/p/b', '1M');
+    await sleep(200);
+    assert.strictEqual(procs(), 1);
+    assert.strictEqual(w.shown?.a, '/p/y');
+    assert.strictEqual(w.shown?.state, 'ready');
+    // A compare now waits for that close, long past its wait.
+    void w.compare('/p/z', '/p/b', '1M');
+    await sleep(200);
+    assert.strictEqual(procs(), 2);
+    assert.strictEqual(w.shown?.a, '/p/z');
+    assert.strictEqual(w.shown?.state, 'ready');
+  });
+
+  it('sends nothing for a compare it gave up on while it waited between busy retries', async () => {
+    const { w, procs, opens, crash } = fakeServer(50);
+    void w.compare('/p/hold-a', '/p/b', '1M');
+    await sleep(10);
+    void w.compare('/p/b', '/p/a', '1M');
+    await sleep(10);
+    // Dies right after starting: not restarted, and the busy compare is given up.
+    crash();
+    const sent = opens.length;
+    await sleep(100);
+    assert.strictEqual(opens.length, sent);
+    assert.strictEqual(procs(), 1);
+    assert.strictEqual(w.shown?.a, '/p/b');
+    assert.strictEqual(w.shown?.state, 'failed');
+    assert.match(w.shown!.error!.message, /exited/);
   });
 });
 

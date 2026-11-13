@@ -28,6 +28,8 @@ class Connection implements Link {
   readonly startedAt = Date.now();
   // Set when we end the process because of what it sent: not a crash.
   private aborted?: string;
+  // Fails what waits and reports the end, once.
+  private close: (reason: string) => void;
 
   constructor(
     command: string,
@@ -40,15 +42,15 @@ class Connection implements Link {
     // A write to a dead process raises EPIPE here; the exit event reports it.
     this.proc.stdin!.on('error', () => {});
     let closed = false;
-    const close = (reason: string) => {
+    this.close = (reason: string) => {
       if (closed) return;
       closed = true;
       for (const w of this.waiting.values()) w.reject(new Error(reason));
       this.waiting.clear();
       onClose(reason, this.aborted !== undefined);
     };
-    this.proc.on('error', (e) => close(`cannot start ${command}: ${e.message}`));
-    this.proc.on('exit', (code, signal) => close(this.aborted ?? `rift server exited (${signal ?? code})`));
+    this.proc.on('error', (e) => this.close(`cannot start ${command}: ${e.message}`));
+    this.proc.on('exit', (code, signal) => this.close(this.aborted ?? `rift server exited (${signal ?? code})`));
   }
 
   get pid(): number | undefined {
@@ -65,28 +67,43 @@ class Connection implements Link {
     });
   }
 
+  // Waiting requests fail now, so a reply the process still had in the pipe finds nobody, and
+  // is never taken for one of the next process. Its notices keep its epoch.
   kill(): void {
+    for (const w of this.waiting.values()) w.reject(new Error(this.aborted ?? 'the server was stopped'));
+    this.waiting.clear();
     this.proc.kill();
   }
 
   // Ends the process because its stream cannot be trusted; waiting requests fail with `reason`.
+  // The end is reported now, with the failures, not at the exit: their handlers must find the
+  // stop already reported, as after Server.stop.
   private abort(reason: string): void {
     this.aborted ??= reason;
+    this.close(reason);
     this.kill();
   }
 
+  // Every complete frame is parsed before any is dispatched. An unreadable one ends the
+  // process, and its stop is reported in this turn; a reply dispatched before it would have its
+  // handlers run after the stop, on a session that is gone. Replies of earlier reads were
+  // handled already: microtasks run between two reads. That holds while stdout flows by itself:
+  // it is never paused or resumed, and its listener is attached in the tick that spawns the
+  // process (on Node 20.20.2, 0 frames handled late in 6129 as is, 11 in 6118 with pause and
+  // resume, 12 in 6117 with the listener attached 200 ms late).
   private read(chunk: Buffer): void {
     this.buf = Buffer.concat([this.buf, chunk]);
+    const msgs = [];
     for (;;) {
       const end = this.buf.indexOf('\r\n\r\n');
-      if (end < 0) return;
+      if (end < 0) break;
       const m = /^content-length:\s*(\d+)\s*$/im.exec(this.buf.subarray(0, end).toString('ascii'));
       if (!m) {
         this.abort('the server sent a header without Content-Length');
         return;
       }
       const len = Number(m[1]);
-      if (this.buf.length < end + 4 + len) return;
+      if (this.buf.length < end + 4 + len) break;
       const body = this.buf.subarray(end + 4, end + 4 + len).toString('utf8');
       this.buf = this.buf.subarray(end + 4 + len);
       let msg;
@@ -99,8 +116,9 @@ class Connection implements Link {
         this.abort('the server sent a reply that is not JSON');
         return;
       }
-      this.dispatch(msg);
+      msgs.push(msg);
     }
+    for (const msg of msgs) this.dispatch(msg);
   }
 
   private dispatch(msg: { id?: number; method?: string; params?: unknown; result?: unknown; error?: RpcErrorObject }): void {
@@ -176,8 +194,8 @@ export class Server {
       const onNotification = (n: Notification) => this.opts.onNotification(n, epoch);
       const onClose = (reason: string, deliberate: boolean) => {
         reject(new Error(reason));
-        // Killed below after a failed initialize: not a crash.
-        if (this.disposed || rejected) return;
+        // Killed below after a failed initialize, or stopped by `stop`, which reported it: not a crash.
+        if (this.disposed || rejected || this.conn !== conn) return;
         this.conn = undefined;
         // Its sessions are gone either way. We ended it ourselves, so the next request starts a new one.
         const restarting = !deliberate && Date.now() - c.startedAt >= (this.opts.minUptimeMs ?? 2000);
@@ -225,6 +243,16 @@ export class Server {
 
   async pid(): Promise<number | undefined> {
     return (await this.connect()).pid;
+  }
+
+  // Ends the process because it stopped answering; nothing more is sent to it, and the next
+  // request starts a new one. Reported at once as a deliberate stop.
+  stop(reason: string): void {
+    const conn = this.conn;
+    if (!conn || this.disposed) return;
+    this.conn = undefined;
+    conn.then((c) => c.kill(), () => {});
+    this.opts.onCrash(reason, false, true);
   }
 
   dispose(): void {
