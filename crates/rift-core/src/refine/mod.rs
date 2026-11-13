@@ -261,8 +261,16 @@ impl Diff<'_> {
         let Some((ra, rb)) = self.reduce(ra, rb) else {
             return;
         };
-        let found = if self.patience && depth < MAX_DEPTH {
-            self.anchors(ra.clone(), rb.clone())
+        let found = if self.patience {
+            match self.anchors(ra.clone(), rb.clone()) {
+                // Too deep to follow a chain; the check for a shared line
+                // has still run, so a gap with none is replaced exactly.
+                Anchors::Chain(chain) if depth >= MAX_DEPTH => {
+                    self.ws.anchors.truncate(chain.start);
+                    Anchors::Repeated
+                }
+                found => found,
+            }
         } else {
             Anchors::Repeated
         };
