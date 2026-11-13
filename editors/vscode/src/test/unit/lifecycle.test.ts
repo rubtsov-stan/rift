@@ -20,10 +20,11 @@ import { Notification } from '../../protocol';
 // enumerated, later steps take the first event.
 
 const DEPTH = Number(process.env.RIFT_ORDER_DEPTH ?? 9);
-// The busy backoff of the code under test. Only timers of this delay are scheduled by the
-// test; any other, such as one left by an earlier test, runs as usual.
+// The busy backoff and the close wait of the code under test. Only timers of these delays
+// are scheduled by the test; any other, such as one left by an earlier test, runs as usual.
 const BACKOFF_MS = 1;
-const FAULTS = ['crash', 'crash-early', 'crash-refuse', 'garbage'] as const;
+const CLOSE_WAIT_MS = 1500;
+const FAULTS = ['crash', 'crash-early', 'crash-refuse', 'unreadable-reply', 'reply-and-unreadable'] as const;
 const P = { a: '/p/a', b: '/p/b' };
 const Q = { a: '/p/b', b: '/p/a' };
 const R = { a: '/p//a', b: '/p//b' };
@@ -77,17 +78,21 @@ class Proc implements Link {
     });
   }
 
+  // As Connection.kill: what waits fails now, the exit is seen on a later turn.
   kill(): void {
-    queueMicrotask(() => this.die('killed', false, false));
+    this.die('killed', false, false, true);
   }
 
-  die(reason: string, deliberate: boolean, early: boolean): void {
+  // A crash, or the end of a process the client gave up on: its requests fail, and the close is
+  // reported in the same turn, or with `later` once the exit is seen.
+  die(reason: string, deliberate: boolean, early: boolean, later = false): void {
     if (this.dead) return;
     this.dead = true;
     this.startedAt = early ? Date.now() : 0;
     for (const r of world.reqs.filter((r) => r.proc === this)) r.reject(new Error(reason));
     world.reqs = world.reqs.filter((r) => r.proc !== this);
-    this.onClose(reason, deliberate);
+    if (later) world.exits.push(() => this.onClose(reason, deliberate));
+    else this.onClose(reason, deliberate);
   }
 
   notify(n: Notification): void {
@@ -134,7 +139,11 @@ class Proc implements Link {
 class World {
   procs: Proc[] = [];
   reqs: Req[] = [];
-  timers: (() => void)[] = [];
+  // Busy backoffs and close waits, fired when the test picks them. A close wait running out
+  // is a fault: the server did not answer.
+  timers: { f: () => void; fault: boolean }[] = [];
+  // Exits of killed processes, not seen yet.
+  exits: (() => void)[] = [];
   refuse = false;
   clock = 0;
   learned = new Set<string>();
@@ -256,18 +265,29 @@ class World {
         }
       }
     }
-    this.timers.forEach((t, i) =>
+    this.exits.forEach((x, i) =>
       out.push({
-        name: 'backoff',
+        name: 'exit',
         run: () => {
-          this.timers.splice(i, 1);
-          t();
+          this.exits.splice(i, 1);
+          x();
         },
       }),
     );
+    this.timers.forEach((t, i) => {
+      if (t.fault && faults <= 0) return;
+      out.push({
+        name: t.fault ? 'close-timeout' : 'backoff',
+        run: () => {
+          this.timers.splice(i, 1);
+          t.f();
+        },
+      });
+    });
     if (proc && faults > 0) {
       for (const f of FAULTS) {
-        if (f === 'garbage' && !this.reqs.some((r) => r.proc === proc)) continue;
+        if (f === 'unreadable-reply' && !this.reqs.some((r) => r.proc === proc)) continue;
+        if (f === 'reply-and-unreadable' && !this.reqs.some((r) => r.proc === proc && r.method !== 'initialize')) continue;
         out.push({ name: f, run: () => this.fault(proc, f) });
       }
     }
@@ -295,8 +315,17 @@ class World {
     }
   }
 
+  // One read holding the answer to `r` and then a frame that is not JSON. As Connection.read:
+  // nothing of the read is dispatched, and the stop is reported with the failures.
+  readWithJunk(r: Req): void {
+    if (!r.processed) this.process(r);
+    r.proc.die('the server sent a reply that is not JSON', true, false);
+  }
+
   fault(proc: Proc, f: (typeof FAULTS)[number]): void {
-    if (f === 'garbage') return proc.die('the server sent a reply that is not JSON', true, false);
+    // As Connection.abort: the stop is reported with the failures, the exit comes later.
+    if (f === 'unreadable-reply') return proc.die('the server sent a reply that is not JSON', true, false);
+    if (f === 'reply-and-unreadable') return this.readWithJunk(this.reqs.find((r) => r.proc === proc && r.method !== 'initialize')!);
     if (f === 'crash-refuse') this.refuse = true;
     proc.die('rift server exited (SIGKILL)', false, f === 'crash-early');
   }
@@ -373,8 +402,12 @@ async function run(script: Action[], faults: number, choices: number[]): Promise
     failed: (_e, c) => {
       if (!world.current(c)) world.fail('1: a compare that is not current reported a failure');
     },
-    error() {},
-  });
+    // A lost connection is the window's to report, as a stop or a crash, never as the error of
+    // the compare it cut short.
+    error: (e) => {
+      if (!(e instanceof RpcError)) world.fail(`4: the compare showed a lost connection as its error: ${String(e)}`);
+    },
+  }, CLOSE_WAIT_MS);
   const widths: number[] = [];
   let clicked = false;
   for (let i = 0; ; i++) {
@@ -396,7 +429,7 @@ async function run(script: Action[], faults: number, choices: number[]): Promise
     if (i < DEPTH) widths.push(evs.length);
     const ev = evs[k];
     world.log.push(`[${ev.name}]`);
-    if ((FAULTS as readonly string[]).includes(ev.name)) faults--;
+    if ((FAULTS as readonly string[]).includes(ev.name) || ev.name === 'close-timeout') faults--;
     const before = { shown: world.w.shown, pending: world.w.pending };
     ev.run();
     await drain();
@@ -409,13 +442,18 @@ async function run(script: Action[], faults: number, choices: number[]): Promise
 
 // Every path that differs in the first DEPTH choices, once each.
 export async function explore(script: Action[], faults: number): Promise<{ paths: number; violation?: string }> {
-  const saved = globalThis.setTimeout;
+  const saved = [globalThis.setTimeout, globalThis.clearTimeout] as const;
   const send = Object.getOwnPropertyDescriptor(Comparison.prototype, 'send')!;
   globalThis.setTimeout = ((f: () => void, ms: number) => {
-    if (ms !== BACKOFF_MS) return saved(f, ms);
-    world.timers.push(f);
+    if (ms !== BACKOFF_MS && ms !== CLOSE_WAIT_MS) return saved[0](f, ms);
+    world.timers.push({ f, fault: ms === CLOSE_WAIT_MS });
     return f;
   }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((h: unknown) => {
+    const i = world.timers.findIndex((t) => t.f === h);
+    if (i >= 0) world.timers.splice(i, 1);
+    else saved[1](h as NodeJS.Timeout);
+  }) as unknown as typeof clearTimeout;
   // Ties each request to the comparison that sent it.
   Object.defineProperty(Comparison.prototype, 'send', {
     ...send,
@@ -438,7 +476,7 @@ export async function explore(script: Action[], faults: number): Promise<{ paths
       for (let j = 0; j < i; j++) choices[j] ??= 0;
     }
   } finally {
-    globalThis.setTimeout = saved;
+    [globalThis.setTimeout, globalThis.clearTimeout] = saved;
     Object.defineProperty(Comparison.prototype, 'send', send);
   }
 }

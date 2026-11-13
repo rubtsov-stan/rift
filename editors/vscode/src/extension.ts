@@ -36,12 +36,12 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     onNotification: (n, epoch) => compares.handle(n, epoch),
     onCrash: (reason, restarting, deliberate) => {
       const reopen = compares.lost(reason, restarting, deliberate);
-      // A binary that cannot start is reported by the command that needed it.
-      if (reason.startsWith('cannot start')) return;
-      const text = deliberate
-        ? `${reason}. Compare the files again.`
-        : reopen
-          ? `${reason}. Restarting it.`
+      // A binary that cannot start gets the hint to set rift.path, not a crash warning.
+      if (reason.startsWith('cannot start')) return showError(new Error(reason));
+      const text = reopen
+        ? `${reason}. Restarting it.`
+        : deliberate
+          ? `${reason}. Compare the files again.`
           : restarting
             ? `${reason}. This comparison crashed it twice, so it is not reopened.`
             : `${reason}. It stopped right after starting, so it is not restarted.`;

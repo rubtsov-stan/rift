@@ -95,6 +95,21 @@ describeMock('after a server crash', () => {
     }
   });
 
+  it('points to rift.path when the server cannot start', async () => {
+    await compare('a.sql', 'b.sql');
+    await until(() => x.comparison()?.state === 'ready');
+    try {
+      await vscode.workspace.getConfiguration('rift').update('path', '/nonexistent/rift', vscode.ConfigurationTarget.Global);
+      await kill();
+      // The next compare starts the binary that is not there.
+      await until(() => msg.warning.length > 0);
+      await compare('c.sql', 'b.sql');
+      await until(() => msg.error.some((e) => /cannot start .*Set rift\.path/.test(e)), 4000);
+    } finally {
+      await api();
+    }
+  });
+
   it('shows the next compare after that crash, not the comparison of the same id', async () => {
     await crashWhileLoading();
     await compare('c.sql', 'b.sql');
