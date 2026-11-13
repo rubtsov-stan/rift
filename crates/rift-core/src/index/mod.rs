@@ -191,6 +191,17 @@ fn back_from<S: Source>(
     line: LineNo,
     scratch: &mut [u8],
 ) -> Result<Option<Checkpoint>> {
+    // A hint names a line start only if a newline precedes it (or it is
+    // the file's start); otherwise the count below means nothing.
+    if m.offset.0 > 0 {
+        let mut prev = [0u8; 1];
+        source.read_exact_at(&mut prev, ByteOffset(m.offset.0 - 1))?;
+        if prev[0] != b'\n' {
+            return Ok(None);
+        }
+    } else if m.line.0 != 0 {
+        return Ok(None);
+    }
     // The newline ending line `line - 1` is the (d + 1)-th before `m`.
     let mut need = m.line - line + 1;
     let mut end = m.offset.0;
@@ -212,11 +223,15 @@ fn back_from<S: Source>(
         }
         end = from;
     }
-    // Only line 0 starts without a newline before it.
-    Ok((end == 0 && need == 1).then_some(Checkpoint {
-        line,
-        offset: ByteOffset(0),
-    }))
+    // Only line 0 starts without a newline before it. For any other line
+    // the hint named a start no newline led to, as at the end of a file
+    // without a final newline, so it says nothing.
+    Ok(
+        (end == 0 && need == 1 && line.0 == 0).then_some(Checkpoint {
+            line,
+            offset: ByteOffset(0),
+        }),
+    )
 }
 
 impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
@@ -936,6 +951,29 @@ mod tests {
                     .unwrap();
                 assert_eq!(len.0, mem.line(from).unwrap().len() as u64);
             }
+        }
+    }
+
+    /// A hint at the line count of a file without a final newline names
+    /// the end of the file, which no newline marks as a line start; a read
+    /// before it must not be placed by it.
+    #[test]
+    fn a_hint_past_the_last_line_does_not_misplace_an_earlier_read() {
+        for (data, at, from) in [
+            (&b"\na"[..], 2u64, 1u64),
+            (b"x\ny\nz", 3, 2),
+            (b"x\ny\nz", 3, 1),
+        ] {
+            let index = index_of(data, 1000);
+            let budget = Budget::new(Bytes::mib(1));
+            let access = IndexedLines::new(data, &index, &budget, Half::Refine, Bytes(64)).unwrap();
+            let mut buf = LineBuf::new();
+            access.seek(LineNo(at), ByteOffset(data.len() as u64));
+            access
+                .read_lines(LineNo(from)..LineNo(from + 1), &mut buf)
+                .unwrap();
+            let want = MemLines::new(data).line(from).unwrap().to_vec();
+            assert_eq!(buf.iter().next().unwrap(), want, "{data:?} {at} {from}");
         }
     }
 
