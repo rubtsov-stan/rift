@@ -33,7 +33,6 @@
 //! workers check whether it was cancelled, and after every chunk they count
 //! the chunk's bytes in it.
 
-use std::num::NonZero;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
@@ -42,7 +41,7 @@ use memchr::memchr_iter;
 use rayon::slice::ParallelSliceMut;
 use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 
-use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
+use crate::budget::{Budget, BudgetExceeded, Half, MAX_THREADS, Reservation};
 use crate::error::{Error, Result};
 use crate::index::{Checkpoint, LineIndex, read_retrying};
 use crate::sample::Sample;
@@ -98,7 +97,8 @@ pub struct ScanConfig {
     pub checkpoint_cap: usize,
     /// Bytes per chunk; each worker's buffer is this plus a small tail.
     pub chunk: Bytes,
-    /// Worker threads, at most one per chunk.
+    /// Workers whose buffers are reserved, at most one per chunk; at most
+    /// one per core of them start.
     pub threads: usize,
 }
 
@@ -111,16 +111,19 @@ impl ScanConfig {
     /// and the anchor table; every file gets a floor, then a share of the
     /// remainder proportional to its length. Read buffers take 1/4 of the
     /// half while a scan runs and are gone before the anchor table is
-    /// built. The thread count is the core count: one thread hashes short
-    /// lines at about 1 GB/s, under a third of an SSD, so the scan is
+    /// built. The pool is cut into [`MAX_THREADS`] chunks, at least 4 MiB
+    /// each when it holds that much, and `threads` is how many of those fit
+    /// it, so neither depends on the machine. [`scan`] reserves buffers for
+    /// that many workers and starts at most one per core: one thread hashes
+    /// short lines at about 1 GB/s, under a third of an SSD, so the scan is
     /// CPU-bound until several cores share it.
     #[must_use]
     pub fn for_pair(len_a: Bytes, len_b: Bytes, budget: &Budget) -> (Self, Self) {
         let half = budget.capacity(Half::Skeleton).0;
-        let cores = thread::available_parallelism().map_or(1, NonZero::get) as u64;
         let pool = half / 4;
-        let chunk = (pool / cores).clamp(Bytes::mib(4).0.min(pool.max(1 << 16)), Bytes::mib(16).0);
-        let threads = (pool / chunk).clamp(1, cores);
+        let most = MAX_THREADS as u64;
+        let chunk = (pool / most).clamp(Bytes::mib(4).0.min(pool.max(1 << 16)), Bytes::mib(16).0);
+        let threads = (pool / chunk).clamp(1, most);
         let index_share = half / 16;
         let sample_share = half - index_share;
         let samples = sample_share / (SAMPLE_BYTES + ANCHOR_TABLE_BYTES_PER_SAMPLE);
@@ -384,7 +387,7 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
         meter,
     };
     thread::scope(|s| {
-        let workers: Vec<_> = (0..threads)
+        let workers: Vec<_> = (0..threads.min(crate::budget::cores()))
             .map(|_| s.spawn(|| Worker::new(&shared).run(source)))
             .collect();
         workers.into_iter().try_for_each(|w| {

@@ -79,16 +79,33 @@ The skeleton keeps to its half by choosing the stratum adaptively. Refinements
 take memory through a semaphore counted in bytes. A region whose estimated
 working set does not fit is split at a lower stratum, or marked approximate.
 
+The output is identical on any machine for the same `--mem` and input,
+so nothing that sizes memory may follow the machine. A run may use one
+thread per MiB of `--mem`, from 1 to `MAX_THREADS` = 8 (`budget::threads`
+in `rift-core`). That count sizes the reserve below and rayon's global
+pool. Every split of work and every memory share is logical and sized
+from `--mem`: the scan cuts its pool into `MAX_THREADS` chunks and
+reserves buffers for as many workers as fit, the skeleton's comparison
+lanes and the anchor table's parts number at most `MAX_THREADS`, and the
+refine workers' allowance is capped at it. The cores (`budget::cores`)
+cap how many scan threads, refine workers and pool threads start, and
+`RAYON_NUM_THREADS` caps the pool too; `RIFT_CORES`
+stands in for the cores, so tests run as a 4- or 1-core machine would.
+One per MiB keeps the reserve's part
+per thread under 1.2% of `--mem`. The cap of 8 keeps the allowance of
+refine workers a machine does not start, 2 MiB each, at what eight cores
+took before at the default budget.
+
 `B` is `--mem` less a process reserve `R`: 48 KiB plus 12 KiB per thread
-of rayon's global pool, counted by rayon's rule (the cores, or
-`RAYON_NUM_THREADS`) without starting the pool (`RESERVE` and
-`pool_threads` in `rift-cli`'s `main.rs`). It pays for the heap that no
+that `--mem` allows (`RESERVE` and `reserve` in `rift-cli`'s `main.rs`).
+It pays for the heap that no
 reservation covers: parsing the command line, standard output's buffers,
 error and advice messages, thread records, and rayon's global pool, the
 one part that grows with the thread count. A trace of every allocation
 at small budgets in every mode, refusals and error exits included, found
 at most 30 KiB outside the pool and 7.5 KiB per pool thread (macOS, 1 to
-32 threads); `R` is 1.5 times that, rounded up. `--mem` is at least 64K,
+32 threads); `R` is 1.5 times that, rounded up. The CLI starts the pool
+with no more threads than `R` pays for. `--mem` is at least 64K,
 since parsing the command line takes about 28 KiB before any budget
 exists. The advice `rerun with --mem N` adds `R` to what the halves
 need. Key mode keeps only the 48 KiB: it never starts rayon's global

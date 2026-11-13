@@ -338,8 +338,8 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     // comparison rather than after it.
     let mut reservation = budget.try_reserve(Half::Skeleton, Bytes(gaps as u64 * SEGMENT_BYTES))?;
     let bitmaps = 2 * 8 * gaps.div_ceil(64) as u64;
-    // As many lanes as there are tasks, threads and pairs of the smallest
-    // buffers that fit. The buffers take half of what is free, since the
+    // As many lanes as there are tasks, `MAX_THREADS` and pairs of the
+    // smallest buffers that fit, whatever the pool runs them on. The buffers take half of what is free, since the
     // segment list is already reserved and nothing else needs the rest
     // during the comparison, but no more than the longest stretch a task
     // streams: a small pair under a large budget gets small buffers.
@@ -347,7 +347,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     let tasks = bounds.end_a.offset.div_ceil(TASK_BYTES).max(1);
     let lanes = (free / (2 * MIN_BUF))
         .min(tasks)
-        .clamp(1, rayon::current_num_threads() as u64);
+        .clamp(1, crate::budget::MAX_THREADS as u64);
     let buf = (free / (2 * 2 * lanes))
         .min(bounds.longest_aligned_run().max(MIN_BUF))
         .clamp(MIN_BUF, MAX_BUF);

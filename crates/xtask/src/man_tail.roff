@@ -157,10 +157,12 @@ A standard output closed before Rift starts (\fB>&\-\fR) is reopened on
 \fI/dev/null\fR by the Rust runtime, so Rift writes there and exits 0 or 1
 as usual.
 .SH MEMORY
-The heap stays at or under \fB\-\-mem\fR. Rift keeps 48 KiB of it, plus
-12 KiB per thread of its thread pool (one per core, or
-\fBRAYON_NUM_THREADS\fR), for the heap no budget counts: the command line,
-output buffers, messages and the thread pool. Key mode keeps only the
+The heap stays at or under \fB\-\-mem\fR. Rift sizes its work for one thread
+per MiB of \fB\-\-mem\fR, from 1 to 8, in each of the scan, the refinement
+and its thread pool, and starts no more threads than the machine has
+cores; \fBRAYON_NUM_THREADS\fR can make the pool smaller. It keeps 48 KiB of \fB\-\-mem\fR, plus 12 KiB for
+each thread \fB\-\-mem\fR allows, for the heap no budget counts: the command
+line, output buffers, messages and the thread pool. Key mode keeps only the
 48 KiB: it runs on threads of its own and takes their heap from the
 budget. The rest is the budget,
 half for the map of the files and half for refinement. Rift reserves
@@ -168,6 +170,10 @@ each allocation on the data path from the budget before it makes it, and
 reads files with
 \fBpread\fR(2) into fixed buffers. It does not map files into memory. The
 test suite checks the peak with a counting allocator.
+.PP
+The output is identical on any machine for the same \fB\-\-mem\fR and
+input: the number of cores and \fBRAYON_NUM_THREADS\fR change how fast Rift
+runs, not what it prints.
 .PP
 These are not guaranteed:
 .IP \(bu 2

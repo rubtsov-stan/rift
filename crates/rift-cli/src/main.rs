@@ -26,11 +26,11 @@ static ALLOC: CountingAlloc = CountingAlloc;
 /// Heap kept out of the budget for what it does not count: parsing the
 /// command line, standard output's buffers, error and advice messages,
 /// thread records, and the heap of rayon's global pool, which the scan
-/// and the skeleton start. The pool grows with its thread count, so the
-/// reserve has a part per pool thread; see
-/// [`rift_core::budget::pool_threads`]. Key mode runs its passes on a pool
-/// of its own, held in the budget, and never starts rayon's, so it keeps
-/// only [`RESERVE`].
+/// and the skeleton use. The pool grows with its thread count, so the
+/// reserve has a part per thread the run may use, a function of `--mem`
+/// alone; see [`rift_core::budget::threads`]. Key mode runs its passes on
+/// a pool of its own, held in the budget, and never starts rayon's, so it
+/// keeps only [`RESERVE`].
 ///
 /// Sized from a trace of every allocation on macOS, 8 threads (1 to 32
 /// for the pool), at `--mem` 1 to 12M in every mode, refusals and error
@@ -42,11 +42,11 @@ const RESERVE: Bytes = Bytes(48 << 10);
 /// The reserve's part per thread; see [`RESERVE`].
 const RESERVE_PER_THREAD: Bytes = Bytes(12 << 10);
 
-/// The heap `--mem` keeps out of the budget for a run that starts
+/// The heap `--mem mem` keeps out of the budget for a run that uses
 /// rayon's global pool, or for one that does not.
-fn reserve(global_pool: bool) -> Bytes {
+fn reserve(mem: Bytes, global_pool: bool) -> Bytes {
     let threads = if global_pool {
-        rift_core::budget::pool_threads() as u64
+        rift_core::budget::threads(mem) as u64
     } else {
         0
     };
@@ -54,9 +54,13 @@ fn reserve(global_pool: bool) -> Bytes {
 }
 
 /// The budget of a run under `--mem mem`: what is left after
-/// [`reserve`], split into the two halves.
+/// [`reserve`], split into the two halves. A run that uses rayon's global
+/// pool starts it here, with no more threads than the reserve pays for.
 fn budget(mem: Bytes, global_pool: bool) -> Budget {
-    Budget::new(Bytes(mem.0.saturating_sub(reserve(global_pool).0)))
+    if global_pool {
+        rift_core::budget::start_pool(mem);
+    }
+    Budget::new(Bytes(mem.0.saturating_sub(reserve(mem, global_pool).0)))
 }
 
 /// `rift tui A B` is `rift -i A B`. With fewer than two more arguments
@@ -141,8 +145,11 @@ fn mem_advice(err: &anyhow::Error, mem: Bytes, global_pool: bool) -> Option<Stri
         Some(rift_core::Error::Budget(b)) => Some(*b),
         _ => e.downcast_ref::<BudgetExceeded>().copied(),
     })?;
-    let reserve = reserve(global_pool);
-    let need = refusal.mem_advice(Bytes(mem.0.saturating_sub(reserve.0)))?;
+    let need = refusal.mem_advice(Bytes(mem.0.saturating_sub(reserve(mem, global_pool).0)))?;
+    // The reserve grows with `--mem` up to its largest, so the reserve of
+    // `need` plus the largest covers the `--mem` advised.
+    let most = reserve(Bytes(u64::MAX), global_pool);
+    let reserve = reserve(Bytes(need.0.saturating_add(most.0)), global_pool);
     Some(format!(
         "rerun with --mem {}",
         Bytes(need.0.checked_add(reserve.0)?).to_mem_arg()
@@ -178,13 +185,13 @@ mod tests {
                 available: Bytes(available),
             }))
         };
-        let mem = Bytes(Bytes::mib(7).0 + reserve(true).0);
+        let mem = Bytes(Bytes::mib(7).0 + reserve(Bytes::mib(7), true).0);
         // 3.5 MiB per half, 0.5 MiB of it free: 3 MiB held, 5 MiB needed,
         // and the reserve on top.
         let err = refusal(rift_core::Half::Refine, 2 << 20, 512 << 10);
         let advised = format!(
             "rerun with --mem {}",
-            Bytes(Bytes::mib(10).0 + reserve(true).0).to_mem_arg()
+            Bytes(Bytes::mib(10).0 + reserve(Bytes::mib(10), true).0).to_mem_arg()
         );
         assert_eq!(mem_advice(&err, mem, true), Some(advised));
         let err = err.context("the changes printed above are incomplete");

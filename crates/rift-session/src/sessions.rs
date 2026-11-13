@@ -235,9 +235,7 @@ impl Session {
         } else {
             None
         };
-        let threads = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZero::get)
-            .min(4);
+        let threads = rift_core::budget::cores().min(4);
         let diff = Diff::with_watch(
             Arc::new(a),
             Arc::new(b),

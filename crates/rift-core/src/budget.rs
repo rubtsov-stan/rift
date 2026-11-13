@@ -69,6 +69,45 @@ impl BudgetExceeded {
 /// how many of the allowed threads start.
 pub const MAX_THREADS: usize = 8;
 
+/// The threads a run under `--mem mem` may use: one per MiB, from 1 to
+/// [`MAX_THREADS`]. The CLI keeps 12 KiB of `--mem` per thread out of the
+/// budget, so this keeps that part under 1.2% of `--mem` at any size.
+#[must_use]
+pub fn threads(mem: Bytes) -> usize {
+    usize::try_from(mem.0 >> 20)
+        .unwrap_or(MAX_THREADS)
+        .clamp(1, MAX_THREADS)
+}
+
+/// Makes rayon's global pool start with at most [`threads`] of `mem`.
+/// When its default size, [`pool_threads`], is no larger, the pool is left
+/// to start on first use as before, which comes after the scan has freed
+/// its buffers; otherwise, or when `RIFT_CORES` stands in for the cores,
+/// which rayon does not read, it starts here. Does nothing when the pool
+/// is already running.
+pub fn start_pool(mem: Bytes) {
+    let threads = threads(mem).min(pool_threads());
+    if threads < pool_threads() || std::env::var_os("RIFT_CORES").is_some() {
+        // An error means the pool exists; its size is then the caller's.
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global();
+    }
+}
+
+/// The cores the machine offers, as `available_parallelism` counts them,
+/// or a positive `RIFT_CORES`, which stands in for them so tests can run
+/// as a smaller machine would. Only how many threads start may read it;
+/// no work split or memory share does.
+#[must_use]
+pub fn cores() -> usize {
+    std::env::var("RIFT_CORES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, std::num::NonZero::get))
+}
+
 /// The threads rayon's global pool starts, by rayon's own rule
 /// (`ThreadPoolBuilder::get_num_threads` in rayon-core): a positive
 /// `RAYON_NUM_THREADS`, else, unless that is 0, a positive
@@ -77,7 +116,6 @@ pub const MAX_THREADS: usize = 8;
 #[must_use]
 pub fn pool_threads() -> usize {
     let var = |name| std::env::var(name).ok()?.parse::<usize>().ok();
-    let cores = || std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     match var("RAYON_NUM_THREADS") {
         Some(n @ 1..) => n,
         Some(0) => cores(),
