@@ -472,17 +472,30 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
         let end = self.source.len().0;
         let mut at = start + from;
         let mut left = max;
-        while left > 0 {
-            let want = Bytes(left.min(scratch.len() as u64)).as_usize();
-            let n = read_retrying(&self.source, &mut scratch[..want], ByteOffset(at))?;
-            if n == 0 {
+        // Resuming inside a line, the first read takes the byte before
+        // too: a newline there means `from` is the line's length, so the
+        // line has ended and the bytes at `at` belong to the next one.
+        let mut back = usize::from(from > 0);
+        while left > 0 || back > 0 {
+            let want = Bytes((left + back as u64).min(scratch.len() as u64)).as_usize();
+            let n = read_retrying(
+                &self.source,
+                &mut scratch[..want],
+                ByteOffset(at - back as u64),
+            )?;
+            if n == 0 || (back > 0 && scratch[0] == b'\n') {
                 return Ok(true);
             }
-            let (part, done) = match memchr::memchr(b'\n', &scratch[..n]) {
+            let got = &scratch[back..n];
+            back = 0;
+            if got.is_empty() {
+                continue;
+            }
+            let (part, done) = match memchr::memchr(b'\n', got) {
                 Some(nl) => (nl + 1, true),
-                None => (n, false),
+                None => (got.len(), false),
             };
-            buf.extend_last(&scratch[..part])?;
+            buf.extend_last(&got[..part])?;
             if done {
                 return Ok(true);
             }
@@ -863,6 +876,32 @@ mod tests {
         access.read_lines(LineNo(31)..LineNo(33), &mut buf).unwrap();
         assert!(reads() > after);
         assert_eq!(buf.iter().next().unwrap(), mem.line(31).unwrap());
+    }
+
+    /// A part read from the end of a line, as the trait allows, is empty
+    /// and ends the line; it must not take the next line for this one,
+    /// nor leave the reader misplaced for the next read.
+    #[test]
+    fn a_part_from_the_end_of_a_line_is_empty() {
+        let data = b"first\nsecond\nthird\n";
+        let mem = MemLines::new(data);
+        let index = index_of(data, 16);
+        let budget = Budget::new(Bytes::mib(1));
+        let access = IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(8)).unwrap();
+        let mut buf = LineBuf::new();
+        for i in 0..3 {
+            let len = mem.line(i).unwrap().len() as u64;
+            let done = access
+                .read_line_part(LineNo(i), Bytes(len), Bytes(64), &mut buf)
+                .unwrap();
+            assert!(done && buf.line(0).is_empty(), "line {i}");
+            if i + 1 < 3 {
+                access
+                    .read_lines(LineNo(i + 1)..LineNo(i + 2), &mut buf)
+                    .unwrap();
+                assert_eq!(buf.line(0), mem.line(i + 1).unwrap(), "line {}", i + 1);
+            }
+        }
     }
 
     proptest::proptest! {
