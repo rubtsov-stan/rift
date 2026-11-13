@@ -200,8 +200,17 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
         path_b: &new,
         moves: true,
     };
+    write_diff(&call, &files, cli.mem, io::stdout().lock())
+}
+
+fn write_diff(
+    call: &Call,
+    files: &Files<'_>,
+    mem: rift_core::Bytes,
+    mut out: impl Write,
+) -> anyhow::Result<()> {
     // Built before anything is printed, so a refusal leaves no half header.
-    let diff = full::build(&files, cli.mem)?;
+    let diff = full::build(files, mem, false)?;
     let (old_label, new_label) = call.labels();
     let opts = Options {
         context: DEFAULT_CONTEXT,
@@ -214,7 +223,6 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
             mtime: None,
         },
     };
-    let mut out = io::stdout().lock();
     out.write_all(&call.header()).map_err(Error::Write)?;
     diff.write_unified(&opts, &mut out)?;
     out.flush().map_err(Error::Write)?;
@@ -246,6 +254,29 @@ pub fn main(cli: &GitDiffArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_driver_does_not_search_for_moved_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = full::tests::shuffled(dir.path());
+        let files = full::tests::open(&paths, true);
+        let side = |p: &std::path::Path, hex: &str| {
+            [p.as_os_str().to_owned(), hex.into(), "100644".into()]
+        };
+        let [old, new] = [
+            side(&paths[0], &"a".repeat(40)),
+            side(&paths[1], &"b".repeat(40)),
+        ];
+        let mut args = vec![OsString::from("f")];
+        args.extend(old);
+        args.extend(new);
+        let call = Call::parse(&args).unwrap();
+        let before = rift_core::diff::move_searches_on_this_thread();
+        let mut out = Vec::new();
+        write_diff(&call, &files, rift_core::Bytes(256 << 20), &mut out).unwrap();
+        assert!(out.starts_with(b"diff --git a/f b/f\n"));
+        assert_eq!(rift_core::diff::move_searches_on_this_thread(), before);
+    }
 
     fn call(args: &[&str]) -> Call {
         let args: Vec<OsString> = args.iter().map(Into::into).collect();

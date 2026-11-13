@@ -79,6 +79,18 @@ fn estimate(n: u64, m: u64) -> Bytes {
     Bytes(hashes + work_estimate(n, m).0 + hunk)
 }
 
+thread_local! {
+    static SEARCHES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many moved-block searches [`Diff`]s built on this thread started.
+/// A test hook: `Diff::with_config` searches on the calling thread.
+#[doc(hidden)]
+#[must_use]
+pub fn move_searches_on_this_thread() -> u64 {
+    SEARCHES.with(Cell::get)
+}
+
 /// Settings of a [`Diff`] other than the sources, the budget and the
 /// thread count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +277,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         // Readers of their own with small buffers keep the comparison
         // buffers small; all of it is released once the blocks are found.
         let moves = if config.moves {
+            SEARCHES.with(|n| n.set(n.get() + 1));
             if watch.is_cancelled() {
                 return Err(Error::Cancelled);
             }

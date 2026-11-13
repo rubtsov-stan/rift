@@ -22,7 +22,8 @@ pub struct Files<'p> {
     pub b: Arc<FileSource>,
     pub path_a: &'p Path,
     pub path_b: &'p Path,
-    /// Look for moved blocks.
+    /// Moved blocks are not switched off (`--no-moves`). They are searched
+    /// for only where something shows them; see [`build`].
     pub moves: bool,
 }
 
@@ -32,7 +33,15 @@ fn threads(mem: Bytes) -> usize {
     rift_core::budget::threads(mem).min(rift_core::budget::cores())
 }
 
-pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
+/// Opens the diff. `show_moves` says whether the caller can show moved
+/// blocks: the unified diff and git's driver print none, so the search is
+/// skipped for them. The block list's share of the refine half is set
+/// aside either way, so the edit script does not depend on it.
+pub fn build(
+    files: &Files<'_>,
+    mem: Bytes,
+    show_moves: bool,
+) -> anyhow::Result<Diff<FileSource, FileSource>> {
     let budget = crate::budget(mem, true);
     Ok(Diff::with_config(
         Arc::clone(&files.a),
@@ -40,7 +49,7 @@ pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, F
         &budget,
         threads(mem),
         Config {
-            moves: files.moves,
+            moves: files.moves && show_moves,
             ..Config::default()
         },
     )?)
@@ -49,8 +58,18 @@ pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, F
 /// Writes the unified diff to standard output. Exit code 0 when the files
 /// are identical, 1 when they differ.
 pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<ExitCode> {
+    unified_to(files, mem, stats, io::stdout().lock())
+}
+
+/// Only `--stats` shows moved blocks of a unified diff.
+fn unified_to(
+    files: &Files<'_>,
+    mem: Bytes,
+    stats: bool,
+    out: impl io::Write,
+) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
-    let diff = build(files, mem)?;
+    let diff = build(files, mem, stats)?;
     let (old_name, old_time) = label(files.path_a)?;
     let (new_name, new_time) = label(files.path_b)?;
     let opts = Options {
@@ -64,7 +83,7 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
             mtime: Some(new_time),
         },
     };
-    let written = diff.write_unified(&opts, io::stdout().lock())?;
+    let written = diff.write_unified(&opts, out)?;
     if stats {
         eprintln!("{}", peak_heap(mem));
         eprintln!("time {:.2} s", start.elapsed().as_secs_f64());
@@ -119,7 +138,7 @@ pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
         io::stdin().is_terminal() && io::stdout().is_terminal(),
         "-i needs a terminal"
     );
-    let diff = build(files, mem)?;
+    let diff = build(files, mem, true)?;
     let identical = rift_core::DiffView::segments(&diff)
         .iter()
         .all(|s| s.status == rift_core::SegmentStatus::Equal);
@@ -182,5 +201,94 @@ mod clock {
             }
             i32::try_from(tm.tm_gmtoff).unwrap_or(0)
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use rift_core::diff::move_searches_on_this_thread as searches;
+    use rift_gen::{Config, Profile};
+
+    /// Writes a pair with moved blocks and opens it.
+    pub(crate) fn shuffled(dir: &Path) -> [std::path::PathBuf; 2] {
+        let mut config = Config::new(7, 1 << 20, Profile::Shuffled);
+        config.change_ratio = 0.003;
+        let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+        rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+        let paths = [dir.join("a"), dir.join("b")];
+        std::fs::write(&paths[0], a).unwrap();
+        std::fs::write(&paths[1], b).unwrap();
+        paths
+    }
+
+    pub(crate) fn open(paths: &[std::path::PathBuf; 2], moves: bool) -> Files<'_> {
+        let open = |p: &Path| Arc::new(FileSource::open(p).unwrap());
+        Files {
+            a: open(&paths[0]),
+            b: open(&paths[1]),
+            path_a: &paths[0],
+            path_b: &paths[1],
+            moves,
+        }
+    }
+
+    const MEM: Bytes = Bytes(256 << 20);
+
+    #[test]
+    fn plain_unified_skips_the_move_search_and_stats_runs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = shuffled(dir.path());
+        let files = open(&paths, true);
+
+        let before = searches();
+        let mut plain = Vec::new();
+        unified_to(&files, MEM, false, &mut plain).unwrap();
+        assert_eq!(searches(), before, "plain output searched for moves");
+
+        let mut stats = Vec::new();
+        unified_to(&files, MEM, true, &mut stats).unwrap();
+        assert_eq!(searches(), before + 1, "--stats must still search");
+        assert_eq!(plain, stats, "the diff is the same either way");
+
+        let off = open(&paths, false);
+        unified_to(&off, MEM, true, Vec::new()).unwrap();
+        assert_eq!(searches(), before + 1, "--no-moves searched");
+    }
+
+    /// Where `--mem` is tight enough that regions come out approximate, the
+    /// plain diff and `--stats` still print the same bytes: the block
+    /// list's share is set aside whether or not the search runs.
+    #[test]
+    fn plain_and_stats_agree_where_regions_are_approximate() {
+        let mut config = Config::new(5, 4 << 20, Profile::Nokey);
+        config.change_ratio = 0.2;
+        let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+        rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [dir.path().join("a"), dir.path().join("b")];
+        std::fs::write(&paths[0], a).unwrap();
+        std::fs::write(&paths[1], b).unwrap();
+        let files = open(&paths, true);
+        for mem in [10_600 << 10, 10_800 << 10, 11_000 << 10] {
+            let (mut plain, mut stats) = (Vec::new(), Vec::new());
+            unified_to(&files, Bytes(mem), false, &mut plain).unwrap();
+            unified_to(&files, Bytes(mem), true, &mut stats).unwrap();
+            let approx = |out: &[u8]| String::from_utf8_lossy(out).contains(" approx: ");
+            assert!(approx(&plain), "--mem {mem} has no approximate region");
+            assert_eq!(plain, stats, "--mem {mem}: plain and --stats differ");
+        }
+    }
+
+    #[test]
+    fn the_terminal_interface_still_gets_the_moved_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = shuffled(dir.path());
+        let before = searches();
+        let diff = build(&open(&paths, true), MEM, true).unwrap();
+        assert_eq!(searches(), before + 1);
+        assert!(!diff.moves().blocks().is_empty(), "the pair has moves");
+        let diff = build(&open(&paths, false), MEM, true).unwrap();
+        assert!(diff.moves().disabled());
     }
 }
