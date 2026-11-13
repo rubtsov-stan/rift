@@ -47,19 +47,23 @@ pub struct BudgetExceeded {
 impl BudgetExceeded {
     /// A total budget to run again with, for a run that had `mem` and was
     /// refused this way: twice what the half held plus the request, so
-    /// the half alone gets that much. `None` when the refusal does not
-    /// exceed what `mem` gives the half, or the figure overflows.
+    /// the half alone gets that much, and at least twice `mem`. `None`
+    /// when the refusal does not exceed what `mem` gives the half, or the
+    /// figure overflows.
     ///
     /// Not a lower bound, since what a half holds depends on `mem` and a
     /// smaller budget can take another path, nor always enough, since a
-    /// later stage may need more. The CLI's `rerun with --mem` and the
-    /// protocol's `suggested_mem` both come from here.
+    /// later stage may need more. The doubling makes a chain of reruns
+    /// reach the real need in about log2 steps, and the last step can
+    /// overshoot that need by up to about a factor of two. The CLI's
+    /// `rerun with --mem` and the protocol's `suggested_mem` both come
+    /// from here.
     #[must_use]
     pub fn mem_advice(&self, mem: Bytes) -> Option<Bytes> {
         let cap = Budget::new(mem).capacity(self.half).0;
         let held = cap.saturating_sub(self.available.0);
         let need = held.checked_add(self.requested.0)?.checked_mul(2)?;
-        (need > mem.0).then_some(Bytes(need))
+        (need > mem.0).then_some(Bytes(need.max(mem.0.checked_mul(2)?)))
     }
 }
 
@@ -267,9 +271,13 @@ mod tests {
             available: Bytes(available),
         };
         let mem = Bytes::mib(7);
-        // 3.5 MiB per half, 0.5 MiB of it free: 3 MiB held, 5 MiB needed.
+        // 3.5 MiB per half, 0.5 MiB of it free: 3 MiB held, 5 MiB needed,
+        // so 10 MiB of budget; that is under twice `mem`, which wins.
         let r = refusal(Half::Refine, 2 << 20, 512 << 10);
-        assert_eq!(r.mem_advice(mem), Some(Bytes(10 << 20)));
+        assert_eq!(r.mem_advice(mem), Some(Bytes(14 << 20)));
+        // A need above twice `mem` is advised as it is.
+        let r = refusal(Half::Refine, 8 << 20, 512 << 10);
+        assert_eq!(r.mem_advice(mem), Some(Bytes(22 << 20)));
         // A refusal that does not exceed its half proves nothing about mem.
         assert_eq!(refusal(Half::Skeleton, 10, 20).mem_advice(mem), None);
         assert_eq!(refusal(Half::Refine, u64::MAX, 0).mem_advice(mem), None);
