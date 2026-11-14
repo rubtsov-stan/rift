@@ -30,7 +30,7 @@ jobs:
       # Miri's isolation refuses; with isolation off, a few cases each.
       # alloc_small installs the counting allocator, rift-core's only unsafe
       # code, on a few KiB.
-      - run: 'cargo +nightly miri test -p rift-core --lib --test alloc_small -- --skip scan:: --skip sched:: --skip skeleton:: --skip diff:: --skip moves:: --skip keyed:: --skip anchors::tests::many_samples'
+      - run: 'cargo +nightly miri test -p rift-core --lib --test alloc_small -- --skip scan:: --skip sched:: --skip skeleton:: --skip diff:: --skip moves:: --skip keyed:: --skip anchors::tests::many_samples --skip budget::tests::pool_threads_counts_what_rayon_starts'
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
           PROPTEST_CASES: 8
@@ -46,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         # diff does not finish within the timeout under Miri.
-        filter: ["scan::", "skeleton::", "moves::", "keyed::", "anchors::tests::many_samples"]
+        filter: ["scan::", "skeleton::", "moves::", "keyed::", "anchors::tests::many_samples", "budget::tests::pool_threads_counts_what_rayon_starts"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal --component miri
