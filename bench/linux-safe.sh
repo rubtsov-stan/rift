@@ -4,7 +4,7 @@
 #
 #   bench/linux-safe.sh [--dry-run] [--yes] [--ref REF] [--repo URL]
 #                       [--read-only-pair DIR] [--disk-dir DIR]
-#                       [--suite standard|le|all]
+#                       [--suite standard|le|all] [--reps N]
 #
 #   --dry-run            print the plan and exit
 #   --yes                skip the 10 second wait before the run starts
@@ -18,6 +18,7 @@
 #   --suite S            standard (default): the sql and csv runs; le: the
 #                        low-entropy runs, which need a REF whose rift-gen
 #                        has the distinct profile; all: both
+#   --reps N             repetitions of each repeated run, 1 to 20 (default 3)
 #
 # Test knobs, for running the script on a host that is not Linux. They turn
 # safety checks off; never set them for a real run:
@@ -36,7 +37,7 @@ set -eu
 
 GIB=1073741824
 schema=3
-repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 suite=standard ropair=
+repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 suite=standard reps=3 ropair=
 diskdir=
 diskroot=
 testing=${RIFT_BENCH_TESTING:-0}
@@ -56,6 +57,7 @@ while [ $# -gt 0 ]; do
     --read-only-pair) [ $# -ge 2 ] || usage; ropair=$2; shift 2 ;;
     --disk-dir) [ $# -ge 2 ] || usage; diskdir=$2; shift 2 ;;
     --suite) [ $# -ge 2 ] || usage; suite=$2; shift 2 ;;
+    --reps) [ $# -ge 2 ] || usage; reps=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -73,6 +75,10 @@ command -v git >/dev/null 2>&1 || die "git not found"
 if [ -n "$ropair" ]; then
   [ -f "$ropair/a" ] && [ -f "$ropair/b" ] || die "$ropair must hold files a and b"
 fi
+case $reps in
+  ''|*[!0-9]*) usage ;;
+esac
+[ "$reps" -ge 1 ] && [ "$reps" -le 20 ] || usage
 case $suite in
   standard) ;;
   le|all)
@@ -216,6 +222,7 @@ plan() {
   echo "  scratch           tmpfs $base ($(gib "$tmpfs_free") free)"
   echo "  source            $repo at $ref"
   echo "  suite             $suite"
+  echo "  repetitions       $reps of each repeated run"
   case $limiter in
     systemd) echo "  memory cap        systemd-run --user scope, MemoryMax, MemorySwapMax=0: rift 1 GiB (1.5 GiB for --mem 1G)" ;;
     prlimit) echo "  memory cap        prlimit --as (systemd user scope unavailable): address space, not RSS" ;;
@@ -359,6 +366,7 @@ fact distro "$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}" |
 fact virt "$(systemd-detect-virt 2>/dev/null || echo unknown)"
 fact rustc "$rustc_v"
 fact suite "$suite"
+fact reps "$reps"
 fact rift_ref "$ref"
 fact rift_commit "$commit"
 fact scratch_fs "tmpfs, $(gib "$tmpfs_free") free of the mount at start"
@@ -486,16 +494,16 @@ x_lines='' x_changed='' x_cmp=''
 # core_runs GROUP PROFILE SIZE A B: the runs every pair gets.
 core_runs() {
   g=$1 p=$2 s=$3 a=$4 bb=$5
-  for r in 1 2 3; do
+  for r in $(seq "$reps"); do
     # Into a pipe, not /dev/null: cat can hand a file to /dev/null without
     # copying it, which made the baseline read 2 GiB in 0.05 s.
-    run_one "$g" "$p" "$s" "cat a b | wc -c" all "$GIB" $r count cat "$a" "$bb"
+    run_one "$g" "$p" "$s" "cat a b | wc -c" all "$GIB" "$r" count cat "$a" "$bb"
   done
-  for r in 1 2 3; do
-    run_one "$g" "$p" "$s" "rift --summary --mem 256M" all "$GIB" $r file "$rift" --summary --mem 256M "$a" "$bb"
+  for r in $(seq "$reps"); do
+    run_one "$g" "$p" "$s" "rift --summary --mem 256M" all "$GIB" "$r" file "$rift" --summary --mem 256M "$a" "$bb"
   done
-  for r in 1 2 3; do
-    run_one "$g" "$p" "$s" "rift --stats --mem 256M" all "$GIB" $r count "$rift" --stats --mem 256M "$a" "$bb"
+  for r in $(seq "$reps"); do
+    run_one "$g" "$p" "$s" "rift --stats --mem 256M" all "$GIB" "$r" count "$rift" --stats --mem 256M "$a" "$bb"
   done
   run_one "$g" "$p" "$s" "rift --stats --mem 64M" all "$GIB" 1 count "$rift" --stats --mem 64M "$a" "$bb"
   # 1 GiB of heap does not fit a 1 GiB cap; the extra 0.5 GiB comes out of the 2 GiB margin.
@@ -542,10 +550,10 @@ if [ "$suite" != le ]; then
   if [ "$cmpok" = 1 ]; then
     for prof in sql csv; do
       gen_pair "$cmp" "$prof" --profile "$prof"
-      for r in 1 2 3; do
-        run_one compare "$prof" "$cmp" "rift --stats --mem 256M" all "$GIB" $r count "$rift" --stats --mem 256M "$pair/a" "$pair/b"
-        run_one compare "$prof" "$cmp" "diff a b" all "$cmpcap" $r count diff "$pair/a" "$pair/b"
-        run_one compare "$prof" "$cmp" "git diff --no-index a b" all "$cmpcap" $r count git diff --no-index "$pair/a" "$pair/b"
+      for r in $(seq "$reps"); do
+        run_one compare "$prof" "$cmp" "rift --stats --mem 256M" all "$GIB" "$r" count "$rift" --stats --mem 256M "$pair/a" "$pair/b"
+        run_one compare "$prof" "$cmp" "diff a b" all "$cmpcap" "$r" count diff "$pair/a" "$pair/b"
+        run_one compare "$prof" "$cmp" "git diff --no-index a b" all "$cmpcap" "$r" count git diff --no-index "$pair/a" "$pair/b"
       done
       rm -rf "$pair"
     done
@@ -558,10 +566,10 @@ if [ "$suite" != le ]; then
       core_runs generated "$prof" "$size" "$pair/a" "$pair/b"
 
       if [ "$size" = "$small" ]; then
-        for r in 1 2 3; do
+        for r in $(seq "$reps"); do
           if [ "$diffok" = 1 ]; then
-            run_one generated "$prof" "$size" "diff a b" all "$diffcap" $r count diff "$pair/a" "$pair/b"
-            run_one generated "$prof" "$size" "git diff --no-index a b" all "$diffcap" $r count git diff --no-index "$pair/a" "$pair/b"
+            run_one generated "$prof" "$size" "diff a b" all "$diffcap" "$r" count diff "$pair/a" "$pair/b"
+            run_one generated "$prof" "$size" "git diff --no-index a b" all "$diffcap" "$r" count git diff --no-index "$pair/a" "$pair/b"
           fi
         done
         [ "$diffok" = 1 ] || note "diff and git diff not run on $prof $(gib "$size"): no limiter, or a $(gib "$diffcap") cap does not fit within 60% of MemAvailable"
@@ -571,9 +579,9 @@ if [ "$suite" != le ]; then
           for k in 1 2 4 "$cpus"; do
             [ "$k" -le "$cpus" ] || continue
             if [ "$k" -eq "$cpus" ]; then pre=; thr=all; else pre="taskset -c 0-$((k - 1))"; thr=$k; fi
-            for r in 1 2 3; do
+            for r in $(seq "$reps"); do
               # shellcheck disable=SC2086
-              run_one scaling "$prof" "$size" "rift --summary --mem 256M" "$thr" "$GIB" $r file $pre "$rift" --summary --mem 256M "$pair/a" "$pair/b"
+              run_one scaling "$prof" "$size" "rift --summary --mem 256M" "$thr" "$GIB" "$r" file $pre "$rift" --summary --mem 256M "$pair/a" "$pair/b"
             done
           done
         else
