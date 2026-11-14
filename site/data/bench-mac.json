@@ -1,21 +1,23 @@
 {
- "source": "README.md at the v0.1.0 tag, section Benchmarks",
- "script": "bench/run.sh; data from bench/data.sh (rift-gen seed 7, profile sql, 1 GiB and 10 GiB)",
+ "source": "bench/results/macos-apple-m1-2026-11-15/report.md",
+ "script": "bench/run.sh 1G 10G (rift-gen seed 7, profile sql)",
  "host": {
   "cpu": "Apple M1",
   "ram_gb": 16,
-  "storage": "internal SSD",
-  "os": "macOS",
-  "cache": "warm page cache",
-  "date": "not recorded in the README; the table entered the repository on 2026-11-05 (commit c4f2771)"
+  "storage": "internal SSD (APPLE SSD AP0512Q)",
+  "os": "macOS 27.0.1",
+  "cache": "page cache not dropped",
+  "date": "2026-11-15",
+  "rift_commit": "e06f3d4"
  },
- "note": "git diff has no 1 GiB row: it treats files over 512 MiB as binary and prints no diff. Peak memory is the resident set; Rift's heap peaked at 83.5 MiB on the 1 GiB pair and 94.1 MiB on the 10 GiB pair.",
+ "note": "One run of each command. system diff is the diff macOS ships, not GNU diff. git diff printed no diff on the 1 GiB pair: it treats files over 512 MiB as binary. Peak memory is the resident set; Rift's heap peaked at 79.4 MiB on the 1 GiB pair and 92.4 MiB on the 10 GiB pair.",
  "rows": [
-  {"size": "1 GiB", "tool": "rift --summary", "time": "1.26 s", "mem": "127.7 MiB"},
-  {"size": "1 GiB", "tool": "rift (full diff)", "time": "0.93 s", "mem": "130.8 MiB", "wall_s": 0.93, "mem_mib": 130.8},
-  {"size": "1 GiB", "tool": "system diff", "time": "17.55 s", "mem": "3.2 GiB", "wall_s": 17.55, "mem_mib": 3277},
-  {"size": "10 GiB", "tool": "rift --summary", "time": "13.37 s", "mem": "136.5 MiB"},
-  {"size": "10 GiB", "tool": "rift (full diff)", "time": "26.16 s", "mem": "136.5 MiB"},
-  {"size": "10 GiB", "tool": "diff, git diff", "time": "did not run: needs more than 16 GB of RAM", "mem": ""}
+  {"size": "1 GiB", "tool": "rift --summary", "time": "1.03 s", "mem": "124.2 MiB"},
+  {"size": "1 GiB", "tool": "rift (full diff)", "time": "0.91 s", "mem": "127.2 MiB", "wall_s": 0.91, "mem_mib": 127.2},
+  {"size": "1 GiB", "tool": "system diff", "time": "17.95 s", "mem": "3.1 GiB", "wall_s": 17.95, "mem_mib": 3174},
+  {"size": "1 GiB", "tool": "git diff --no-index", "time": "63.92 s, no diff (binary)", "mem": "4.9 MiB"},
+  {"size": "10 GiB", "tool": "rift --summary", "time": "14.25 s", "mem": "132.8 MiB"},
+  {"size": "10 GiB", "tool": "rift (full diff)", "time": "25.48 s", "mem": "132.9 MiB"},
+  {"size": "10 GiB", "tool": "diff, git diff", "time": "not run: 20 GiB of input, 16 GiB of RAM", "mem": ""}
  ]
 }
