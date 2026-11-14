@@ -12,6 +12,12 @@ on:
         required: true
         type: string
 
+# One publish at a time: two runs started together on 2026-11-14 raced, and
+# the second failed on Open VSX while the first's upload was still inactive.
+concurrency:
+  group: vscode-publish
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
