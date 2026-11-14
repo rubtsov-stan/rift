@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ruby -ryaml -e 'ARGV.each { |f| YAML.parse_file(f) }' .github/workflows/*.yml .github/dependabot.yml
+      # A job missing from ci-ok's needs would not hold a pull request back.
+      - run: |
+          ruby -ryaml -e 'j = YAML.load_file(".github/workflows/ci.yml")["jobs"]; m = j.keys - ["ci-ok"] - j["ci-ok"]["needs"]; abort "ci-ok does not need: #{m.join(", ")}" unless m.empty?'
 
   # Exceptions for the generated release.yml are in .github/actionlint.yaml.
   # Run scripts are checked with the runner's shellcheck.
@@ -136,3 +139,17 @@ jobs:
     needs: unsafe-diff
     if: needs.unsafe-diff.outputs.touched == 'true'
     uses: ./.github/workflows/miri-run.yml
+
+  # The check the main ruleset requires, with the Release plan. It always
+  # reports, so a pull request never waits on a job that did not start; a job
+  # skipped by its condition passes, a failed or cancelled one fails it.
+  ci-ok:
+    if: always()
+    needs: [yaml, actionlint, protocol-mock, vscode, check, memory, msrv, no-tui, unsafe-diff, miri]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac
