@@ -114,6 +114,15 @@ What's next: <https://rubtsov-stan.github.io/rift/roadmap/>
   as long runs of identical or repetitive lines. Files that share no
   line are replaced whole too, but that is the smallest diff, so it is
   not approximate.
+- A file made mostly of a few repeated lines (about ten distinct lines
+  or fewer) can come out as one whole-file replacement. The diff still
+  applies, but it is far from minimal: on a 64 MiB file of one repeated
+  line with 0.1% of lines changed, Rift printed 3.6 million changed
+  lines where GNU diff printed 20,602. With ten distinct lines a 256 MiB
+  pair came out exact and a 1 GiB pair whole; from 100 distinct lines up,
+  Rift's counts were within 5% of GNU diff's on 64 MiB pairs.
+  (`rift-gen` low-entropy profiles, seed 7, `rift --stats --mem 256M`,
+  Intel i5-10600, Linux, 2026-11-14.)
 - In the unified diff, a block of rows that moved, such as a dump
   written in a different order, shows as a deletion and an insertion, as
   in any line-based diff. `--summary`, `--stats` and the terminal view

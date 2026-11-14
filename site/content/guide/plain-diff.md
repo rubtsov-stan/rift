@@ -52,3 +52,5 @@ Rift does not look for binary files. A NUL byte is part of a line and is printed
 ## What it does not promise
 
 The diff is not minimal. Like patience diff in git, Rift can show a change as larger than the smallest possible one. Correctness is the promise: the output always rebuilds the second file from the first.
+
+A file made mostly of a few repeated lines, about ten distinct lines or fewer, can come out as one whole-file replacement, marked approximate. On a 64 MiB file of one repeated line with 0.1% of lines changed, Rift printed 3.6 million changed lines and a 131 MiB diff where GNU diff printed 20,602 changed lines. With ten distinct lines a 256 MiB pair came out exact and a 1 GiB pair whole; from 100 distinct lines up, Rift's changed-line counts were within 5% of GNU diff's on 64 MiB pairs, and equal on a 299 MiB system log (Loghub BGL). Measured with `bench/linux-safe.sh --suite all` (`rift-gen` low-entropy profiles, seed 7, `rift --stats --mem 256M`) on an Intel i5-10600 under Linux, 2026-11-14.

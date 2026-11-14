@@ -19,7 +19,7 @@ summary = "What is guaranteed and how it is checked: property tests, byte-identi
 4. **Peak heap stays under `--mem`.**
 5. **Exit codes follow `diff`:** 0 for identical files, 1 for different ones, 2 for an error.
 
-And what is not: the diff is not minimal, it can differ between two values of `--mem`, and moved blocks are listed only when one of their lines was sampled.
+And what is not: the diff is not minimal, it can differ between two values of `--mem`, and moved blocks are listed only when one of their lines was sampled. A file made mostly of a few repeated lines can come out as one whole-file replacement; [Plain diff](@/guide/plain-diff.md) has the numbers.
 
 ## Which check covers which guarantee
 
