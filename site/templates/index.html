@@ -32,6 +32,19 @@
 <aside class="text"><div class="stick">
 {%- if stats.release %}<p class="kicker">Latest release {{ stats.release }}</p>{% endif %}
 <h1>Diff huge text files under a hard memory limit.</h1>
+{%- set lin = load_data(path="data/bench-linux.json") %}
+{%- set big = lin.rows | filter(attribute="size", value="1 GiB") %}
+{%- set f = lin.facts %}
+{%- set rift1 = big | filter(attribute="tool", value="rift (full diff)") | first %}
+{%- set git1 = big | filter(attribute="tool", value="git diff --no-index") | first %}
+<ul class="facts">
+<li><b>1 GiB pair:</b> full diff {{ rift1.time }} &middot; <code>git diff --no-index</code> {{ git1.wall_s | round }} s, then &lsquo;Binary files differ&rsquo; &middot; GNU diff killed at {{ f.diff_cap }}</li>
+{%- if f.disk_full %}
+<li><b>{{ f.disk_size }} pair on a SATA SSD:</b> full diff in {{ f.disk_full }}</li>
+{%- endif %}
+<li><b>Peak heap</b> under {{ f.heap_under }} at <code>--mem 256M</code></li>
+</ul>
+<p class="note"><a href="{{ get_url(path='benchmarks/') | safe }}">{{ lin.host.cpu | replace(from="Core ", to="") }}, Linux, median of {{ lin.host.reps }} runs{% if f.disk_full %}; the {{ f.disk_size }} pair ran {% if f.disk_runs == 1 %}once{% else %}{{ f.disk_runs }} times{% endif %}{% endif %}</a></p>
 <p class="lede">Rift diffs large text files under a heap limit you set on the command line, <code>--mem</code>. It writes a unified diff that <code>patch</code> applies to the first file to get the second, and a terminal view lets you jump through the differences before the whole diff is done.</p>
 <ul class="chips" aria-label="Project status">
 <li><a class="chip" href="{{ config.extra.repo_url }}/actions/workflows/ci.yml"><i class="dot {% if stats.ci == 'success' %}ok{% else %}no{% endif %}"></i><span class="k">ci</span><span class="v">{% if stats.ci == 'success' %}passing{% else %}{{ stats.ci }}{% endif %}</span></a></li>
@@ -55,6 +68,10 @@
 <p class="links"><a href="{{ get_url(path='guide/') | safe }}">Guide</a> <a href="{{ get_url(path='use-cases/') | safe }}">Use cases</a> <a href="{{ get_url(path='design/') | safe }}">Design</a></p>
 </div></aside>
 <main class="plates">
+<section class="plate band" id="scale"><h2>The file grows. The heap does not.</h2>
+<div class="ledhead"><span>Input size, to scale up to 2 GiB</span><span>Peak heap against the 256 MiB limit</span></div>
+{{ m::ledger() }}
+<p class="src">Rift at <code>--mem 256M</code> on generated SQL pairs, full diff, {{ lin.host.cpu }}, {{ lin.host.ram_gb }} GB RAM, {{ lin.host.os }}, files in {{ lin.host.scratch }}, governor {{ lin.host.governor }}, median of {{ lin.host.reps }} runs, Rift at {{ lin.host.rift_commit }}, {{ lin.host.date }}. The gauge is the 256 MiB limit; the bar is Rift's own peak heap count. Source: <code>{{ lin.report }}</code>. The largest pair measured so far is 50 GiB, read from a SATA SSD (see the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>).</p></section>
 <section>{{ m::term(name="hero", kind="summary", title="a.sql, b.sql: a 64 MiB pair", typed=true, caption="Real output on a generated pair: <code>rift-gen --seed 7 --size 64M --profile sql</code>. The page shows 12 selected lines of the full summary. " ~ meta[1] ~ ", " ~ meta[2] ~ ".") }}</section>
 {%- set hunks = load_data(path="data/captures/sql-hunks.txt", format="plain") | trim -%}
 {%- set nsum = load_data(path="data/captures/sql-summary.out", format="plain") | trim | split(pat="\n") | length -%}
@@ -85,16 +102,11 @@
 <figure class="media" style="--ar:800/474"><img src="{{ get_url(path='vscode-demo.gif') | safe }}" width="800" height="474" alt="The Rift view in VS Code listing the differences of a 1 GiB pair, then one difference open in the diff editor" loading="lazy" decoding="async"><figcaption>A recording on a 1 GiB pair from <code>rift-gen --seed 7</code>, on an Apple M1. Also as an <a href="{{ get_url(path='vscode-demo.mp4') | safe }}">MP4</a>.</figcaption></figure>
 {{ m::vscode_install() }}
 <p class="note">Guide: <a href="{{ get_url(path='guide/vscode/') | safe }}">the VS Code extension</a>.</p></section>
-<section class="plate band" id="scale"><h2>The file grows. The heap does not.</h2>
-<div class="ledhead"><span>Input size, to scale up to 2 GiB</span><span>Peak heap against the 256 MiB limit</span></div>
-{{ m::ledger() }}
-{%- set lin = load_data(path="data/bench-linux.json") %}
-<p class="src">Rift at <code>--mem 256M</code> on generated SQL pairs, full diff, {{ lin.host.cpu }}, {{ lin.host.ram_gb }} GB RAM, {{ lin.host.os }}, files in {{ lin.host.scratch }}, governor {{ lin.host.governor }}, median of {{ lin.host.reps }} runs, Rift at {{ lin.host.rift_commit }}, {{ lin.host.date }}. The gauge is the 256 MiB limit; the bar is Rift's own peak heap count. Source: <code>{{ lin.report }}</code>. The largest pair measured so far is 50 GiB, read from a SATA SSD (see the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>).</p></section>
 <section><p class="cap">What a demo looks like <span>summary, then the terminal view</span></p>
 {{ m::media(ready=true, mp4="demo.mp4", gif="demo.gif", poster="demo-poster.jpg", width=960, height=540, alt="rift --summary on a 64 MiB pair, then the terminal view jumping between differences") }}</section>
 <section id="benchmarks"><p class="cap">1 GiB pair, full diff <span>Apple M1</span></p>{{ m::chart() }}
 {%- set mac = load_data(path="data/bench-mac.json") %}
-<p class="note">{{ mac.host.cpu }}, {{ mac.host.ram_gb }} GB RAM, {{ mac.host.storage }}, {{ mac.host.os }}, {{ mac.host.cache }}. Source: <code>{{ mac.source }}</code>. All tables, with commands, are on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
+<p class="note">{{ mac.host.cpu }}, {{ mac.host.ram_gb }} GB RAM, {{ mac.host.storage }}, {{ mac.host.os }}, {{ mac.host.cache }}, Rift at {{ mac.host.rift_commit }}, {{ mac.host.date }}. Source: <code>{{ mac.source }}</code>. All tables, with commands, are on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
 <section><p class="cap">Apple M1 <span>{{ mac.host.os }}, {{ mac.host.cache }}</span></p>{{ m::benchtable(name="mac") }}<p class="note">{{ mac.note }}</p></section>
 <section><p class="cap">{{ lin.host.cpu }} <span>{{ lin.host.os }}, {{ lin.host.scratch }}</span></p>{{ m::benchtable(name="linux", brief=true) }}<p class="note">Median of {{ lin.host.reps }} runs. GNU diff was killed at a 3 GiB cap on the 1 GiB pair. On the 1 GiB pair <code>git diff</code> printed no diff: it treats the files as binary. More rows on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
 <section><p class="cap">What is guaranteed</p>
