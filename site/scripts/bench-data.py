@@ -65,6 +65,11 @@ out = {
         'scratch': h['scratch_fs'].split(',')[0],
         'date': h['date'][:10],
         'rift_ref': h['rift_ref'],
+        'rift_commit': h.get('rift_commit', '')[:7],
+        # Reports before schema 3 carry neither; the 2026-11-06 run used three
+        # repetitions and did not record the governor.
+        'governor': h.get('cpu_governor', 'not recorded'),
+        'reps': int(h.get('reps', 3)),
         'seed': 7,
     },
     'rows': rows,

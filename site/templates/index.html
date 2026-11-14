@@ -89,14 +89,14 @@
 <div class="ledhead"><span>Input size, to scale up to 2 GiB</span><span>Peak heap against the 256 MiB limit</span></div>
 {{ m::ledger() }}
 {%- set lin = load_data(path="data/bench-linux.json") %}
-<p class="src">Rift at <code>--mem 256M</code> on generated SQL pairs, full diff, {{ lin.host.cpu }}, {{ lin.host.ram_gb }} GB RAM, {{ lin.host.os }}, files in {{ lin.host.scratch }}, median of three runs, {{ lin.host.date }}. The gauge is the 256 MiB limit; the bar is Rift's own peak heap count. Source: <code>{{ lin.report }}</code>. The largest pair measured so far is 10 GiB, on a Mac (see the table below).</p></section>
+<p class="src">Rift at <code>--mem 256M</code> on generated SQL pairs, full diff, {{ lin.host.cpu }}, {{ lin.host.ram_gb }} GB RAM, {{ lin.host.os }}, files in {{ lin.host.scratch }}, governor {{ lin.host.governor }}, median of {{ lin.host.reps }} runs, Rift at {{ lin.host.rift_commit }}, {{ lin.host.date }}. The gauge is the 256 MiB limit; the bar is Rift's own peak heap count. Source: <code>{{ lin.report }}</code>. The largest pair measured so far is 50 GiB, read from a SATA SSD (see the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>).</p></section>
 <section><p class="cap">What a demo looks like <span>summary, then the terminal view</span></p>
 {{ m::media(ready=true, mp4="demo.mp4", gif="demo.gif", poster="demo-poster.jpg", width=960, height=540, alt="rift --summary on a 64 MiB pair, then the terminal view jumping between differences") }}</section>
 <section id="benchmarks"><p class="cap">1 GiB pair, full diff <span>Apple M1</span></p>{{ m::chart() }}
 {%- set mac = load_data(path="data/bench-mac.json") %}
 <p class="note">{{ mac.host.cpu }}, {{ mac.host.ram_gb }} GB RAM, {{ mac.host.storage }}, {{ mac.host.os }}, {{ mac.host.cache }}. Source: <code>{{ mac.source }}</code>. All tables, with commands, are on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
 <section><p class="cap">Apple M1 <span>{{ mac.host.os }}, {{ mac.host.cache }}</span></p>{{ m::benchtable(name="mac") }}<p class="note">{{ mac.note }}</p></section>
-<section><p class="cap">{{ lin.host.cpu }} <span>{{ lin.host.os }}, {{ lin.host.scratch }}</span></p>{{ m::benchtable(name="linux", brief=true) }}<p class="note">Median of three runs. GNU diff was killed at a 3 GiB cap on the 1 GiB pair. On the 1 GiB pair <code>git diff</code> printed no diff: it treats the files as binary. More rows on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
+<section><p class="cap">{{ lin.host.cpu }} <span>{{ lin.host.os }}, {{ lin.host.scratch }}</span></p>{{ m::benchtable(name="linux", brief=true) }}<p class="note">Median of {{ lin.host.reps }} runs. GNU diff was killed at a 3 GiB cap on the 1 GiB pair. On the 1 GiB pair <code>git diff</code> printed no diff: it treats the files as binary. More rows on the <a href="{{ get_url(path='benchmarks/') | safe }}">benchmarks page</a>.</p></section>
 <section><p class="cap">What is guaranteed</p>
 <ul class="plain">
 <li>The output is a correct edit script: applied to the first file it gives exactly the second, byte for byte.</li>

@@ -29,7 +29,7 @@ A worker cannot know the absolute line number of its first line until the chunks
 
 `ScanConfig::for_pair` sizes this. A quarter of the skeleton half pays for read buffers while the scan runs. The chunk is that quarter divided by the core count, kept between a floor (4 MiB when the budget allows) and 16 MiB, and the thread count is the core count, or fewer when the buffers would not fit. At the default 256 MiB budget, each half is 128 MiB, the buffer pool 32 MiB.
 
-The scan needs several cores. In the spike recorded in DESIGN.md, a single thread hashed short lines at 1.16 GB/s from a cold cache, against 3.25 GB/s for `cat` on the same 10 GiB file; four threads reached 3.32 GB/s and eight 3.43 GB/s, the speed of the disk. The Linux benchmark shows the same shape for `--summary` on a 1 GiB SQL pair in tmpfs: 1.08 s on one CPU, 0.72 s on two, 0.53 s on four and 0.51 s on all twelve.
+The scan needs several cores. In the spike recorded in DESIGN.md, a single thread hashed short lines at 1.16 GB/s from a cold cache, against 3.25 GB/s for `cat` on the same 10 GiB file; four threads reached 3.32 GB/s and eight 3.43 GB/s, the speed of the disk. The Linux benchmark shows the same shape for `--summary` on a 1 GiB SQL pair in tmpfs: 1.04 s on one CPU, 0.62 s on two, 0.47 s on four and 0.46 s on all twelve (median of five runs, 2026-11-14).
 
 Sources: `crates/rift-core/src/scan/mod.rs`, `ScanConfig::for_pair`, `scan_metered`, `Worker::run` and `Worker::scan_chunk`; DESIGN.md, "Spike results", H2; `bench/results/linux-intel-core-i5-10600-2026-11-06/report.md`, runs 036 to 047.
 
