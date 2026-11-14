@@ -11,7 +11,7 @@ bench/linux-safe.sh --yes         # no wait
 bench/linux-safe.sh --disk-dir DIR --dry-run   # plan with the 50 GiB on-disk pair
 ```
 
-Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`, `--suite standard|le|all` (default `standard`; `le` runs only the low-entropy runs below, `all` runs both).
+Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`, `--suite standard|le|all` (default `standard`; `le` runs only the low-entropy runs below, `all` runs both), `--reps N` (repetitions of each repeated run, 1 to 20, default 3).
 
 The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 3) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
@@ -32,7 +32,7 @@ Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to c
 
 ### What it runs
 
-Seed 7, profiles `sql` and `csv`, changes at 0.1% (`rift-gen --change-ratio 0.001`, also the default). For each profile and size, three repetitions of `cat a b | wc -c` (through a pipe, so the bytes are really read; output bytes confirm the size), `rift --summary --mem 256M` and `rift --stats --mem 256M` (the diff goes through `wc -c`), and one run each of `rift --stats` at `--mem 64M` and `--mem 1G`. On the 256 MiB pair, three repetitions of `rift --stats --mem 256M`, `diff` and `git diff --no-index`. On the 1 GiB pair also `diff` and `git diff --no-index` (three repetitions) and thread scaling: `rift --summary` on 1, 2, 4 and all CPUs.
+Seed 7, profiles `sql` and `csv`, changes at 0.1% (`rift-gen --change-ratio 0.001`, also the default). For each profile and size, three repetitions (or `--reps N`) of `cat a b | wc -c` (through a pipe, so the bytes are really read; output bytes confirm the size), `rift --summary --mem 256M` and `rift --stats --mem 256M` (the diff goes through `wc -c`), and one run each of `rift --stats` at `--mem 64M` and `--mem 1G`. On the 256 MiB pair, the same repetitions of `rift --stats --mem 256M`, `diff` and `git diff --no-index`. On the 1 GiB pair also `diff` and `git diff --no-index` (the same repetitions) and thread scaling: `rift --summary` on 1, 2, 4 and all CPUs.
 
 Per run: wall, user and sys time, max RSS, exit code, rift's peak heap, output bytes, and systemd's result for the run's scope: `oom-kill` when the cap killed it. Each scope gets its own unit name, and the result is read with `systemctl --user show`, which needs no root. Without systemd the result is `n/a`. Once the cap kills a command on a pair, its remaining repetitions are not run and are recorded as `skipped`. Exit code 1 from `rift`, `diff` and `git diff` means the files differ.
 
