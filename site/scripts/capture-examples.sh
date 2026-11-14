@@ -65,7 +65,10 @@ trim() {
 echo 'rift a.sql b.sql' >"$out/sql-diff-excerpt.cmd"
 head -n 10 "$work/full.patch" | trim >"$out/land-diff.out"
 echo 'rift a.sql b.sql' >"$out/land-diff.cmd"
-cap land-summary 'rift --summary a.sql b.sql | grep -E "^(a:|b:|equal|differs|peak heap|time)"'
+# Cut from the summary above, not run again: a second run has its own time,
+# and the page shows both next to each other.
+echo 'rift --summary a.sql b.sql | grep -E "^(a:|b:|equal|differs|peak heap|time)"' >"$out/land-summary.cmd"
+grep -E "^(a:|b:|equal|differs|peak heap|time)" "$out/sql-summary.out" >"$out/land-summary.out"
 grep -c '^@@' "$work/full.patch" >"$out/sql-hunks.txt"
 # The lines the landing page shows, picked from the full summary.
 awk '
@@ -165,7 +168,7 @@ cd "$work"
   rift --version
   echo "built from $(git -C "$root" rev-parse --short HEAD)"
   case $(uname -s) in
-    Darwin) echo "$(sysctl -n machdep.cpu.brand_string), $(( $(sysctl -n hw.memsize) / 1000000000 )) GB RAM, macOS $(sw_vers -productVersion)" ;;
+    Darwin) echo "$(sysctl -n machdep.cpu.brand_string), $(( $(sysctl -n hw.memsize) / 1073741824 )) GB RAM, macOS $(sw_vers -productVersion)" ;;
     *) uname -sr ;;
   esac
 } >"$out/meta.txt"
