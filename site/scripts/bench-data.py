@@ -51,7 +51,24 @@ for size, label in SIZES.items():
             row['note'] = 'killed at the memory cap'
         rows.append(row)
 
+# The home page's facts: the on-disk pair, the GNU diff cap and the highest
+# heap of any run at the default budget.
+GIB = 1024 * MIB
+disk = {r['tool']: r for r in d['runs'] if r['group'] == 'disk' and r['result'] == 'success'}
+full = disk.get('rift --stats --mem 256M')
+cap = [r['cap_bytes'] for r in d['runs'] if r['tool'] == 'diff a b' and r['result'] == 'oom-kill']
+heap = max(r['rift_peak_heap_bytes'] for r in d['runs']
+           if '--mem 256M' in r['tool'] and r['result'] == 'success' and r.get('rift_peak_heap_bytes'))
+facts = {
+    'diff_cap': '%d GiB' % (cap[0] // GIB) if cap else None,
+    'heap_under': '%d MiB' % (heap // MIB + 1),
+}
+if full:
+    facts.update(disk_size='%d GiB' % (full['size_bytes'] // GIB), disk_full='%.1f min' % (full['wall_s'] / 60),
+                 disk_runs=len([r for r in d['runs'] if r['group'] == 'disk' and r['tool'] == full['tool']]))
+
 out = {
+    'facts': facts,
     'source': os.path.relpath(src, root),
     'report': os.path.relpath(os.path.join(os.path.dirname(src), 'report.md'), root),
     'script': 'bench/linux-safe.sh',

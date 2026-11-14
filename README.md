@@ -38,7 +38,7 @@ or `git diff` run out of memory. The largest pair measured so far is
 | 1 GiB | `git diff --no-index` | 42.66 s, no diff (binary) | 5 MiB |
 | 50 GiB, on a SATA SSD | `cat a b` (the disk's rate) | 218.7 s, 491 MB/s | 8 MiB |
 | 50 GiB, on a SATA SSD | `rift --summary --mem 256M` | 299.8 s, 358 MB/s | 107 MiB |
-| 50 GiB, on a SATA SSD | `rift --mem 256M` | 456.8 s, 235 MB/s | 113 MiB |
+| 50 GiB, on a SATA SSD | `rift --mem 256M`, diff output 1.2 GiB | 456.8 s, 235 MB/s | 113 MiB |
 
 Generated SQL pairs (`rift-gen --seed 7`, 0.1% of lines changed). Intel
 i5-10600, 16 GB RAM, Ubuntu 26.04, governor `powersave` (intel_pstate),

@@ -56,7 +56,7 @@ This run is disk-bound: the pair is 100 GiB against 16 GB of RAM, so almost ever
 |---|---|---|---|
 | `cat a b \| wc -c` (the disk's rate) | 218.7 s | 491 MB/s | |
 | `rift --summary --mem 256M` | 299.8 s | 358 MB/s | 69.8 MiB |
-| `rift --stats --mem 256M`, full diff of 1.2 GiB | 456.8 s | 235 MB/s | 80.6 MiB |
+| `rift --stats --mem 256M`, diff output 1.2 GiB | 456.8 s | 235 MB/s | 80.6 MiB |
 
 `--summary` takes 1.37 times as long as reading the files once, and the full diff 2.09 times. Where the extra time of the full diff goes is open: [#50](https://github.com/rubtsov-stan/rift/issues/50). The heap stayed under 81 MiB on a pair of 100 GiB.
 
