@@ -14,15 +14,15 @@ The largest pair measured so far is 50 GiB, read from a SATA SSD. No pair above 
 
 ## Apple M1, 1 GiB and 10 GiB
 
-- **Hardware:** Apple M1, 16 GB RAM, internal SSD.
-- **System:** macOS, warm page cache.
-- **Date:** not recorded in the README; the table entered the repository on 2026-11-05.
-- **Commands:** `bench/run.sh` prints the full results with the commands and seeds. `bench/data.sh` regenerates the data.
-- **Source:** the Benchmarks section of `README.md` at the `v0.1.0` tag. The README no longer carries it.
+- **Hardware:** Apple M1, 16 GB RAM, internal SSD (APPLE SSD AP0512Q).
+- **System:** macOS 27.0.1. Page cache not dropped; the script runs without root. The 10 GiB pair is 20 GiB of input against 16 GB of RAM, so not all of it was in the page cache.
+- **Date and version:** 2026-11-15, Rift at commit `e06f3d4` on main.
+- **Command:** `bench/run.sh 1G 10G`. It runs `rift --summary --mem 256M a b`, `rift --stats --mem 256M a b`, `diff a b` and `git diff --no-index a b` once each, and skips `diff` and `git diff` when the pair is larger than half the RAM. The load average was 1.98 to 3.41 during the run.
+- **Source:** `bench/results/macos-apple-m1-2026-11-15/report.md`.
 
 {{ benchtable(name="mac") }}
 
-`git diff` has no 1 GiB row: it treats files over 512 MiB as binary and prints no diff. On the 1 GiB pair Rift's heap peaked at 83.5 MiB, and on the 10 GiB pair at 94.1 MiB.
+`system diff` is the `diff` macOS ships, not GNU diff. `git diff` printed no diff on the 1 GiB pair: it treats files over 512 MiB as binary. On the 1 GiB pair Rift's heap peaked at 79.4 MiB, and on the 10 GiB pair at 92.4 MiB.
 
 ## Intel Core i5-10600, 256 MiB to 2 GiB
 

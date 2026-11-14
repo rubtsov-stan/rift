@@ -17,7 +17,7 @@ The reference for the algorithm and its invariants is [DESIGN.md](https://github
 
 You give Rift a heap limit with `--mem` (256 MiB by default). Rift splits it into two halves and never asks for more. A larger file costs more time and more reads, and the same memory.
 
-The benchmark run on Linux shows the rule from both sides. On generated SQL dumps at `--mem 256M`, the full diff of a 1 GiB pair peaked at 83.6 MiB of heap and took 0.69 s; the 2 GiB pair peaked at the same 83.6 MiB and took 1.2 s. On an Apple M1 the 10 GiB pair took 26.16 s with a resident set of 136.5 MiB, against 0.93 s and 130.8 MiB for 1 GiB. On the 1 GiB pair the system diff needed 3.2 GiB on the Mac, and GNU diff was killed by a 3 GiB memory cap on Linux.
+The benchmark run on Linux shows the rule from both sides. On generated SQL dumps at `--mem 256M`, the full diff of a 1 GiB pair peaked at 79.4 MiB of heap and took 0.53 s; the 2 GiB pair peaked at the same 79.4 MiB and took 0.93 s (2026-11-14, median of five runs). On an Apple M1 the 10 GiB pair took 25.48 s with a resident set of 132.9 MiB, against 0.91 s and 127.2 MiB for 1 GiB (2026-11-15, one run each). On the 1 GiB pair the system diff needed 3.1 GiB on the Mac, and GNU diff was killed by a 3 GiB memory cap on Linux.
 
 Sources: `bench/results/linux-intel-core-i5-10600-2026-11-06/report.md`, runs 025, 083 and 030; `site/data/bench-mac.json`, from the README benchmark table.
 

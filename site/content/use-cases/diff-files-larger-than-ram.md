@@ -21,16 +21,16 @@ The summary has the same shape as for a small pair. The sample is thinner, so fe
 
 ## What was measured
 
-The largest pair measured so far is 10 GiB. On a Mac with 16 GB of RAM, GNU `diff` and `git diff` did not run on it, because they need more than 16 GB. Rift finished the full diff in 26.16 s with a heap of 94.1 MiB and a resident set of 136.5 MiB. The table and the commands are on the [benchmarks page](@/benchmarks.md). No pair above 10 GiB has been measured.
+The largest pair measured so far is 50 GiB, on an Intel i5-10600 with 16 GB of RAM, read from a SATA SSD: Rift wrote the full diff, 1.2 GiB of output, in 7.6 min with a heap of 80.6 MiB. On a Mac with 16 GB of RAM, `diff` and `git diff` were not run on a 10 GiB pair, because 20 GiB of input is more than the RAM; Rift finished the full diff in 25.48 s with a heap of 92.4 MiB and a resident set of 132.9 MiB. The tables and the commands are on the [benchmarks page](@/benchmarks.md). No pair above 50 GiB has been measured.
 
 | Pair | Tool | Time | Peak memory |
 |---|---|---|---|
-| 1 GiB | `rift` (full diff) | 0.93 s | 130.8 MiB |
-| 1 GiB | system `diff` | 17.55 s | 3.2 GiB |
-| 10 GiB | `rift` (full diff) | 26.16 s | 136.5 MiB |
-| 10 GiB | `diff` | did not run: needs more than 16 GB of RAM | |
+| 1 GiB | `rift` (full diff) | 0.91 s | 127.2 MiB |
+| 1 GiB | system `diff` | 17.95 s | 3.1 GiB |
+| 10 GiB | `rift` (full diff) | 25.48 s | 132.9 MiB |
+| 10 GiB | `diff` | not run: 20 GiB of input, 16 GB of RAM | |
 
-Apple M1, 16 GB RAM, internal SSD, macOS, warm page cache. Source: the Benchmarks section of `README.md` at the `v0.1.0` tag.
+Apple M1, 16 GB RAM, internal SSD, macOS 27.0.1, page cache not dropped, one run of each, Rift at `e06f3d4`, 2026-11-15. Source: `bench/results/macos-apple-m1-2026-11-15/report.md`.
 
 ## When the limit is too small
 
