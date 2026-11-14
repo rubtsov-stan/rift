@@ -19,7 +19,7 @@ install-updater = false
 # Built after the release exists, by the workflows of the same name, which the
 # generated Release workflow calls.
 post-announce-jobs = ["./deb", "./vscode", "./provenance", "./site-refresh"]
-github-custom-job-permissions = { deb = { contents = "write" }, vscode = { contents = "write" }, provenance = { contents = "write", attestations = "read" }, site-refresh = { actions = "write" } }
+github-custom-job-permissions = { deb = { contents = "write" }, vscode = { contents = "write" }, provenance = { contents = "write", attestations = "read" }, site-refresh = { actions = "write", contents = "read" } }
 
 # Build provenance for every release archive, checkable with `gh attestation verify`
 github-attestations = true
