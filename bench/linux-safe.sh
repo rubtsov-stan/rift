@@ -472,8 +472,10 @@ run_one() {
     lines) read -r out changed < "$b.bytes" || true ;;
     cmp)
       out=
-      # patch exits 0 only when every hunk applied.
-      if [ "$ec" = 0 ] && [ "$(cat "$b.cmp")" = same ]; then round=ok; else round=failed; fi ;;
+      # patch exits 0 only when every hunk applied. A patch its cap killed
+      # says nothing about rift's diff.
+      if [ "$result" = oom-kill ]; then round=killed
+      elif [ "$ec" = 0 ] && [ "$(cat "$b.cmp")" = same ]; then round=ok; else round=failed; fi ;;
   esac
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$wall" "$user" "$sys" "$rss" "$ec" "$heap" "$out" "$result" \
