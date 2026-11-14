@@ -26,7 +26,30 @@ lets you jump through the differences before the whole diff is done.
 Use it on database dumps before and after a migration, CSV or NDJSON
 exports, generated fixtures and large golden files: inputs where `diff`
 or `git diff` run out of memory. The largest pair measured so far is
-10 GiB.
+50 GiB.
+
+| Pair, each of A and B | Tool | Time | Peak memory |
+|---|---|---|---|
+| 256 MiB | `rift --mem 256M` | 0.21 s | 108 MiB |
+| 256 MiB | GNU `diff` | 1.62 s | 776 MiB |
+| 256 MiB | `git diff --no-index` | 2.58 s | 1.0 GiB |
+| 1 GiB | `rift --mem 256M` | 0.53 s | 109 MiB |
+| 1 GiB | GNU `diff` | killed at a 3 GiB cap | |
+| 1 GiB | `git diff --no-index` | 42.66 s, no diff (binary) | 5 MiB |
+| 50 GiB, on a SATA SSD | `cat a b` (the disk's rate) | 218.7 s, 491 MB/s | 8 MiB |
+| 50 GiB, on a SATA SSD | `rift --summary --mem 256M` | 299.8 s, 358 MB/s | 107 MiB |
+| 50 GiB, on a SATA SSD | `rift --mem 256M` | 456.8 s, 235 MB/s | 113 MiB |
+
+Generated SQL pairs (`rift-gen --seed 7`, 0.1% of lines changed). Intel
+i5-10600, 16 GB RAM, Ubuntu 26.04, governor `powersave` (intel_pstate),
+Rift at `94bdbb1`, 2026-11-14. The 256 MiB and 1 GiB pairs were in tmpfs
+(medians of five runs). The 50 GiB pair was read from a Samsung SSD 860
+(one run each, page cache not dropped, the pair 6.7 times the RAM), so
+that run is disk-bound. Peak memory is the resident set; Rift's heap
+stayed under 81 MiB in every row. Command: `bench/linux-safe.sh --suite
+standard --reps 5 --ref main --disk-dir DIR`. Source:
+`bench/results/linux-intel-core-i5-10600-2026-11-14/`. More rows and
+the Apple M1 table are on the [benchmarks page](https://rubtsov-stan.github.io/rift/benchmarks/).
 
 ## Install
 
