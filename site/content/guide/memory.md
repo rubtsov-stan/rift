@@ -27,6 +27,8 @@ On a 1 GiB pair of generated SQL dumps, with the limit at 64 MiB, Rift counted 1
 
 A smaller budget means a thinner sample of lines, so more segments are coarse and more work happens when a region is refined. A larger budget keeps more detail. In the benchmark runs on a 1 GiB pair, `--mem 64M` peaked at 21.0 MiB of heap and `--mem 1G` at 329.2 MiB, against 83.6 MiB at the default.
 
+A larger budget is not always faster. It samples more lines, which finds more moved blocks and a slightly shorter diff, but building that larger sample takes time: on a 1 GiB SQL pair, `--mem 1G` took 1.11 s against 0.80 s at `256M` (median of 10 interleaved runs, Apple M1), with 891 moved blocks against 428. The default of `256M` is a good choice; see [#45](https://github.com/rubtsov-stan/rift/issues/45).
+
 ## When the limit is too small
 
 Below the smallest limit that works for a pair, Rift exits with status 2 and a budget error. The error ends with a limit to rerun with, the reserve included:
