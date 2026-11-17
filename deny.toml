@@ -4,6 +4,12 @@ all-features = true
 [advisories]
 # Yanked crates and unmaintained or unsound advisories fail the check too.
 yanked = "deny"
+ignore = [
+  # chrono is unmaintained, not vulnerable. rift-mcp's rmcp requires it (3.9.0
+  # and 3.10.0 have no feature to drop it) and enables schemars' chrono04.
+  # https://rustsec.org/advisories/RUSTSEC-2026-0543. Remove with #55.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, not a vulnerability; pulled in by rmcp and schemars, see #55" },
+]
 
 [licenses]
 # The project is MIT OR Apache-2.0, so only licenses that can be combined
