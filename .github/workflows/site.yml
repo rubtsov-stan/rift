@@ -74,10 +74,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: site/scripts/build.sh --base-url / --output-dir public-links
+      # Links to the repository's own files are checked against this checkout;
+      # other links answering 429 or 503 are retried, then reported as warnings.
       - name: Check links
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: lychee --no-progress --include-fragments --max-retries 2 --exclude-path site/public-links/fonts --root-dir "$PWD/site/public-links" site/public-links
+        run: python3 site/scripts/check-links.py site/public-links
 
   lighthouse:
     runs-on: ubuntu-latest
