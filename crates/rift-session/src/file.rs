@@ -190,6 +190,14 @@ impl Source for FileSource {
     }
 }
 
+#[cfg(feature = "test-hooks")]
+impl FileSource {
+    /// The path the file was opened by, which names its scan hold.
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

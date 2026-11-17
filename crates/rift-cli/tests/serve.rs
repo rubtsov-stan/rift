@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use client::Client;
+use rift_session::test_hooks::ScanHold;
 use serde_json::{Value, json};
 
 const PARSE_ERROR: i64 = -32700;
@@ -996,17 +997,18 @@ fn a_cancelled_request_is_answered_once() {
 #[test]
 fn a_full_server_answers_busy_at_once_with_a_retry_time() {
     let dir = tempfile::tempdir().unwrap();
-    let slow = huge(dir.path());
+    let a = write(dir.path(), "held", b"a\n");
+    let hold = ScanHold::new(&a);
     let mut c = Client::start(&[]);
     c.initialize();
     // Four scanning sessions fill every slot; none can be dropped for room.
     for n in 0..4 {
         let b = write(dir.path(), &format!("b{n}"), b"x\n");
-        c.ok("open", json!({"a": slow, "b": b, "mem": "16M"}));
+        c.ok("open", json!({"a": a, "b": b, "mem": "16M"}));
     }
     let b = write(dir.path(), "b4", b"x\n");
     let began = Instant::now();
-    let e = c.err("open", json!({"a": slow, "b": b, "mem": "16M"}), BUSY);
+    let e = c.err("open", json!({"a": a, "b": b, "mem": "16M"}), BUSY);
     assert!(
         began.elapsed() < Duration::from_secs(2),
         "{:?}",
@@ -1014,6 +1016,7 @@ fn a_full_server_answers_busy_at_once_with_a_retry_time() {
     );
     assert_eq!(e["data"]["what"], "sessions");
     assert!(e["data"]["retry_after_ms"].as_u64().unwrap() > 0, "{e}");
+    drop(hold);
     clean_exit(c);
 }
 

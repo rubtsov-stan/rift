@@ -7,6 +7,7 @@ use rift_core::Bytes;
 use rift_mcp::Server;
 use rift_mcp::render::{MAX_LINES, MAX_TEXT_BYTES};
 use rift_mcp::sessions::Limits;
+use rift_session::test_hooks::ScanHold;
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RoleClient, RunningService};
@@ -426,25 +427,29 @@ async fn idle_sessions_are_dropped() {
     assert_eq!(server.sessions().mem(), Bytes(0));
 }
 
-/// A pair whose scan takes a while: A is one line of 64 MiB, sparse on
-/// disk and shared by every pair; B is a file of its own per `n`.
-fn slow_pair(dir: &Path, n: usize) -> (String, String) {
-    let a = dir.join("sparse");
-    if !a.exists() {
-        std::fs::File::create(&a)
-            .unwrap()
-            .set_len(64 << 20)
-            .unwrap();
-    }
-    let b = write(dir, &format!("b{n}"), std::iter::once(format!("b {n}")));
-    (a.to_str().unwrap().to_owned(), b)
-}
-
-/// Calls `summary` on every pair at once, each with its `mem`, and returns
-/// the content of the calls that failed.
-async fn summaries_at_once(c: &Client, pairs: Vec<(String, String, &'static str)>) -> Vec<String> {
+/// Calls `summary` on pairs of small files, one per `(mem, bytes)`, with
+/// their scans held: all but the last together, then the last once the
+/// others hold their memory. No call may end while the scans are held, so
+/// the last one waits for room. Lets go of the hold and returns the
+/// content of the calls that failed.
+async fn the_last_call_waits(server: &Server, mems: &[(&'static str, Bytes)]) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "held", std::iter::once("a".to_owned()));
+    let hold = ScanHold::new(&a);
+    let c = connect(server).await;
     let mut calls = tokio::task::JoinSet::new();
-    for (a, b, mem) in pairs {
+    for (n, (mem, _)) in mems.iter().enumerate() {
+        if n == mems.len() - 1 {
+            let others = Bytes(mems[..n].iter().map(|(_, b)| b.0).sum());
+            while server.sessions().mem() != others {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        let b = write(
+            dir.path(),
+            &format!("b{n}"),
+            std::iter::once(format!("b {n}")),
+        );
         let peer = c.peer().clone();
         let args = json!({"a": a, "b": b, "mem": mem});
         calls.spawn(async move {
@@ -453,6 +458,9 @@ async fn summaries_at_once(c: &Client, pairs: Vec<(String, String, &'static str)
             peer.call_tool(params).await.unwrap()
         });
     }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(calls.try_join_next().is_none(), "a call ended while held");
+    drop(hold);
     let mut failed = Vec::new();
     while let Some(r) = calls.join_next().await {
         let r = r.unwrap();
@@ -465,29 +473,18 @@ async fn summaries_at_once(c: &Client, pairs: Vec<(String, String, &'static str)
 
 #[tokio::test]
 async fn five_new_pairs_at_once_wait_for_the_session_limit() {
-    let dir = tempfile::tempdir().unwrap();
-    let c = connect(&Server::default()).await;
-    let pairs = (0..5)
-        .map(|n| {
-            let (a, b) = slow_pair(dir.path(), n);
-            (a, b, "64M")
-        })
-        .collect();
-    let failed = summaries_at_once(&c, pairs).await;
+    let failed = the_last_call_waits(&Server::default(), &[("64M", Bytes::mib(64)); 5]).await;
     assert!(failed.is_empty(), "{failed:?}");
 }
 
 #[tokio::test]
 async fn a_new_pair_past_the_memory_limit_waits() {
     // Two diffs of 256M fill the 512M for sessions while they scan.
-    let dir = tempfile::tempdir().unwrap();
-    let c = connect(&Server::default()).await;
-    let pairs = (0..3)
-        .map(|n| {
-            let (a, b) = slow_pair(dir.path(), n);
-            (a, b, if n < 2 { "256M" } else { "64M" })
-        })
-        .collect();
-    let failed = summaries_at_once(&c, pairs).await;
+    let mems = [
+        ("256M", Bytes::mib(256)),
+        ("256M", Bytes::mib(256)),
+        ("64M", Bytes::mib(64)),
+    ];
+    let failed = the_last_call_waits(&Server::default(), &mems).await;
     assert!(failed.is_empty(), "{failed:?}");
 }

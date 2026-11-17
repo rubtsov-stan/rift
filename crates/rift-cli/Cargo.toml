@@ -33,6 +33,7 @@ serde_json.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 rift-gen = { path = "../rift-gen" }
+rift-session = { path = "../rift-session", features = ["test-hooks"] }
 
 [lints]
 workspace = true

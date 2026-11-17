@@ -8,7 +8,7 @@ use rift_core::{BudgetExceeded, Bytes, DiffView, HunkState, LineNo, SegmentStatu
 use rift_session::file::Reason;
 use rift_session::{
     At, Eol, Error, ExcerptRequest, Limits, MovesState, Session, SessionId, SessionState, Sessions,
-    Side, code,
+    Side, code, test_hooks::ScanHold,
 };
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> String {
@@ -649,15 +649,12 @@ fn a_session_keeps_its_scheduler_share() {
     assert!(matches!(state, HunkState::Ready(_)), "{state:?}");
 }
 
-/// A pair whose scan takes a fraction of a second: A is one line of
-/// 128 MiB, sparse on disk.
-fn short_scan_pair(dir: &Path) -> (String, String) {
-    let a = dir.join("sparse");
-    std::fs::File::create(&a)
-        .unwrap()
-        .set_len(128 << 20)
-        .unwrap();
-    (a.to_str().unwrap().to_owned(), write(dir, "tiny", b"y\n"))
+/// A pair of small files whose scan stays in progress until the hold is
+/// dropped.
+fn held_pair(dir: &Path) -> (String, String, ScanHold) {
+    let a = write(dir, "held", b"x\n");
+    let hold = ScanHold::new(&a);
+    (a, write(dir, "tiny", b"y\n"), hold)
 }
 
 #[test]
@@ -693,16 +690,27 @@ fn a_new_pair_waits_for_a_call_to_let_go_of_its_session() {
 fn a_new_pair_waits_for_a_scan_to_end() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = pair(dir.path());
-    let (slow_a, slow_b) = short_scan_pair(dir.path());
+    let (held_a, held_b, hold) = held_pair(dir.path());
     let s = Sessions::new(Limits {
         sessions: 1,
         ..Limits::default()
     });
-    let scanning = s.open(&slow_a, &slow_b, MEM).unwrap().session;
+    let scanning = s.open(&held_a, &held_b, MEM).unwrap().session;
     assert_eq!(scanning.state(), SessionState::Scanning);
     drop(scanning);
-    let opened = s.open(&a, &b, MEM).map(|_| ()).map_err(|e| e.to_string());
+    let release = Duration::from_millis(300);
+    let began = Instant::now();
+    let (opened, waited) = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            std::thread::sleep(release);
+            drop(hold);
+        });
+        let opened = s.open(&a, &b, MEM).map(|_| ()).map_err(|e| e.to_string());
+        (opened, began.elapsed())
+    });
     assert!(opened.is_ok(), "{opened:?}");
+    // Room came only when the hold let the scan end.
+    assert!(waited >= release, "opened after {waited:?}");
 }
 
 #[test]
@@ -727,19 +735,15 @@ fn a_new_pair_is_busy_with_a_retry_time_when_no_room_frees() {
 fn busy_beside_a_scan_says_to_retry_when_the_scan_may_end() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = pair(dir.path());
-    // 64 MiB of short lines: the scan counts its progress as it goes.
-    let lines = "0123456789abcde\n".repeat(4 << 20);
-    let (slow_a, slow_b) = (
-        write(dir.path(), "lines", lines.as_bytes()),
-        write(dir.path(), "z", b"z\n"),
-    );
+    // Held with its bytes counted, so its end can be estimated.
+    let (held_a, held_b, _hold) = held_pair(dir.path());
     let wait = Duration::from_millis(500);
     let s = Sessions::new(Limits {
         sessions: 1,
         wait,
         ..Limits::default()
     });
-    let scanning = s.open(&slow_a, &slow_b, MEM).unwrap().session;
+    let scanning = s.open(&held_a, &held_b, MEM).unwrap().session;
     let err = s.open(&a, &b, MEM).unwrap_err();
     let retry = err.retry_after().unwrap();
     // Not the fallback, which is the wait.

@@ -337,6 +337,8 @@ impl Session {
         } else {
             None
         };
+        #[cfg(feature = "test-hooks")]
+        let held_a = a.path().to_owned();
         let diff = Diff::with_watch(
             Arc::new(a),
             Arc::new(b),
@@ -349,6 +351,8 @@ impl Session {
             &self.watch,
         )
         .map_err(build)?;
+        #[cfg(feature = "test-hooks")]
+        crate::test_hooks::wait(&held_a);
         Ok(Built { diff, budget, pool })
     }
 }
