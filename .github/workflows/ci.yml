@@ -168,6 +168,10 @@ jobs:
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+        # Only success and skipped pass: a job that got no runner reports
+        # "abandoned", which a check for failure and cancelled let through.
         run: |
           echo "$RESULTS"
-          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac
+          for r in $RESULTS; do
+            case $r in success | skipped) ;; *) exit 1 ;; esac
+          done
