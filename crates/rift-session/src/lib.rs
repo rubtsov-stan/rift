@@ -57,6 +57,8 @@ mod error;
 pub mod file;
 mod session;
 mod sessions;
+#[cfg(feature = "test-hooks")]
+pub mod test_hooks;
 
 pub use error::{Error, Side, code};
 pub use session::{

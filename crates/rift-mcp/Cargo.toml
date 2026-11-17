@@ -23,6 +23,7 @@ rift-core = { path = "../rift-core", features = ["counting-alloc"] }
 rmcp = { workspace = true, features = ["client"] }
 serde_json.workspace = true
 tempfile.workspace = true
+rift-session = { path = "../rift-session", features = ["test-hooks"] }
 
 [lints]
 workspace = true

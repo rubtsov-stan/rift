@@ -9,6 +9,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+## `test_hooks`: holds scans for tests. Only dev-dependencies enable it, so
+## release builds never contain it.
+test-hooks = []
+
 [dependencies]
 rift-core = { path = "../rift-core" }
 rustix.workspace = true
@@ -16,6 +21,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 rift-core = { path = "../rift-core", features = ["counting-alloc"] }
+rift-session = { path = ".", features = ["test-hooks"] }
 tempfile.workspace = true
 
 [lints]
