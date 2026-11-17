@@ -106,6 +106,8 @@ The table comes from the server's own `tools/list` answer. A `?` marks an option
 
 `mem` is a memory budget like `--mem`: `64M` by default, at most `256M`. A live diff keeps the budget it was built with. In the answer of `summary`, `approx` counts the refined segments that came out approximate and `differs` counts the other differing segments.
 
+The ranges in `first_differences` and in a `next_difference` answer come from the segment map before refinement. A range can take in equal lines next to a change, so a change on line 1000 can show as lines 999 to 1000. `hunks_at` refines the range and gives the exact lines.
+
 ## A session on a 1 GiB pair
 
 A script, `site/scripts/record-mcp.py`, started `rift-mcp` and sent these calls over standard input and output. The questions are written for the recording, and the calls and answers are the real ones, unchanged except for the cuts. A line starting with `...` marks a cut, and an answer shows only its `structuredContent`. The server also sends the same JSON as text in `content`, so the byte count under each answer, which is that of the whole response line, covers both copies. The calls after the first take their line numbers from the answers before them, as an agent would. `mem_reserved_bytes` in the first answer differed by a few kilobytes between recordings of the same pair.
