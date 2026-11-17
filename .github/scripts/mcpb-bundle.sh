@@ -37,6 +37,13 @@ cp "$here/rift-mcp" "$b/server/rift-mcp"
 chmod 755 "$b"/server/*
 jq --arg v "$version" '.version = $v' "$here/manifest.json" > "$b/manifest.json"
 
+# The bundle, server.json and the registry take the version from the tag; the
+# binary reports its own, from Cargo.toml. A published registry version cannot
+# be replaced, so a mismatch stops here. Starting it also shows it runs.
+init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcpb-bundle","version":"0"}}}'
+reported=$(printf '%s\n' "$init" | "$b/server/rift-mcp" | head -n 1 | jq -r '.result.serverInfo.version')
+[ "$reported" = "$version" ] || { echo "mcpb-bundle: rift-mcp reports version $reported, the tag says $version" >&2; exit 1; }
+
 # The fields the MCPB manifest requires, and the binary server it describes.
 jq -e '.manifest_version and .name and .version and .description and .author.name
   and .server.type == "binary" and .server.entry_point == "server/rift-mcp"' "$b/manifest.json" >/dev/null

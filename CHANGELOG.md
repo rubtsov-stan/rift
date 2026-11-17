@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-18
+
 ### Changed
 
 - The `summary` and `next_difference` tools of `rift-mcp` say that their ranges come from the segment map before refinement and can take in equal lines next to a change, and that `hunks_at` gives the exact lines.
@@ -26,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same provenance files as the archives, and publishes it to the MCP
   Registry as `io.github.rubtsov-stan/rift-mcp`. MCPB clients install it
   from the file.
+- `bench/linux-safe.sh --suite tools` runs Rift next to GNU `diff`,
+  `git diff --no-index`, difftastic, DuckDB, csvdiff, qsv and daff on the
+  same generated pairs, and keeps the counts each tool reports next to
+  Rift's.
 
 ## [0.3.3] - 2026-11-14
 
@@ -480,7 +486,8 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/rubtsov-stan/rift/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/rubtsov-stan/rift/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/rubtsov-stan/rift/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/rubtsov-stan/rift/compare/v0.3.0...v0.3.1
