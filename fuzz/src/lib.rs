@@ -164,7 +164,8 @@ fn parse_header(rec: &[u8]) -> Option<(usize, usize, usize)> {
     let rec = std::str::from_utf8(rec).ok()?;
     let rest = rec.strip_prefix("@@ -")?;
     let (ranges, tail) = rest.split_once(" @@")?;
-    if !tail.is_empty() && tail != " approx" {
+    // An approximate hunk names its reason after the closing `@@`.
+    if !tail.is_empty() && tail.strip_prefix(" approx: ").is_none_or(str::is_empty) {
         return None;
     }
     let (old, new) = ranges.split_once(" +")?;

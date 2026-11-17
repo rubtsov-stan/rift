@@ -3,7 +3,7 @@
 
 use rift_core::script::{apply, validate};
 use rift_core::unified::{Label, Options, Timestamp, Verdict, write_diff};
-use rift_core::{Edit, Hunk, LineNo, MemLines};
+use rift_core::{ApproxReason, Edit, Hunk, LineNo, MemLines};
 
 use crate::{apply_unified, config, fields, split_lines};
 
@@ -15,8 +15,8 @@ struct Built {
 
 /// Turns `ops`, two bytes per edit, into a valid script over `a` and the B
 /// it describes. The first byte picks the kind (low two bits), starts a new
-/// hunk (bit 7) and marks that hunk approximate (bit 6); the second is the
-/// length.
+/// hunk (bit 7) and marks that hunk approximate (bit 6) for the reason bits 4
+/// and 5 pick; the second is the length.
 fn build(a: &[&[u8]], ops: &[u8], unterminated_b: bool) -> Built {
     // An unterminated last line of A can only end B, so only the closing
     // equal run below may copy it.
@@ -42,7 +42,12 @@ fn build(a: &[&[u8]], ops: &[u8], unterminated_b: bool) -> Built {
             hunks.push(Hunk::default());
         }
         if k & 0x40 != 0 {
-            hunks.last_mut().expect("one hunk").approx = true;
+            const REASONS: [ApproxReason; 3] = [
+                ApproxReason::Cutoff,
+                ApproxReason::NoAnchor,
+                ApproxReason::Budget,
+            ];
+            hunks.last_mut().expect("one hunk").approx = Some(REASONS[usize::from(k >> 4 & 3) % 3]);
         }
         match k & 3 {
             0 | 3 => {
