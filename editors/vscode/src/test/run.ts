@@ -21,13 +21,17 @@ async function main(): Promise<void> {
       process.env.RIFT_PAIR_B = path.join(tmp, 'b');
     }
   }
+  // The default user-data dir sits under .vscode-test; in a checkout with a long path its IPC socket
+  // exceeds the 103 characters macOS allows and VS Code does not start.
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'rift-ud-'));
   try {
     await runTests({
       extensionDevelopmentPath: root,
       extensionTestsPath: path.join(__dirname, 'suite', 'index'),
-      launchArgs: ['--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
+      launchArgs: [`--user-data-dir=${userData}`, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
     });
   } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
     if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
