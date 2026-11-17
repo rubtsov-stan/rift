@@ -23,7 +23,7 @@ function setup(a = '/x/a.sql', mem = '256M') {
 }
 
 // A window's comparisons on the mock, logging what it is sent.
-function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: string, restarting: boolean) => void, onRestarted?: () => void) {
+function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: string, restarting: boolean) => void, onRestarted?: () => void, failed: (e: RpcErrorObject) => void = () => {}) {
   const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-log-')), 'log');
   const errors: unknown[] = [];
   const server: Server = new Server({
@@ -34,7 +34,7 @@ function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: 
     onCrash: (reason, restarting) => crash?.(w, reason, restarting),
     onRestarted,
   });
-  const w: Compares = new Compares(server, { change() {}, failed() {}, error: (e) => errors.push(e) });
+  const w: Compares = new Compares(server, { change() {}, failed, error: (e) => errors.push(e) });
   return { server, w, errors, log: () => mockLog(log) };
 }
 
@@ -314,6 +314,23 @@ describe('Compares', () => {
     await w.compare('/x/a.sql', '/x/b.sql', '256M');
     await sleep(50);
     assert.deepStrictEqual(closes(log()), []);
+    server.dispose();
+  });
+
+  it('shows no failure when the server drops the shown session for a compare that replaces it', async () => {
+    const failures: RpcErrorObject[] = [];
+    const { server, w, log } = window({}, undefined, undefined, (e) => failures.push(e));
+    await w.compare('/x/a.sql', '/x/b.sql', '256M');
+    const shown = w.shown!;
+    await until(() => shown.state === 'ready' && shown.movesTotal > 0);
+    // The evictor's open drops the shown session on the server and answers 100 ms late.
+    const older = w.compare('/x/lag-hog-evictor.sql', '/x/b.sql', '256M');
+    await until(() => log().some((r) => r.method === 'open' && String(r.params.a).includes('evictor')));
+    // A request of the shown comparison that reaches the server after the eviction, as a
+    // late notice's refresh does on a slow machine.
+    await shown.hunk({ segment: 1 }, 3);
+    await older;
+    assert.deepStrictEqual(failures, []);
     server.dispose();
   });
 

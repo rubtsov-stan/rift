@@ -317,7 +317,9 @@ export class Compares {
     const next: Comparison = new Comparison(this.server, a, b, mem, {
       change: () => this.events.change(),
       failed: (e) => {
-        if (next.live()) this.events.failed(e, next);
+        // A shown session the server dropped for the compare that is replacing it is no news: the
+        // compare is about to show its own result, and the session is gone because of it.
+        if (next.live() && !(next === this.shown && this.pending && e.code === Code.unknownSession)) this.events.failed(e, next);
       },
       opening: async () => {
         // A replaced compare is about to be refused by `live`; it must not touch `wire`.
