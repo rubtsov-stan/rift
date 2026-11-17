@@ -14,6 +14,8 @@ use crate::tui::hidden;
 /// within the budget (an escape that does not fit spends the rest); a smaller budget gives
 /// a prefix of the unlimited output; a line of letters, digits, spaces
 /// and ASCII punctuation comes out as it went in, without its terminator.
+/// Letters that draw nothing, such as the Hangul fillers, are hidden
+/// characters and escaped, so they do not count as plain text.
 ///
 /// # Panics
 ///
@@ -58,7 +60,7 @@ pub fn check(data: &[u8]) {
     if let Ok(text) = std::str::from_utf8(body)
         && text
             .chars()
-            .all(|c| c == ' ' || c.is_ascii_graphic() || c.is_alphanumeric())
+            .all(|c| !hidden(c) && (c == ' ' || c.is_ascii_graphic() || c.is_alphanumeric()))
     {
         assert_eq!(full, text, "plain text changed");
     }

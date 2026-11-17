@@ -12,7 +12,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use rift_core::{
-    DiffView, Edit, Hunk, HunkState, LineNo, MemLines, Progress, Segment, SegmentStatus,
+    ApproxReason, DiffView, Edit, Hunk, HunkState, LineNo, MemLines, Progress, Segment,
+    SegmentStatus,
 };
 use rift_tui::App;
 
@@ -45,7 +46,7 @@ impl View {
                     b: LineNo(0),
                     len: same,
                 }],
-                approx: false,
+                approx: None,
             }));
         }
         if same < la || same < lb {
@@ -71,7 +72,10 @@ impl View {
                     SegmentStatus::Differs
                 },
             });
-            hunks.push(Arc::new(Hunk { edits, approx }));
+            hunks.push(Arc::new(Hunk {
+                edits,
+                approx: approx.then_some(ApproxReason::Budget),
+            }));
         }
         Self {
             segments,

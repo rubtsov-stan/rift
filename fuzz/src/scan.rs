@@ -75,8 +75,10 @@ pub fn check(data: &[u8]) {
     }
     for w in cps.windows(2) {
         assert!(w[0].line < w[1].line, "checkpoints out of order");
+        // One checkpoint per multiple of the interval: the last line start
+        // at or before it, so two can be up to twice the interval apart.
         assert!(
-            w[1].line.0 - w[0].line.0 <= index.interval(),
+            w[1].line.0 - w[0].line.0 < 2 * index.interval(),
             "checkpoint gap"
         );
     }
