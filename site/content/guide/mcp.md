@@ -134,3 +134,4 @@ A `hunks_at` answer says when it cut the hunk: `truncated` is `true` and `lines_
 - It keeps the diff of each pair of files between calls, so only the first call scans them. A changed file is a new pair.
 - `mem` is 64M unless the call sets it, and at most 256M for one diff. A larger value fails with an error, as the last call of the session above shows.
 - At most 4 diffs are alive, and their `mem` adds up to at most 512 MiB. A new pair evicts the least recently used diff that no call is using, and a diff idle for 5 minutes is dropped.
+- A new pair that finds no diff to evict waits up to 5 seconds for one: a scan to end or a call to finish. At most 4 calls wait at once. A call past that, or one still without room after 5 seconds, fails with "the server is busy with other diffs; retry in N ms". N is when the scan nearest its end should finish, judged by its speed so far, or 5000 when no scan is running.

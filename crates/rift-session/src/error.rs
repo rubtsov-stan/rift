@@ -1,6 +1,7 @@
 //! What a session call can refuse, with the protocol's error code for each.
 
 use std::fmt;
+use std::time::Duration;
 
 use rift_core::{BudgetExceeded, Bytes, LineNo};
 
@@ -82,12 +83,19 @@ pub enum Error {
         limit: Bytes,
     },
     /// Every session slot, or all the memory for sessions, is held by
-    /// sessions in use.
-    #[error("the server is busy with other diffs; retry later")]
-    Busy,
-    /// Other responses of the session hold its response pool.
-    #[error("the session is busy with other responses; retry later")]
-    ResponsesBusy,
+    /// sessions in use, and no room freed within the wait.
+    #[error("the server is busy with other diffs; retry in {} ms", retry_after.as_millis())]
+    Busy {
+        /// When room may free.
+        retry_after: Duration,
+    },
+    /// Other responses of the session hold its response pool, and did not
+    /// give it back within the wait.
+    #[error("the session is busy with other responses; retry in {} ms", retry_after.as_millis())]
+    ResponsesBusy {
+        /// When room may free.
+        retry_after: Duration,
+    },
     /// An excerpt of a session from [`Sessions::get`](crate::Sessions::get),
     /// which has no response pool to build it in.
     #[error("this session has no response pool for excerpts; open the files with Sessions::open")]
@@ -146,7 +154,7 @@ impl Error {
         match self {
             Self::File { .. } => code::FILE,
             Self::MemOverLimit { .. } => code::TOO_LARGE,
-            Self::Busy | Self::ResponsesBusy => code::BUSY,
+            Self::Busy { .. } | Self::ResponsesBusy { .. } => code::BUSY,
             Self::NoResponsePool => code::INTERNAL_ERROR,
             Self::UnknownSession(_) => code::UNKNOWN_SESSION,
             Self::NotReady { .. } => code::NOT_READY,
@@ -156,6 +164,15 @@ impl Error {
                 rift_core::Error::Io(_) => code::IO,
                 _ => code::INTERNAL_ERROR,
             },
+        }
+    }
+
+    /// For a busy refusal, how long to wait before trying again.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Busy { retry_after } | Self::ResponsesBusy { retry_after } => Some(*retry_after),
+            _ => None,
         }
     }
 

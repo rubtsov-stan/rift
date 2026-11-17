@@ -46,7 +46,11 @@
 //! - the session table and each session's scan thread: a few hundred
 //!   bytes per session, outside any budget, bounded by
 //!   [`Limits::sessions`] plus the closed sessions whose scan has not yet
-//!   reached its next read.
+//!   reached its next read;
+//! - a call waiting for room: no heap of its own. A new pair keeps its two
+//!   open files and their paths while it waits, outside any budget, as it
+//!   did before it found no room; at most [`Limits::waiters`] calls wait
+//!   at once.
 #![forbid(unsafe_code)]
 
 mod error;
@@ -61,6 +65,7 @@ pub use session::{
     Tally,
 };
 pub use sessions::{
-    DEFAULT_MEM, IDLE_TIMEOUT, Limits, MAX_RESPONSE_POOL, MAX_SESSION_MEM, MAX_SESSIONS,
-    MAX_TOTAL_MEM, Observed, Opened, RESPONSE_SHARE, Session, SessionId, SessionState, Sessions,
+    BUSY_WAIT, DEFAULT_MEM, IDLE_TIMEOUT, Limits, MAX_RESPONSE_POOL, MAX_SESSION_MEM, MAX_SESSIONS,
+    MAX_TOTAL_MEM, MAX_WAITERS, Observed, Opened, RESPONSE_SHARE, Session, SessionId, SessionState,
+    Sessions,
 };

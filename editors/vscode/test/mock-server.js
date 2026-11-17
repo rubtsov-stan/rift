@@ -222,7 +222,7 @@ const METHODS = {
     const tries = (busyTries.get(pair) ?? 0) + 1;
     busyTries.set(pair, tries);
     if (pair.includes('stuck') || (pair.includes('busy') && tries <= 2)) {
-      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'sessions' });
+      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'sessions', retry_after_ms: 5000 });
     }
     if (pair.includes('crashy')) setTimeout(() => process.exit(1), 100);
     if (pair.includes('crashlate')) setTimeout(() => process.exit(1), 2300);
@@ -235,7 +235,7 @@ const METHODS = {
     }
     const key = `${p.a}\0${p.b}`;
     if (!key.includes('hog') && ![...sessions.values()].some((s) => s.key === key) && [...sessions.values()].some((s) => s.key.includes('hog'))) {
-      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'memory' });
+      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'memory', retry_after_ms: 5000 });
     }
     for (const [id, s] of sessions) {
       if (s.key !== key) continue;

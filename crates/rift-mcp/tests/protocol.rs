@@ -377,6 +377,7 @@ fn limits(sessions: usize, total: u64) -> Limits {
         session_mem: Bytes::mib(64),
         total_mem: Bytes::mib(total),
         idle: Duration::from_secs(3600),
+        ..Limits::default()
     }
 }
 
@@ -423,4 +424,70 @@ async fn idle_sessions_are_dropped() {
     assert_eq!(server.sessions().evict_idle(), 1);
     assert!(server.sessions().is_empty());
     assert_eq!(server.sessions().mem(), Bytes(0));
+}
+
+/// A pair whose scan takes a while: A is one line of 64 MiB, sparse on
+/// disk and shared by every pair; B is a file of its own per `n`.
+fn slow_pair(dir: &Path, n: usize) -> (String, String) {
+    let a = dir.join("sparse");
+    if !a.exists() {
+        std::fs::File::create(&a)
+            .unwrap()
+            .set_len(64 << 20)
+            .unwrap();
+    }
+    let b = write(dir, &format!("b{n}"), std::iter::once(format!("b {n}")));
+    (a.to_str().unwrap().to_owned(), b)
+}
+
+/// Calls `summary` on every pair at once, each with its `mem`, and returns
+/// the content of the calls that failed.
+async fn summaries_at_once(c: &Client, pairs: Vec<(String, String, &'static str)>) -> Vec<String> {
+    let mut calls = tokio::task::JoinSet::new();
+    for (a, b, mem) in pairs {
+        let peer = c.peer().clone();
+        let args = json!({"a": a, "b": b, "mem": mem});
+        calls.spawn(async move {
+            let params = CallToolRequestParams::new("summary")
+                .with_arguments(args.as_object().unwrap().clone());
+            peer.call_tool(params).await.unwrap()
+        });
+    }
+    let mut failed = Vec::new();
+    while let Some(r) = calls.join_next().await {
+        let r = r.unwrap();
+        if r.is_error == Some(true) {
+            failed.push(format!("{:?}", r.content));
+        }
+    }
+    failed
+}
+
+#[tokio::test]
+async fn five_new_pairs_at_once_wait_for_the_session_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = connect(&Server::default()).await;
+    let pairs = (0..5)
+        .map(|n| {
+            let (a, b) = slow_pair(dir.path(), n);
+            (a, b, "64M")
+        })
+        .collect();
+    let failed = summaries_at_once(&c, pairs).await;
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+#[tokio::test]
+async fn a_new_pair_past_the_memory_limit_waits() {
+    // Two diffs of 256M fill the 512M for sessions while they scan.
+    let dir = tempfile::tempdir().unwrap();
+    let c = connect(&Server::default()).await;
+    let pairs = (0..3)
+        .map(|n| {
+            let (a, b) = slow_pair(dir.path(), n);
+            (a, b, if n < 2 { "256M" } else { "64M" })
+        })
+        .collect();
+    let failed = summaries_at_once(&c, pairs).await;
+    assert!(failed.is_empty(), "{failed:?}");
 }

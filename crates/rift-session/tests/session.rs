@@ -41,6 +41,9 @@ fn sessions() -> Sessions {
 
 const MEM: Option<Bytes> = Some(Bytes::mib(16));
 
+/// A wait for room that runs out quickly, for tests that expect `busy`.
+const SHORT_WAIT: Duration = Duration::from_millis(200);
+
 /// Opens `a` and `b` and waits for the scan to end.
 fn open(s: &Sessions, a: &str, b: &str) -> Arc<Session> {
     let session = s.open(a, b, MEM).unwrap().session;
@@ -162,6 +165,7 @@ fn sessions_in_use_make_a_new_pair_wait() {
     let c = write(dir.path(), "c", b"other\n");
     let s = Sessions::new(Limits {
         sessions: 1,
+        wait: SHORT_WAIT,
         ..Limits::default()
     });
     let held = open(&s, &a, &b);
@@ -351,10 +355,13 @@ fn excerpts_share_the_response_pool_and_return_it() {
     };
     let a = write(dir.path(), "a", &side("old"));
     let b = write(dir.path(), "b", &side("new"));
-    let session = Sessions::new(Limits::default())
-        .open(&a, &b, Some(Bytes::mib(32)))
-        .unwrap()
-        .session;
+    let session = Sessions::new(Limits {
+        wait: SHORT_WAIT,
+        ..Limits::default()
+    })
+    .open(&a, &b, Some(Bytes::mib(32)))
+    .unwrap()
+    .session;
     session.wait();
     let mut req = ExcerptRequest::new(At::LineA(LineNo(0)));
     req.max_lines = 5000;
@@ -371,7 +378,7 @@ fn excerpts_share_the_response_pool_and_return_it() {
     assert!(shown > 900 * 1000, "{shown}");
     let err = session.excerpt(&req).unwrap_err();
     assert_eq!(err.code(), code::BUSY);
-    assert!(matches!(err, Error::ResponsesBusy));
+    assert!(matches!(err, Error::ResponsesBusy { .. }));
     drop(first);
     session.excerpt(&req).unwrap();
 }
@@ -570,6 +577,7 @@ fn room_is_made_from_failed_sessions_first_and_never_from_scanning_ones() {
     let set = Sessions::new(Limits {
         sessions: 2,
         idle: Duration::from_secs(3600),
+        wait: SHORT_WAIT,
         ..Limits::default()
     });
     let failed = set.open(&big, &c, Some(Bytes(64 << 10))).unwrap().session;
@@ -639,4 +647,220 @@ fn a_session_keeps_its_scheduler_share() {
         }
     };
     assert!(matches!(state, HunkState::Ready(_)), "{state:?}");
+}
+
+/// A pair whose scan takes a fraction of a second: A is one line of
+/// 128 MiB, sparse on disk.
+fn short_scan_pair(dir: &Path) -> (String, String) {
+    let a = dir.join("sparse");
+    std::fs::File::create(&a)
+        .unwrap()
+        .set_len(128 << 20)
+        .unwrap();
+    (a.to_str().unwrap().to_owned(), write(dir, "tiny", b"y\n"))
+}
+
+#[test]
+fn a_new_pair_waits_for_a_call_to_let_go_of_its_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = write(dir.path(), "c", b"other\n");
+    // The session limit, then the memory limit.
+    for limits in [
+        Limits {
+            sessions: 1,
+            ..Limits::default()
+        },
+        Limits {
+            total_mem: Bytes::mib(16),
+            ..Limits::default()
+        },
+    ] {
+        let s = Sessions::new(limits);
+        let held = open(&s, &a, &b);
+        let opened = std::thread::scope(|scope| {
+            scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                drop(held);
+            });
+            s.open(&a, &c, MEM).map(|_| ()).map_err(|e| e.to_string())
+        });
+        assert!(opened.is_ok(), "{limits:?}: {opened:?}");
+    }
+}
+
+#[test]
+fn a_new_pair_waits_for_a_scan_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let (slow_a, slow_b) = short_scan_pair(dir.path());
+    let s = Sessions::new(Limits {
+        sessions: 1,
+        ..Limits::default()
+    });
+    let scanning = s.open(&slow_a, &slow_b, MEM).unwrap().session;
+    assert_eq!(scanning.state(), SessionState::Scanning);
+    drop(scanning);
+    let opened = s.open(&a, &b, MEM).map(|_| ()).map_err(|e| e.to_string());
+    assert!(opened.is_ok(), "{opened:?}");
+}
+
+#[test]
+fn a_new_pair_is_busy_with_a_retry_time_when_no_room_frees() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = write(dir.path(), "c", b"other\n");
+    let s = Sessions::new(Limits {
+        sessions: 1,
+        ..Limits::default()
+    });
+    let _held = open(&s, &a, &b);
+    let began = Instant::now();
+    let err = s.open(&a, &c, MEM).unwrap_err();
+    let waited = began.elapsed();
+    assert_eq!(err.code(), code::BUSY);
+    assert!(err.to_string().contains("retry in"), "{err}");
+    assert!(waited >= Duration::from_secs(1), "busy after {waited:?}");
+}
+
+#[test]
+fn busy_beside_a_scan_says_to_retry_when_the_scan_may_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    // 64 MiB of short lines: the scan counts its progress as it goes.
+    let lines = "0123456789abcde\n".repeat(4 << 20);
+    let (slow_a, slow_b) = (
+        write(dir.path(), "lines", lines.as_bytes()),
+        write(dir.path(), "z", b"z\n"),
+    );
+    let wait = Duration::from_millis(500);
+    let s = Sessions::new(Limits {
+        sessions: 1,
+        wait,
+        ..Limits::default()
+    });
+    let scanning = s.open(&slow_a, &slow_b, MEM).unwrap().session;
+    let err = s.open(&a, &b, MEM).unwrap_err();
+    let retry = err.retry_after().unwrap();
+    // Not the fallback, which is the wait.
+    assert!(retry != wait && retry < Duration::from_secs(600), "{err}");
+    assert!(
+        err.to_string()
+            .ends_with(&format!("retry in {} ms", retry.as_millis()))
+    );
+    s.close(scanning.id());
+}
+
+#[test]
+fn past_the_waiters_a_call_is_busy_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = write(dir.path(), "c", b"other\n");
+    let s = Sessions::new(Limits {
+        sessions: 1,
+        waiters: 0,
+        ..Limits::default()
+    });
+    let _held = open(&s, &a, &b);
+    let began = Instant::now();
+    let err = s.open(&a, &c, MEM).unwrap_err();
+    assert_eq!(err.code(), code::BUSY);
+    assert!(
+        began.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        began.elapsed()
+    );
+}
+
+/// `rift serve`'s set: no wait, so busy comes at once, still with a time
+/// to retry after.
+#[test]
+fn with_no_wait_busy_comes_at_once_with_a_retry_time() {
+    let no_wait = Limits {
+        sessions: 1,
+        wait: Duration::ZERO,
+        ..Limits::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = write(dir.path(), "c", b"other\n");
+    let s = Sessions::new(no_wait);
+    let _held = open(&s, &a, &b);
+    let began = Instant::now();
+    let err = s.open(&a, &c, MEM).unwrap_err();
+    assert!(
+        began.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(matches!(err, Error::Busy { .. }), "{err}");
+    assert!(err.retry_after().is_some_and(|t| !t.is_zero()), "{err}");
+
+    let pool_dir = tempfile::tempdir().unwrap();
+    let session = pool_filling_session(pool_dir.path(), no_wait);
+    let _first = session.excerpt(&whole_file()).unwrap();
+    let began = Instant::now();
+    let err = session.excerpt(&whole_file()).unwrap_err();
+    assert!(
+        began.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(matches!(err, Error::ResponsesBusy { .. }), "{err}");
+    assert!(err.retry_after().is_some_and(|t| !t.is_zero()), "{err}");
+}
+
+/// A ready session of 32 MiB whose files are 2000 lines of 1000 bytes on
+/// each side, every one different: more than its response pool holds.
+fn pool_filling_session(dir: &Path, limits: Limits) -> Arc<Session> {
+    let side = |tag: &str| -> Vec<u8> {
+        (0..2000)
+            .flat_map(|i| format!("{tag} {i:04} {}\n", "x".repeat(990)).into_bytes())
+            .collect()
+    };
+    let a = write(dir, "a", &side("old"));
+    let b = write(dir, "b", &side("new"));
+    let session = Sessions::new(limits)
+        .open(&a, &b, Some(Bytes::mib(32)))
+        .unwrap()
+        .session;
+    session.wait();
+    session
+}
+
+fn whole_file() -> ExcerptRequest {
+    let mut req = ExcerptRequest::new(At::LineA(LineNo(0)));
+    req.max_lines = 5000;
+    req
+}
+
+#[test]
+fn an_excerpt_waits_for_another_to_return_the_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = pool_filling_session(dir.path(), Limits::default());
+    let first = session.excerpt(&whole_file()).unwrap();
+    let second = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(first);
+        });
+        session
+            .excerpt(&whole_file())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
+    assert!(second.is_ok(), "{second:?}");
+}
+
+#[test]
+fn an_excerpt_is_busy_with_a_retry_time_when_the_pool_stays_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = pool_filling_session(dir.path(), Limits::default());
+    let _first = session.excerpt(&whole_file()).unwrap();
+    let began = Instant::now();
+    let err = session.excerpt(&whole_file()).unwrap_err();
+    let waited = began.elapsed();
+    assert_eq!(err.code(), code::BUSY);
+    assert!(err.to_string().contains("retry in"), "{err}");
+    assert!(waited >= Duration::from_secs(1), "busy after {waited:?}");
 }
