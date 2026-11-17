@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The `summary` and `next_difference` tools of `rift-mcp` say that their ranges come from the segment map before refinement and can take in equal lines next to a change, and that `hunks_at` gives the exact lines.
+
 ### Added
 
 - Each release carries `rift-mcp-<version>.mcpb`, an MCP bundle of

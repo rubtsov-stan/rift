@@ -127,7 +127,9 @@ pub struct Summary {
     pub approx: Tally,
     /// Differing segments refined so far. It grows as hunks are asked for.
     pub refined_segments: u64,
-    /// The first differing ranges in file order, at most 20.
+    /// The first differing ranges in file order, at most 20. They come from
+    /// the segment map before refinement and can take in equal lines next to
+    /// a change; `hunks_at` gives the exact lines.
     pub first_differences: Vec<Range>,
     /// Differing ranges beyond those listed.
     pub more_differences: u64,
@@ -159,7 +161,8 @@ pub struct HunkAnswer {
 pub struct Next {
     /// Whether another difference follows.
     pub found: bool,
-    /// The difference, when found.
+    /// The difference, when found. Like the ranges of `summary`, it can take
+    /// in equal lines next to a change; `hunks_at` gives the exact lines.
     pub range: Option<Range>,
 }
 
@@ -261,7 +264,7 @@ impl Server {
     /// Sizes of the two files, how many segments are equal, differ or are
     /// approximate, and the first differing ranges.
     #[tool(
-        description = "Summarize the diff of two text files: line counts, segment counts by status, the first differing ranges and memory use. Builds the diff and keeps it for the other tools."
+        description = "Summarize the diff of two text files: line counts, segment counts by status, the first differing ranges and memory use. The ranges come from the segment map before refinement: they can take in equal lines next to a change. `hunks_at` gives the exact lines. Builds the diff and keeps it for the other tools."
     )]
     async fn summary(&self, Parameters(pair): Parameters<Pair>) -> Result<Json<Summary>, String> {
         let this = self.clone();
@@ -357,7 +360,7 @@ impl Server {
 
     /// The first difference that starts after a line of A.
     #[tool(
-        description = "The first differing range of A that starts after the 1-based line `after_line` (0 for the first one). Pass a returned a.start to step to the next."
+        description = "The first differing range of A that starts after the 1-based line `after_line` (0 for the first one). Pass a returned a.start to step to the next. The range is from the segment map before refinement and can take in equal lines next to a change; `hunks_at` gives the exact lines."
     )]
     async fn next_difference(
         &self,
