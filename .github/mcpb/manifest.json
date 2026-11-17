@@ -1,0 +1,23 @@
+{
+  "manifest_version": "0.3",
+  "name": "rift-mcp",
+  "display_name": "Rift",
+  "version": "0.0.0",
+  "description": "Diff two huge text files under a fixed memory limit: summary, hunks and the next difference.",
+  "author": { "name": "Stanislav", "url": "https://github.com/rubtsov-stan" },
+  "repository": { "type": "git", "url": "https://github.com/rubtsov-stan/rift" },
+  "homepage": "https://rubtsov-stan.github.io/rift/",
+  "documentation": "https://rubtsov-stan.github.io/rift/guide/mcp/",
+  "license": "MIT OR Apache-2.0",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/rift-mcp",
+    "mcp_config": { "command": "${__dirname}/server/rift-mcp", "args": [] }
+  },
+  "tools": [
+    { "name": "summary", "description": "Counts, sizes and the first differing ranges of two files" },
+    { "name": "hunks_at", "description": "The diff lines of one range" },
+    { "name": "next_difference", "description": "The first differing range after a line" }
+  ],
+  "compatibility": { "platforms": ["darwin", "linux"] }
+}

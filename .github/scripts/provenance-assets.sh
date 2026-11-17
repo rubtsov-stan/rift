@@ -1,5 +1,6 @@
 #!/bin/sh
-# Writes, next to every release archive in DIR, the files that let a reader
+# Writes, next to every release archive in DIR (or every file PATTERN
+# matches there), the files that let a reader
 # check where it came from without calling the GitHub API:
 #   <archive>.sigstore.json  the Sigstore bundle of its build attestation
 #   <archive>.intoto.jsonl   the signed SLSA provenance, as DSSE envelopes
@@ -7,17 +8,20 @@
 # The attestations are the ones actions/attest created in the build jobs;
 # nothing is generated here. Each bundle is verified before it is kept.
 #
-# usage: provenance-assets.sh DIR [OWNER/REPO]   (needs gh, jq, a GH_TOKEN)
+# usage: provenance-assets.sh DIR [OWNER/REPO [PATTERN]]   (needs gh, jq, a GH_TOKEN)
+# PATTERN defaults to *.tar.xz.
 set -eu
 
 dir=${1:?usage: provenance-assets.sh DIR [OWNER/REPO]}
 repo=${2:-${GITHUB_REPOSITORY:?no repository given}}
+pattern=${3:-*.tar.xz}
 dir=$(cd "$dir" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 found=0
-for archive in "$dir"/*.tar.xz; do
+# shellcheck disable=SC2231 # PATTERN is a glob on purpose
+for archive in "$dir"/$pattern; do
   [ -e "$archive" ] || break
   found=1
   rm -f "$work"/*.jsonl
@@ -39,4 +43,4 @@ for archive in "$dir"/*.tar.xz; do
     '.predicateType == "https://slsa.dev/provenance/v1" and any(.subject[]; .digest.sha256 == $d)' >/dev/null
   echo "ok ${archive##*/}"
 done
-[ "$found" = 1 ] || { echo "no *.tar.xz in $dir" >&2; exit 1; }
+[ "$found" = 1 ] || { echo "no $pattern in $dir" >&2; exit 1; }
