@@ -161,7 +161,10 @@ When a new session does not fit `max_sessions` or `max_total_mem`, the
 server first drops failed sessions, then idle ones, then the least
 recently used ready ones that no request is using; a session it drops
 answers later requests with `unknown_session`. A scanning session is
-never dropped for room. When that is not enough, the answer is `busy`.
+never dropped for room. When that is not enough, the answer is `busy`
+at once, with `retry_after_ms`. `rift-mcp` waits up to 5 seconds for
+room instead; `rift serve` will wait the same way once its client honours
+`retry_after_ms` (#64).
 
 #### Session states
 
@@ -191,8 +194,9 @@ the last check, setting up the workers and starting the scheduler, runs to
 the end. The session's memory is released only then, and the window grows
 with the size of the input. Until it is, that memory still counts against
 `max_total_mem`, so an `open` right after the `close` can answer `busy`
-when it needs that room. A client that gets `busy` there retries with a
-short backoff, for a bounded time; the server does not wait for the scan.
+when it needs that room. A client that gets `busy` there retries after
+`retry_after_ms` or with a short backoff, for a bounded time; the server
+does not wait for the scan.
 
 ### `summary`
 
@@ -458,7 +462,7 @@ LSP client libraries already know.
 | -32001 | `file` | a path cannot be opened for the diff | `side`, `path`, `reason` | `rift_session::Error::File` (`std::io::Error` from `lstat` or `open`) |
 | -32003 | `budget_exceeded` | the scan (in a failed session's `error`), or a refinement run for this request, does not fit `mem` | `mem_bytes`, `half`, `requested_bytes`, `available_bytes`, `suggested_mem_bytes?`, `suggested_mem?` | `rift_core::Error::Budget(BudgetExceeded)` |
 | -32004 | `too_large` | `mem` is over `limits.max_session_mem` | `mem_bytes`, `max_mem_bytes` | `rift_session::Error::MemOverLimit` |
-| -32005 | `busy` | no room for another session, or the session's response pool is in use | `what`: `sessions` or `responses` | `rift_session::Error::{Busy, ResponsesBusy}` |
+| -32005 | `busy` | no room for another session, or the session's response pool is in use | `what`: `sessions` or `responses`; `retry_after_ms` | `rift_session::Error::{Busy, ResponsesBusy}` |
 | -32006 | `unknown_session` | the session was closed, dropped for room or idleness, or never existed | `session` | `rift_session::Error::UnknownSession` |
 | -32007 | `io` | a file failed to read after it was opened, for instance it was truncated | none | `rift_core::Error::Io` |
 | -32008 | `not_ready` | `segments`, `hunk`, `moves` or `set_visible` on a session that is `scanning` or `failed` | `session`, `state`; scan `progress` while scanning; `error` when failed | `rift_session::Error::NotReady` |
@@ -466,6 +470,17 @@ LSP client libraries already know.
 `file` reasons: `not_found`, `permission_denied`, `not_regular` (a
 directory, device, FIFO or socket), `symlink`, `changed` (the path was
 replaced while it was being opened), `io` (anything else).
+
+`busy` fields:
+
+- `what`: `sessions` when a new session found no room, `responses` when
+  a `hunk` found its session's response pool held.
+- `retry_after_ms`: when to try again. For `sessions`, when the scan
+  in progress nearest its end should finish, at its rate so far. With no
+  scan to judge by, and always for `responses`, 50: the room is held by
+  requests in use or by answers being written, which end without the
+  server knowing when. Never under 50. It is an estimate, not a promise
+  of room.
 
 `budget_exceeded` fields:
 

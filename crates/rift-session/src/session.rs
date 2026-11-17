@@ -2,6 +2,7 @@
 //! segments, refinement state, and excerpts of both files.
 
 use std::borrow::Cow;
+use std::time::Duration;
 
 use rift_core::diff::Diff;
 use rift_core::{
@@ -11,7 +12,7 @@ use rift_core::{
 
 use crate::error::Error;
 use crate::file::FileSource;
-use crate::sessions::{Session, SessionId};
+use crate::sessions::{ROOM_TICK, Session, SessionId, Waiter};
 
 /// Default and largest `context` of an excerpt.
 pub const DEFAULT_CONTEXT: u64 = 3;
@@ -362,6 +363,7 @@ impl Session {
     /// truncated one, plus `O(moved blocks)`.
     ///
     /// [`Sessions::get`]: crate::Sessions::get
+    /// [`Limits::waiters`]: crate::Limits::waiters
     ///
     /// # Errors
     ///
@@ -369,11 +371,12 @@ impl Session {
     /// failed, [`Error::NoResponsePool`] for a session from
     /// [`Sessions::get`], [`Error::SegmentOutOfRange`] or [`Error::LineOutOfRange`]
     /// for a position past the end, [`Error::ResponsesBusy`] when other excerpts
-    /// hold the pool, [`Error::Segment`] when a read or the segment's
+    /// hold the pool through the set's wait, or [`Limits::waiters`] calls
+    /// already wait, [`Error::Segment`] when a read or the segment's
     /// refinement failed.
     pub fn excerpt(&self, req: &ExcerptRequest) -> Result<Excerpt, Error> {
         let built = self.built()?;
-        let pool = &built.pool.as_ref().ok_or(Error::NoResponsePool)?.budget;
+        let pool = built.pool.as_ref().ok_or(Error::NoResponsePool)?;
         let diff = &built.diff;
         let segs = diff.segments();
         let (i, from) = match req.at {
@@ -414,7 +417,7 @@ impl Session {
         let window_a = first_a - pre..seg.a.end.0 + post;
         let window_b = first_b - pre..seg.b.end.0 + post;
 
-        let cap = pool.capacity(Half::Refine).0;
+        let cap = pool.budget.capacity(Half::Refine).0;
         // One line on each side and the line buffer must fit an empty
         // pool, so a small budget narrows lines instead of refusing them.
         let line_bytes = req
@@ -429,15 +432,29 @@ impl Session {
             .max(worst(window_b.end - window_b.start))
             + scratch;
         let least = 2 * (FIRST_LINES * LINE + TEXT_PER_BYTE * line_bytes) + scratch;
-        // A short window can want less than the floor every excerpt is
-        // checked against.
-        let grant = want.max(least).min(pool.available(Half::Refine).0);
-        if grant < least {
-            return Err(Error::ResponsesBusy);
-        }
-        let mut held = pool
-            .try_reserve(Half::Refine, Bytes(grant))
-            .map_err(|_| Error::ResponsesBusy)?;
+        let mut waiter = None;
+        let (mut held, grant) = loop {
+            // A short window can want less than the floor every excerpt is
+            // checked against.
+            let grant = want.max(least).min(pool.budget.available(Half::Refine).0);
+            if grant >= least
+                && let Ok(held) = pool.budget.try_reserve(Half::Refine, Bytes(grant))
+            {
+                break (held, grant);
+            }
+            if waiter.is_none() {
+                waiter = pool.queue.join(Duration::ZERO);
+            }
+            let left = waiter.as_ref().map_or(Duration::ZERO, Waiter::left);
+            if left.is_zero() {
+                return Err(Error::ResponsesBusy {
+                    retry_after: pool.queue.retry_after(),
+                });
+            }
+            // Bytes an excerpt gives back send no signal; see `ROOM_TICK`.
+            std::thread::sleep(left.min(ROOM_TICK));
+        };
+        drop(waiter);
 
         let mut buf = LineBuf::new();
         let mut room = (grant - scratch) / 2;

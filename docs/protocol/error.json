@@ -293,10 +293,14 @@
                 "sessions",
                 "responses"
               ]
+            },
+            "retry_after_ms": {
+              "$ref": "defs.json#/$defs/count"
             }
           },
           "required": [
-            "what"
+            "what",
+            "retry_after_ms"
           ],
           "additionalProperties": false
         }

@@ -11,7 +11,14 @@
 //! - a new session first evicts idle ones, then, while it does not fit,
 //!   failed ones, then the least recently used ready ones that no call is
 //!   using; a scanning session is never evicted. When that is not enough
-//!   the call fails with [`Error::Busy`].
+//!   the call waits up to [`Limits::wait`] for room: a scan to end, or a
+//!   call or an [`Observed`] to let go of its session. With a wait of zero
+//!   it answers at once, unless only observers hold the room;
+//! - at most [`Limits::waiters`] calls wait at once, counting those
+//!   waiting for a response pool. A call past that count, or one whose
+//!   wait runs out, fails with [`Error::Busy`] and a time to retry after:
+//!   the earliest end of a scan in progress, estimated from its rate so
+//!   far, or else [`Limits::wait`]; never under 50 ms.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -40,6 +47,16 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub const RESPONSE_SHARE: u64 = 16;
 /// The largest response pool.
 pub const MAX_RESPONSE_POOL: Bytes = Bytes::mib(8);
+/// How long a call waits for room before it answers busy.
+pub const BUSY_WAIT: Duration = Duration::from_secs(5);
+/// Calls that may wait for room at once. Half of the requests `rift serve`
+/// answers at once, so waiting calls would leave it the rest, a `close`
+/// that makes room included.
+pub const MAX_WAITERS: usize = 4;
+/// How often a waiting call looks for room again. A call letting go of a
+/// session, a scan ending and an excerpt returning its bytes send no
+/// signal, as with the scheduler's bytes held outside it in `rift-core`.
+pub(crate) const ROOM_TICK: Duration = Duration::from_millis(50);
 
 /// The knobs of the policy above; tests shrink them.
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +69,12 @@ pub struct Limits {
     pub total_mem: Bytes,
     /// Idle time after which a session is dropped.
     pub idle: Duration,
+    /// How long a call waits for room before it answers busy. Zero answers
+    /// at once, except that an `open` whose room only observers hold still
+    /// waits up to 250 ms for one to let go.
+    pub wait: Duration,
+    /// Calls that may wait for room at once.
+    pub waiters: usize,
 }
 
 impl Default for Limits {
@@ -61,7 +84,67 @@ impl Default for Limits {
             session_mem: MAX_SESSION_MEM,
             total_mem: MAX_TOTAL_MEM,
             idle: IDLE_TIMEOUT,
+            wait: BUSY_WAIT,
+            waiters: MAX_WAITERS,
         }
+    }
+}
+
+/// The calls of a set waiting for room, for a session or in a response
+/// pool, and how long and how many may wait.
+#[derive(Debug, Clone)]
+pub(crate) struct Queue {
+    waiting: Arc<AtomicUsize>,
+    wait: Duration,
+    cap: usize,
+}
+
+impl Queue {
+    fn new(limits: &Limits) -> Self {
+        Self {
+            waiting: Arc::default(),
+            wait: limits.wait,
+            cap: limits.waiters,
+        }
+    }
+
+    /// Counts a call in for the wait, or `least` if longer, from now,
+    /// unless the queue is full.
+    pub(crate) fn join(&self, least: Duration) -> Option<Waiter<'_>> {
+        let waiter = Waiter {
+            queue: self,
+            end: Instant::now() + self.wait.max(least),
+        };
+        // Relaxed: a counter that only bounds admission. A refused call
+        // counts itself out when `waiter` drops.
+        (self.waiting.fetch_add(1, Ordering::Relaxed) < self.cap).then_some(waiter)
+    }
+
+    /// The time to retry after when no scan says better: room did not free
+    /// within the wait, so another as long. Never under [`ROOM_TICK`],
+    /// below which a waiting call would not have seen it either.
+    pub(crate) fn retry_after(&self) -> Duration {
+        self.wait.max(ROOM_TICK)
+    }
+}
+
+/// A call counted in a [`Queue`]; counted out on drop.
+#[derive(Debug)]
+pub(crate) struct Waiter<'q> {
+    queue: &'q Queue,
+    end: Instant,
+}
+
+impl Waiter<'_> {
+    /// What is left of the wait.
+    pub(crate) fn left(&self) -> Duration {
+        self.end.saturating_duration_since(Instant::now())
+    }
+}
+
+impl Drop for Waiter<'_> {
+    fn drop(&mut self) {
+        self.queue.waiting.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -112,6 +195,8 @@ type Key = (FileId, FileId);
 #[derive(Debug)]
 pub(crate) struct Pool {
     pub(crate) budget: Budget,
+    /// The set's queue, for an excerpt waiting for the pool's bytes.
+    pub(crate) queue: Queue,
     _held: Reservation,
 }
 
@@ -153,6 +238,7 @@ pub struct Session {
     pub(crate) id: SessionId,
     pub(crate) mem: Bytes,
     pub(crate) bytes: [Bytes; 2],
+    started: Instant,
     watch: Watch,
     built: OnceLock<Result<Built, Error>>,
     /// Set once the scan has let go of the session, after `built`: until
@@ -198,6 +284,21 @@ impl Session {
         (self.watch.done().min(total), total)
     }
 
+    /// How long the scan may still take at its rate so far, while it scans
+    /// and has covered some bytes.
+    fn scan_left(&self) -> Option<Duration> {
+        if self.state() != SessionState::Scanning {
+            return None;
+        }
+        let (done, total) = self.scan_progress();
+        if done.0 == 0 {
+            return None;
+        }
+        let ms =
+            self.started.elapsed().as_millis() * u128::from(total.0 - done.0) / u128::from(done.0);
+        Some(Duration::from_millis(u64::try_from(ms).unwrap_or(u64::MAX)))
+    }
+
     /// What the scan left, once it has ended.
     fn result(&self) -> Option<&Result<Built, Error>> {
         self.ended.get().and(self.built.get())
@@ -215,14 +316,14 @@ impl Session {
     }
 
     /// Scans `a` and `b` and builds the diff within the session's budget,
-    /// with a response pool when `pool` is set.
-    fn build(&self, a: FileSource, b: FileSource, pool: bool) -> Result<Built, Error> {
+    /// with a response pool that waits in `pool` when it is set.
+    fn build(&self, a: FileSource, b: FileSource, pool: Option<Queue>) -> Result<Built, Error> {
         let mem = self.mem;
         let budget = Budget::new(mem);
         let build = |error| Error::Build { mem, error };
         // Taken before the diff, which sizes its workers and cache from
         // what the Refine half has left.
-        let pool = if pool {
+        let pool = if let Some(queue) = pool {
             let share =
                 Bytes((budget.capacity(Half::Refine).0 / RESPONSE_SHARE).min(MAX_RESPONSE_POOL.0));
             let held = budget
@@ -230,6 +331,7 @@ impl Session {
                 .map_err(|e| build(e.into()))?;
             Some(Pool {
                 budget: Budget::new(Bytes(2 * share.0)),
+                queue,
                 _held: held,
             })
         } else {
@@ -273,11 +375,13 @@ struct Entry {
 const SESSION_WORKERS: usize = 4;
 
 /// How long an `open` that found only observed sessions to evict waits for
-/// an observer to let go. An observer reads one session for one tick of
-/// notifications, microseconds of work.
+/// an observer to let go, at least, whatever [`Limits::wait`] says. An
+/// observer reads one session for one tick of notifications, microseconds
+/// of work.
 const OBSERVER_WAIT: Duration = Duration::from_millis(250);
 
 /// Why [`Sessions::make_room`] found no room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Full {
     /// Every session that could be evicted is in use by a call.
     Busy,
@@ -336,7 +440,7 @@ struct State {
     live: Vec<Entry>,
     /// Sessions being built by [`Sessions::get`], which are not in `live`
     /// yet.
-    building: usize,
+    building: Vec<Arc<Session>>,
     last_id: u64,
 }
 
@@ -344,22 +448,26 @@ struct State {
 #[derive(Debug)]
 pub struct Sessions {
     state: Mutex<State>,
-    /// Signalled when an [`Observed`] lets go, for an `open` waiting in
-    /// [`Sessions::wait_observers`].
+    /// Signalled when room may have freed, for a call waiting in
+    /// [`Sessions::wait_for_room`]: an [`Observed`] let go, a build ended,
+    /// a session was closed.
     released: Condvar,
     /// Budgets of every session that holds memory; see the module docs.
     held: Arc<AtomicU64>,
+    queue: Queue,
     limits: Limits,
 }
 
 /// Counts a session [`Sessions::get`] is building; uncounts it on drop.
 struct Building<'s> {
     sessions: &'s Sessions,
+    id: SessionId,
 }
 
 impl Drop for Building<'_> {
     fn drop(&mut self) {
-        self.sessions.lock().building -= 1;
+        self.sessions.lock().building.retain(|s| s.id != self.id);
+        self.sessions.released.notify_all();
     }
 }
 
@@ -368,9 +476,13 @@ impl Sessions {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            state: Mutex::default(),
+            state: Mutex::new(State {
+                building: Vec::with_capacity(limits.sessions),
+                ..State::default()
+            }),
             released: Condvar::new(),
             held: Arc::default(),
+            queue: Queue::new(&limits),
             limits,
         }
     }
@@ -419,7 +531,7 @@ impl Sessions {
     /// `open` that needs a live session's room waits for the handle to be
     /// dropped, so a handle is held for a short read, never across a wait.
     /// A session closed while a handle holds it keeps its memory counted
-    /// until the handle is dropped, and an `open` meanwhile answers busy.
+    /// until the handle is dropped.
     #[must_use]
     pub fn observe(&self, id: SessionId) -> Option<Observed<'_>> {
         let s = self.lock();
@@ -466,7 +578,7 @@ impl Sessions {
     ) -> Result<Arc<Session>, Error> {
         let key = (id_a, id_b);
         let mem = self.check_mem(mem)?;
-        let mut waited = None;
+        let mut waiter = None;
         let (session, _building) = loop {
             let mut s = self.lock();
             if let Some(i) = s.live.iter().position(|e| e.key == key) {
@@ -484,19 +596,17 @@ impl Sessions {
                     continue;
                 }
             }
-            match self.make_room(&mut s, mem) {
-                Ok(()) => {}
-                Err(Full::Observed) => {
-                    drop(self.wait_observers(s, &mut waited)?);
-                    continue;
-                }
-                Err(Full::Busy) => return Err(Error::Busy),
+            if let Err(full) = self.make_room(&mut s, mem) {
+                drop(self.wait_for_room(s, full, &mut waiter)?);
+                continue;
             }
-            s.building += 1;
             let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
-            break (session, Building { sessions: self });
+            s.building.push(Arc::clone(&session));
+            let id = session.id;
+            break (session, Building { sessions: self, id });
         };
-        let built = session.build(a, b, false)?;
+        drop(waiter);
+        let built = session.build(a, b, None)?;
         // Never set before: the session was made by this call and is not
         // in the table yet.
         let _ = session.built.set(Ok(built));
@@ -534,7 +644,7 @@ impl Sessions {
         let (b, id_b) = file(Side::B, b)?;
         let key = (id_a, id_b);
         let mem = self.check_mem(mem)?;
-        let mut waited = None;
+        let mut waiter = None;
         let session = loop {
             let mut s = self.lock();
             if let Some(e) = s.live.iter_mut().find(|e| e.key == key)
@@ -547,13 +657,9 @@ impl Sessions {
                 });
             }
             s.live.retain(|e| e.key != key);
-            match self.make_room(&mut s, mem) {
-                Ok(()) => {}
-                Err(Full::Observed) => {
-                    drop(self.wait_observers(s, &mut waited)?);
-                    continue;
-                }
-                Err(Full::Busy) => return Err(Error::Busy),
+            if let Err(full) = self.make_room(&mut s, mem) {
+                drop(self.wait_for_room(s, full, &mut waiter)?);
+                continue;
             }
             let session = self.new_session(&mut s, mem, [a.len(), b.len()]);
             s.live.push(Entry {
@@ -563,11 +669,13 @@ impl Sessions {
             });
             break session;
         };
+        drop(waiter);
         let scan = Arc::clone(&session);
+        let queue = self.queue.clone();
         let spawned = std::thread::Builder::new()
             .name("rift-scan".into())
             .spawn(move || {
-                let result = scan.build(a, b, true);
+                let result = scan.build(a, b, Some(queue));
                 if result.is_err() {
                     scan.held.release();
                 }
@@ -618,6 +726,7 @@ impl Sessions {
             return false;
         };
         s.live.swap_remove(i).session.watch.cancel();
+        self.released.notify_all();
         true
     }
 
@@ -641,17 +750,17 @@ impl Sessions {
         Ok(mem)
     }
 
-    /// Evicts until a session of `mem` fits, as the module docs describe.
-    /// A session an [`Observed`] still holds is never evicted: its memory
-    /// would not be freed, and the next victim would be evicted for
-    /// nothing.
+    /// Evicts until a session of `mem` fits, as the module docs describe,
+    /// or says why it does not. A session an [`Observed`] still holds is
+    /// never evicted: its memory would not be freed, and the next victim
+    /// would be evicted for nothing.
     fn make_room(&self, s: &mut State, mem: Bytes) -> Result<(), Full> {
         let idle = self.limits.idle;
         s.live
             .retain(|e| Arc::strong_count(&e.session) > 1 || e.used.elapsed() < idle);
         loop {
             let held = self.held.load(Ordering::Relaxed);
-            if s.live.len() + s.building < self.limits.sessions
+            if s.live.len() + s.building.len() < self.limits.sessions
                 && held.saturating_add(mem.0) <= self.limits.total_mem.0
             {
                 return Ok(());
@@ -680,23 +789,47 @@ impl Sessions {
         }
     }
 
-    /// Waits for an observer to let go, for [`OBSERVER_WAIT`] in all
-    /// across the calls that share `waited`.
-    fn wait_observers<'a>(
+    /// Waits a while for room, counted in the queue as `waiter` from the
+    /// first call on, for [`Limits::wait`] or, when only observers hold the
+    /// room, at least [`OBSERVER_WAIT`]; [`Error::Busy`] when the queue is
+    /// full or the wait has run out.
+    fn wait_for_room<'a>(
         &'a self,
         s: MutexGuard<'a, State>,
-        waited: &mut Option<Instant>,
+        full: Full,
+        waiter: &mut Option<Waiter<'a>>,
     ) -> Result<MutexGuard<'a, State>, Error> {
-        let end = *waited.get_or_insert_with(|| Instant::now() + OBSERVER_WAIT);
-        let left = end.saturating_duration_since(Instant::now());
+        if waiter.is_none() {
+            let least = if full == Full::Observed {
+                OBSERVER_WAIT
+            } else {
+                Duration::ZERO
+            };
+            *waiter = self.queue.join(least);
+        }
+        let left = waiter.as_ref().map_or(Duration::ZERO, Waiter::left);
         if left.is_zero() {
-            return Err(Error::Busy);
+            return Err(Error::Busy {
+                retry_after: self.retry_after(&s),
+            });
         }
         Ok(self
             .released
-            .wait_timeout(s, left)
+            .wait_timeout(s, left.min(ROOM_TICK))
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .0)
+    }
+
+    /// When room may free: the earliest end of a scan in progress, or the
+    /// queue's guess when none can tell.
+    fn retry_after(&self, s: &State) -> Duration {
+        s.live
+            .iter()
+            .map(|e| &e.session)
+            .chain(&s.building)
+            .filter_map(|session| session.scan_left())
+            .min()
+            .map_or_else(|| self.queue.retry_after(), |left| left.max(ROOM_TICK))
     }
 
     /// A new session of `mem` for files of `bytes`, counted in the held
@@ -708,6 +841,7 @@ impl Sessions {
             id: SessionId(s.last_id),
             mem,
             bytes,
+            started: Instant::now(),
             watch: Watch::new(),
             built: OnceLock::new(),
             ended: Arc::default(),
@@ -782,6 +916,7 @@ mod tests {
             sessions: 4,
             session_mem: Bytes::mib(16),
             total_mem: total,
+            wait: Duration::from_millis(500),
             ..Limits::default()
         });
         (dir, s, files)
@@ -830,7 +965,7 @@ mod tests {
         let first = ready(&s, &a, &b);
         let looking = s.observe(first).unwrap();
         let opened = s.open(&a, &c, Some(Bytes::mib(16)));
-        assert!(matches!(opened, Err(Error::Busy)), "{opened:?}");
+        assert!(matches!(opened, Err(Error::Busy { .. })), "{opened:?}");
         assert!(s.session(first).is_ok(), "busy, and the session is gone");
         drop(looking);
     }
@@ -861,7 +996,7 @@ mod tests {
                     Ok(opened) => {
                         opened.session.wait();
                     }
-                    Err(Error::Busy) => busy += 1,
+                    Err(Error::Busy { .. }) => busy += 1,
                     Err(err) => panic!("{err}"),
                 }
             }

@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The `summary` and `next_difference` tools of `rift-mcp` say that their ranges come from the segment map before refinement and can take in equal lines next to a change, and that `hunks_at` gives the exact lines.
+- `rift-mcp` waits up to 5 seconds for room instead of answering busy
+  at once: a new pair waits for a scan to end or a call to let go of its
+  diff. At most 4 calls wait at once. A busy answer that still comes
+  says when to retry: when the nearest scan should end, or in 5000 ms.
+- `rift serve` still answers `busy` at once, and its error data now
+  carries `retry_after_ms`: when the nearest scan should end, or 50 ms.
+  Waiting like `rift-mcp` waits for the VS Code extension to honour it
+  (#64).
 
 ### Added
 

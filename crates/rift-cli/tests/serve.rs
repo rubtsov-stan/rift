@@ -23,6 +23,7 @@ const NOT_INITIALIZED: i64 = -32002;
 const FILE: i64 = -32001;
 const BUDGET_EXCEEDED: i64 = -32003;
 const TOO_LARGE: i64 = -32004;
+const BUSY: i64 = -32005;
 const UNKNOWN_SESSION: i64 = -32006;
 const NOT_READY: i64 = -32008;
 
@@ -989,6 +990,30 @@ fn a_cancelled_request_is_answered_once() {
     }
     eprintln!("{cancelled} of 20 requests cancelled");
     // finish() checks that every id was answered exactly once.
+    clean_exit(c);
+}
+
+#[test]
+fn a_full_server_answers_busy_at_once_with_a_retry_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let slow = huge(dir.path());
+    let mut c = Client::start(&[]);
+    c.initialize();
+    // Four scanning sessions fill every slot; none can be dropped for room.
+    for n in 0..4 {
+        let b = write(dir.path(), &format!("b{n}"), b"x\n");
+        c.ok("open", json!({"a": slow, "b": b, "mem": "16M"}));
+    }
+    let b = write(dir.path(), "b4", b"x\n");
+    let began = Instant::now();
+    let e = c.err("open", json!({"a": slow, "b": b, "mem": "16M"}), BUSY);
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(e["data"]["what"], "sessions");
+    assert!(e["data"]["retry_after_ms"].as_u64().unwrap() > 0, "{e}");
     clean_exit(c);
 }
 

@@ -309,6 +309,11 @@ fn run(cli: &ServeArgs) -> anyhow::Result<()> {
             session_mem: per_session,
             total_mem: sessions_mem,
             idle: Duration::MAX,
+            // Busy at once: the VS Code client retries with its own
+            // backoff, and a server wait would add to it. Waiting like
+            // rift-mcp comes once the client honours retry_after_ms (#64).
+            wait: Duration::ZERO,
+            ..Limits::default()
         }),
         max_session_mem: per_session,
         default_mem: DEFAULT_MEM.min(per_session),

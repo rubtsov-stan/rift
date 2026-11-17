@@ -215,8 +215,14 @@ pub fn session_error(e: &Error, session: Option<&Session>) -> RpcError {
         Error::MemOverLimit { mem, limit } => {
             base.with(json!({"mem_bytes": mem.0, "max_mem_bytes": limit.0}))
         }
-        Error::Busy => base.with(json!({"what": "sessions"})),
-        Error::ResponsesBusy => base.with(json!({"what": "responses"})),
+        Error::Busy { retry_after } => base.with(json!({
+            "what": "sessions",
+            "retry_after_ms": retry_after.as_millis(),
+        })),
+        Error::ResponsesBusy { retry_after } => base.with(json!({
+            "what": "responses",
+            "retry_after_ms": retry_after.as_millis(),
+        })),
         // serve opens every session with `Sessions::open`, which has a pool.
         Error::NoResponsePool => base,
         Error::UnknownSession(id) => base.with(json!({"session": id.0})),
