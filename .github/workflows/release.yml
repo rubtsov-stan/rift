@@ -348,3 +348,16 @@ jobs:
     permissions:
       "actions": "write"
       "contents": "read"
+
+  custom-mcp-registry:
+    needs:
+      - plan
+      - announce
+    uses: $/.github/workflows/mcp-registry.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "attestations": "write"
+      "contents": "write"
+      "id-token": "write"

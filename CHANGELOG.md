@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Each release carries `rift-mcp-<version>.mcpb`, an MCP bundle of
+  `rift-mcp` for macOS (universal) and Linux (x86_64, aarch64), with the
+  same provenance files as the archives, and publishes it to the MCP
+  Registry as `io.github.rubtsov-stan/rift-mcp`. MCPB clients install it
+  from the file.
+
 ## [0.3.3] - 2026-11-14
 
 ### Changed

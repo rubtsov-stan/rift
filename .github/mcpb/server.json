@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.rubtsov-stan/rift-mcp",
+  "title": "Rift",
+  "description": "Diff two huge text files under a fixed memory limit: summary, hunks and the next difference.",
+  "version": "0.0.0",
+  "websiteUrl": "https://rubtsov-stan.github.io/rift/guide/mcp/",
+  "repository": { "url": "https://github.com/rubtsov-stan/rift", "source": "github" },
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/rubtsov-stan/rift/releases/download/v0.0.0/rift-mcp-0.0.0.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}
