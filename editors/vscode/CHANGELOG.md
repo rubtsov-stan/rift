@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Comparing again while a full server drops the shown comparison no longer raises
+  "The server no longer has this comparison" for the pair being replaced.
+
 ## [0.3.3] - 2026-11-14
 
 - Bundles `rift` 0.3.3.
