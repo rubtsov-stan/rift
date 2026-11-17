@@ -11,9 +11,9 @@ bench/linux-safe.sh --yes         # no wait
 bench/linux-safe.sh --disk-dir DIR --dry-run   # plan with the 50 GiB on-disk pair
 ```
 
-Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`, `--suite standard|le|all` (default `standard`; `le` runs only the low-entropy runs below, `all` runs both), `--reps N` (repetitions of each repeated run, 1 to 20, default 3).
+Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`, `--suite standard|le|tools|all` (default `standard`; `le` runs only the low-entropy runs below, `tools` only the comparison with other tools below, `all` runs standard and le), `--reps N` (repetitions of each repeated run, 1 to 20, default 3).
 
-The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 3) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
+The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 4) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
 Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to clone and fetch crates, GNU `time` at `/usr/bin/time`, `awk`, `tar`. `systemd-run --user`, `ionice`, `taskset`, `lscpu` and `systemd-detect-virt` are used when present. No Python.
 
@@ -50,6 +50,8 @@ Every run is stopped after 600 s and recorded as `timeout`. When rift fails or t
 
 New fields in `results.json` (schema 3), `null` where they do not apply: `approx_lines` (lines of A and B in approximate hunks, from `--stats`), `lines_ab` (lines of A plus B), `approx_share` (the first over the second), `changed_lines` (on a `diff` run, GNU diff's changed lines; on a `patch` run, the `-` and `+` lines of rift's diff it applied) and `roundtrip` (`ok`, `failed`, or `killed` when the patch cap killed `patch`, which says nothing about rift's diff; on a `patch` run). `rift_peak_heap_bytes` is now the exact count rift prints in parentheses where the build prints one. `report.md` adds a table with one row per low-entropy pair.
 
+Schema 4 adds `counts`: on a tools-suite run, what the tool reported as changed lines or keys by kind (empty elsewhere), or `no result` when it printed none. A tools-suite run the timeout stopped has `result` `timeout`, and a repetition after a kill or a stop is `skipped`.
+
 Thread count is set with `taskset -c 0-<k-1>`, not `RAYON_NUM_THREADS`: rift sizes its threads from `std::thread::available_parallelism()`, which follows the CPU affinity mask. If your CPU 0 is not in the allowed set, `taskset` fails and the scaling rows show it.
 
 The host section has the CPU model, threads, governor if readable, RAM, kernel, distro, virtualization, the rustc that built rift, the rift commit, and load average before and after. The page cache is reported as it is, never forced; with data in tmpfs it does not apply.
@@ -70,11 +72,32 @@ The script cannot drop the page cache without root and does not try. Read passes
 bench/linux-safe.sh --disk-dir /path/on/real/disk
 ```
 
+### Other tools (`--suite tools`)
+
+Rift against other line-diff and CSV tools on the same pairs. Each tool runs only if it is on `PATH`; a missing one is listed in the plan and the notes, and its rows are skipped. The script installs nothing. The versions go into the host section.
+
+- Line tools, on the `sql` and `csv` profiles: `rift --stats --mem 256M`, GNU `diff`, `git diff --no-index` with and without `--text`, `difft` (difftastic), and three floors: `cat a b | wc -c`, `cmp a b` (stops at the first differing byte) and `sort` both files then `comm -3` (sort cost included, sorted copies counted against the cap).
+- Key tools, on a shuffled CSV pair with an `id` column (`rift-gen --profile shuffled --rows csv`): `rift --key csv:id`, DuckDB (a FULL OUTER JOIN on `id` and an `EXCEPT` both ways, each at DuckDB's default `memory_limit` and at `256MB`, all columns read as text, spills to the scratch tmpfs), `csvdiff -p 0`, `qsv diff -k 0`, and `daff diff --id id` on the smallest pair only.
+- Pairs of 256 MiB, 1 GiB and 4 GiB, seed 7, 0.1% changes. A size runs in tmpfs when the pair, a cap of at least 2 GiB and the 2 GiB margin fit 60% of `MemAvailable`; the cap is 12 GiB or what that leaves. On a 16 GB host that is about 6 GiB for 256 MiB and 4.7 GiB for 1 GiB, and 4 GiB does not fit: with `--disk-dir DIR` it runs from `DIR` (page cache not dropped, about 18 GiB of free space needed), otherwise it is skipped with a note. `--disk-dir` with this suite runs no 50 GiB pair.
+- Every run is stopped after 600 s. A command the cap killed, the timeout stopped or that printed no counts is not run again on that pair or on larger ones; the report says so.
+- Each row records the counts the tool reported, changed lines or keys added, removed and changed, so a mismatch with rift shows in the table. The "Tool comparison" section of the report has the median, fastest and slowest time, the median RSS and the counts per command and pair.
+- On the 1 GiB pairs, the resident set of `rift`, `diff` and `difft` (sql) and of `rift --key` and DuckDB (key pair) is sampled every 100 ms into `raw/timeline-*.tsv`.
+
+Needs a systemd user scope for the caps: `prlimit --as` would stop DuckDB and qsv, which reserve far more address space than they use. Install the tools you want compared first, for example on Ubuntu:
+
+```sh
+sudo apt install diffutils git        # GNU diff, cmp, git
+cargo install difftastic              # or a release binary of difftastic
+# DuckDB CLI, qsv, csvdiff: release binaries from their GitHub pages, on PATH
+pip install --user daff
+bench/linux-safe.sh --suite tools --reps 5 --ref main --dry-run
+```
+
 ### What it does not do
 
 - It does not measure the disk, except through `--read-only-pair` and `--disk-dir`.
 - It does not control CPU frequency, other load or turbo; read the governor and load lines before trusting a number.
-- It does not compare against other diff tools beyond GNU `diff` and `git diff` on 1 GiB.
+- Outside `--suite tools`, it does not compare against other diff tools beyond GNU `diff` and `git diff`.
 - A build of a ref newer than `v0.1.0` (the default `v0.2.0` is) uses the toolchain that ref pins; a `v0.1.0` build uses the stable `cargo` of the host, and the report records the rustc.
 
 ### Testing the script off Linux
@@ -90,3 +113,6 @@ These knobs turn safety checks off. They exist so the plan, sizing, report and c
 | `RIFT_BENCH_LIMITER=systemd` | show the plan as if systemd scopes were available |
 | `RIFT_BENCH_DISK_SIZE=BYTES` | size of each file of the `--disk-dir` pair instead of 50 GiB; free space is still checked |
 | `RIFT_BENCH_LE_SIZES="S ..."` | low-entropy pair sizes in bytes, to run the suite on a few MiB |
+| `RIFT_BENCH_TOOLS_SIZES="S ..."` | tools-suite pair sizes in bytes |
+| `RIFT_BENCH_TOOLS_TIMEOUT=N` | seconds before a tools-suite run is stopped, instead of 600 |
+| `RIFT_BENCH_TOOLS_TIMELINE=N` | pair size in bytes for the RSS timelines, instead of 1 GiB |

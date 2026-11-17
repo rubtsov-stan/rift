@@ -4,7 +4,7 @@
 #
 #   bench/linux-safe.sh [--dry-run] [--yes] [--ref REF] [--repo URL]
 #                       [--read-only-pair DIR] [--disk-dir DIR]
-#                       [--suite standard|le|all] [--reps N]
+#                       [--suite standard|le|tools|all] [--reps N]
 #
 #   --dry-run            print the plan and exit
 #   --yes                skip the 10 second wait before the run starts
@@ -17,7 +17,10 @@
 #                        free; the pair is deleted afterwards
 #   --suite S            standard (default): the sql and csv runs; le: the
 #                        low-entropy runs, which need a REF whose rift-gen
-#                        has the distinct profile; all: both
+#                        has the distinct profile; all: both; tools: rift
+#                        against other diff and CSV tools (difftastic,
+#                        DuckDB, csvdiff, qsv, daff, each if installed) on
+#                        256 MiB, 1 GiB and, with --disk-dir, 4 GiB pairs
 #   --reps N             repetitions of each repeated run, 1 to 20 (default 3)
 #
 # Test knobs, for running the script on a host that is not Linux. They turn
@@ -31,12 +34,15 @@
 #                          (default 50 GiB); the disk size and tmpfs checks are
 #                          the only ones it relaxes: free space is still checked
 #   RIFT_BENCH_LE_SIZES=S  low-entropy pair sizes in bytes, space-separated
+#   RIFT_BENCH_TOOLS_SIZES=S  tools-suite pair sizes in bytes, space-separated
+#   RIFT_BENCH_TOOLS_TIMEOUT=N  seconds before a tools-suite run is stopped
+#   RIFT_BENCH_TOOLS_TIMELINE=N pair size in bytes for the RSS timelines
 #
 # See bench/README.md.
 set -eu
 
 GIB=1073741824
-schema=3
+schema=4
 repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 suite=standard reps=3 ropair=
 diskdir=
 diskroot=
@@ -81,6 +87,10 @@ esac
 [ "$reps" -ge 1 ] && [ "$reps" -le 20 ] || usage
 case $suite in
   standard) ;;
+  tools)
+    for t in timeout cmp sort comm; do
+      command -v "$t" >/dev/null 2>&1 || die "$t not found (coreutils, diffutils); the tools suite needs it"
+    done ;;
   le|all)
     command -v timeout >/dev/null 2>&1 || die "timeout not found (coreutils); the low-entropy runs need it"
     command -v patch >/dev/null 2>&1 || die "patch not found; the low-entropy runs need it"
@@ -92,6 +102,8 @@ disksize=$((50 * GIB))
 [ "$testing" != 1 ] || disksize=${RIFT_BENCH_DISK_SIZE:-$disksize}
 diskmargin=$((10 * GIB))
 diskneed=$((2 * disksize + diskmargin))
+# The tools suite puts only its 4 GiB pairs on the disk.
+[ "$suite" != tools ] || diskneed=$((8 * GIB + diskmargin))
 
 is_tmpfs() { [ "$testing" = 1 ] || [ "$(stat -f -c %T "$1" 2>/dev/null)" = tmpfs ]; }
 free_bytes() { df -Pk "$1" | awk 'NR==2 {print $4 * 1024}'; }
@@ -111,6 +123,8 @@ if [ -n "$diskdir" ]; then
   [ "$disk_free" -ge "$diskneed" ] ||
     die "--disk-dir $diskdir has $((disk_free / 1048576)) MiB free, needs $((diskneed / 1048576)) MiB (two files of $((disksize / 1048576)) MiB plus a $((diskmargin / 1048576)) MiB margin)"
   diskroot=$(cd "$diskdir" && pwd)
+  # The tools suite puts this path into DuckDB's SQL in single quotes.
+  case $diskroot in *"'"*) die "--disk-dir $diskroot has a single quote in its path" ;; esac
   # Block device and model, when /sys shows them without root. LVM, btrfs
   # multi-device and network mounts have no single model; the report says so.
   disk_dev=$(df -P "$diskroot" | awk 'NR==2 {print $1}')
@@ -189,7 +203,7 @@ for s in $((GIB / 16)) $((GIB / 4)) "$GIB"; do
 done
 [ "$testing" != 1 ] || le_sizes=${RIFT_BENCH_LE_SIZES:-$le_sizes}
 le_sizes=${le_sizes# }
-[ "$suite" = standard ] || [ -n "$le_sizes" ] ||
+case $suite in standard|tools) true ;; *) false ;; esac || [ -n "$le_sizes" ] ||
   die "refusing to start: not even a 64 MiB low-entropy pair fits within 60% of MemAvailable"
 le_points="distinct-1 distinct-2 distinct-10 distinct-100 distinct-10000 distinct-1000000 periodic-1000 runs alternating empty"
 le_small=${le_sizes%% *} le_diffcap=$((2 * GIB)) le_tmo=600
@@ -202,6 +216,45 @@ bgl_size=313217616
 if command -v curl >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 &&
    command -v sha256sum >/dev/null 2>&1; then bgl_tools=1; else bgl_tools=0; fi
 if [ "$bgl_tools" = 1 ] && fits "$bgl_size" $((bgl_size + GIB)); then bglok=1; else bglok=0; fi
+
+# Tools suite: each pair size in tmpfs when the pair, a cap and the 2 GiB
+# margin fit the 60% rule with a cap of at least 2 GiB; else on --disk-dir.
+# The cap is 12 GiB or the most the rule leaves.
+tool_tmo=600
+[ "$testing" != 1 ] || tool_tmo=${RIFT_BENCH_TOOLS_TIMEOUT:-$tool_tmo}
+tool_sizes="$((GIB / 4)) $GIB $((4 * GIB))"
+[ "$testing" != 1 ] || tool_sizes=${RIFT_BENCH_TOOLS_SIZES:-$tool_sizes}
+tool_tl=$GIB
+[ "$testing" != 1 ] || tool_tl=${RIFT_BENCH_TOOLS_TIMELINE:-$tool_tl}
+min_cap() { if [ "$1" -lt $((12 * GIB)) ]; then echo "$1"; else echo $((12 * GIB)); fi; }
+tool_plan=
+for s in $tool_sizes; do
+  c=$(min_cap $((limit - 2 * s - 2 * GIB)))
+  if [ "$c" -ge $((2 * GIB)) ] && [ $((2 * s + GIB)) -le "$tmpfs_free" ]; then
+    tool_plan="$tool_plan $s:tmpfs:$c"
+  elif [ -n "$diskroot" ] && [ $((limit - 2 * GIB)) -ge $((2 * GIB)) ]; then
+    # On disk the pair is page cache, which the kernel can drop.
+    tool_plan="$tool_plan $s:disk:$(min_cap $((limit - 2 * GIB)))"
+  else
+    tool_plan="$tool_plan $s:none:0"
+  fi
+done
+tool_plan=${tool_plan# }
+# Optional tools: each row runs only if the tool is on PATH.
+have() { command -v "$1" >/dev/null 2>&1; }
+tool_version() {
+  case $1 in
+    diff|cmp|sort) "$1" --version 2>/dev/null | head -n1 ;;
+    git) git --version ;;
+    difft) difft --version 2>/dev/null | head -n1 ;;
+    duckdb) duckdb --version 2>/dev/null | head -n1 ;;
+    csvdiff) csvdiff --version 2>/dev/null | head -n1 ;;
+    qsv) qsv --version 2>/dev/null | cut -d' ' -f1-2 ;;
+    daff) echo "daff $(daff version 2>/dev/null | head -n1)" ;;
+  esac
+}
+[ "$suite" != tools ] || [ "$testing" = 1 ] || [ "$limiter" = systemd ] ||
+  die "the tools suite needs a systemd user scope for its caps; prlimit's address-space cap would stop DuckDB and qsv, which reserve far more address space than they use"
 
 cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 have_taskset=0
@@ -224,14 +277,15 @@ plan() {
   echo "  suite             $suite"
   echo "  repetitions       $reps of each repeated run"
   case $limiter in
-    systemd) echo "  memory cap        systemd-run --user scope, MemoryMax, MemorySwapMax=0: rift 1 GiB (1.5 GiB for --mem 1G)" ;;
+    systemd) if [ "$suite" = tools ]; then echo "  memory cap        systemd-run --user scope, MemoryMax, MemorySwapMax=0: per pair size, below"
+             else echo "  memory cap        systemd-run --user scope, MemoryMax, MemorySwapMax=0: rift 1 GiB (1.5 GiB for --mem 1G)"; fi ;;
     prlimit) echo "  memory cap        prlimit --as (systemd user scope unavailable): address space, not RSS" ;;
     none) echo "  memory cap        none available (no systemd user scope, no prlimit): diff and git diff skipped" ;;
   esac
-  [ "$suite" = le ] || plan_standard
-  [ "$suite" = standard ] || plan_le
+  case $suite in standard|all) plan_standard ;; tools) plan_tools ;; esac
+  case $suite in le|all) plan_le ;; esac
   [ -z "$ropair" ] || echo "  read-only pair    $ropair (only read)"
-  if [ -n "$diskdir" ]; then
+  if [ -n "$diskdir" ] && [ "$suite" != tools ]; then
     echo "  on-disk pair      $(gib "$disksize") each of A and B (profile sql, seed 7, 0.1% changes) in $diskroot ($disk_fstype on $disk_dev, $disk_model, $disk_rot)"
     echo "  disk use          $(gib $((2 * disksize))) written, $(gib "$disk_free") free, $(gib "$diskneed") required (pair plus $(gib "$diskmargin") margin); deleted afterwards"
     echo "  disk runs         cat a b | wc -c, rift --summary, rift --stats, all --mem 256M, one run each, cap 1 GiB; diff and git diff skipped: they need several times the pair in memory"
@@ -258,6 +312,25 @@ plan_standard() {
   else
     echo "  thread scaling    skipped: taskset not found"
   fi
+}
+
+plan_tools() {
+  echo "  pairs             seed 7, 0.1% changes; profiles sql and csv for the line tools, shuffled csv for the key tools"
+  for e in $tool_plan; do
+    s=${e%%:*} w=${e#*:}; c=${w#*:}; w=${w%%:*}
+    case $w in
+      tmpfs) echo "    $(gib "$s")           in tmpfs, cap $(gib "$c")" ;;
+      disk) echo "    $(gib "$s")           on $diskroot (page cache not dropped), cap $(gib "$c")" ;;
+      none) echo "    $(gib "$s")           not run: the pair and a 2 GiB cap do not fit within 60% of MemAvailable; --disk-dir puts it on a disk" ;;
+    esac
+  done
+  echo "  line tools        rift --stats --mem 256M, diff, git diff --no-index, git diff --no-index --text, difft, cat a b | wc -c, cmp, sort | comm -3"
+  echo "  key tools         rift --key csv:id, DuckDB (FULL OUTER JOIN and EXCEPT, each at its default memory_limit and at 256MB), csvdiff, qsv diff, daff (256 MiB only)"
+  echo "  runs              $reps of each; any run is stopped after $tool_tmo s; a command that is killed, stopped or prints no counts skips its later runs and larger sizes"
+  echo "  RSS timeline      every 100 ms on the 1 GiB pairs: rift, diff and difft on sql, rift --key and DuckDB on the key pair"
+  for t in diff git difft duckdb csvdiff qsv daff; do
+    if have "$t"; then echo "  $(printf '%-17s' "$t")$(tool_version "$t")"; else echo "  $(printf '%-17s' "$t")not installed: its rows are skipped"; fi
+  done
 }
 
 plan_le() {
@@ -334,7 +407,7 @@ echo "Building $ref ($commit) with $rustc_v" >&2
 (cd "$scratch/src" && $niceio cargo build --release $locked -p rift-diff -p rift-gen) >"$raw/build.log" 2>&1 ||
   { tail -n 20 "$raw/build.log" >&2; die "build failed"; }
 cp "$scratch/target/release/rift" "$scratch/target/release/rift-gen" "$scratch/bin/"
-if [ "$suite" != standard ] && [ "$bglok" = 1 ]; then
+if { [ "$suite" = le ] || [ "$suite" = all ]; } && [ "$bglok" = 1 ]; then
   # shellcheck disable=SC2086
   (cd "$scratch/src" && $niceio cargo build --release $locked -p rift-core --example spike) >>"$raw/build.log" 2>&1 ||
     { tail -n 20 "$raw/build.log" >&2; die "build of the spike example failed"; }
@@ -342,7 +415,7 @@ if [ "$suite" != standard ] && [ "$bglok" = 1 ]; then
 fi
 rm -rf "$scratch/target" "$scratch/cargo" "$scratch/src"
 rift=$scratch/bin/rift gen=$scratch/bin/rift-gen spike=$scratch/bin/spike
-if [ "$suite" != standard ]; then
+if [ "$suite" = le ] || [ "$suite" = all ]; then
   "$gen" --help | grep -q -- --distinct || die "rift-gen at $ref has no low-entropy profiles; pass a --ref that has them"
 fi
 
@@ -423,12 +496,12 @@ run_one() {
   n=$((n + 1))
   id=$(printf '%03d' "$n")
   b=$raw/$id
-  # Once the cap kills a command on a pair, its later repetitions would only
-  # be killed again: record them as skipped instead.
+  # Once the cap kills a command on a pair, or the timeout stops it, its
+  # later repetitions would only fail again: record them as skipped instead.
   key="$grp|$prof|$sz|$tool|$thr"
   if grep -qxF "$key" "$killed"; then
-    echo "[$id] $grp $prof $(gib "$sz") $tool threads=$thr rep=$rep: skipped, killed by its cap before" >&2
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\tskipped\t\t\t\t\t%s\n' \
+    echo "[$id] $grp $prof $(gib "$sz") $tool threads=$thr rep=$rep: skipped, killed or stopped before" >&2
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\t\t\t\t\t\tskipped\t\t\t\t\t%s\t\n' \
       "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$*" >> "$runs"
     ec=
     return
@@ -449,6 +522,7 @@ run_one() {
     count) $lim "$timebin" -v -o "$b.time" "$@" 2> "$b.err" | wc -c | tr -d ' ' > "$b.bytes" || true ;;
     lines) $lim "$timebin" -v -o "$b.time" "$@" 2> "$b.err" |
       LC_ALL=C awk '{ n += length($0) + 1 } /^[<>]/ { c++ } END { print n + 0, c + 0 }' > "$b.bytes" || true ;;
+    counted) $lim "$timebin" -v -o "$b.time" "$@" 2> "$b.err" | "$x_counter" > "$b.bytes" || true ;;
     cmp)
       if $lim "$timebin" -v -o "$b.time" "$@" 2> "$b.err" | cmp -s - "$x_cmp"; then
         echo same > "$b.cmp"
@@ -462,15 +536,18 @@ run_one() {
   sys=$(awk -F': ' '/System time/ {print $2}' "$b.time" 2>/dev/null || true)
   rss=$(awk -F': ' '/Maximum resident/ {print $2}' "$b.time" 2>/dev/null || true)
   result=$(scope_result "$unit")
-  # timeout exits 124 when it stopped the command.
-  if [ "$1" = timeout ]; then case $ec in 124|137) result=timeout ;; esac; fi
-  [ "$result" != oom-kill ] || echo "$key" >> "$killed"
+  # timeout exits 124 when it stopped the command, and 137 when it had to
+  # kill it; a command the cap killed also ends in 137.
+  if [ "$1" = timeout ]; then
+    case $ec in 124) result=timeout ;; 137) [ "$result" = oom-kill ] || result=timeout ;; esac
+  fi
+  case $result in oom-kill|timeout) echo "$key" >> "$killed" ;; esac
   heap=
   case $tool in
     *--summary*) heap=$(heap_bytes "$b.out") ;;
     *--stats*) heap=$(heap_bytes "$b.err") ;;
   esac
-  approx='' changed=$x_changed round=''
+  approx='' changed=$x_changed round='' counts=''
   case $tool in
     *--stats*) approx=$(awk '/^approx / {print $4; exit}' "$b.err" 2>/dev/null || true) ;;
   esac
@@ -478,6 +555,9 @@ run_one() {
     count) out=$(cat "$b.bytes") ;;
     file) out=$(wc -c < "$b.out" | tr -d ' ') ;;
     lines) read -r out changed < "$b.bytes" || true ;;
+    counted) IFS=$(printf '\t') read -r out changed counts < "$b.bytes" || true
+      [ "$changed" != - ] || changed=
+      [ "$counts" != - ] || counts= ;;
     cmp)
       out=
       # patch exits 0 only when every hunk applied. A patch its cap killed
@@ -485,11 +565,11 @@ run_one() {
       if [ "$result" = oom-kill ]; then round=killed
       elif [ "$ec" = 0 ] && [ "$(cat "$b.cmp")" = same ]; then round=ok; else round=failed; fi ;;
   esac
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$wall" "$user" "$sys" "$rss" "$ec" "$heap" "$out" "$result" \
-    "$approx" "$x_lines" "$changed" "$round" "$*" >> "$runs"
+    "$approx" "$x_lines" "$changed" "$round" "$(printf '%s' "$*" | tr '\t\n' '  ')" "$counts" >> "$runs"
 }
-x_lines='' x_changed='' x_cmp=''
+x_lines='' x_changed='' x_cmp='' x_counter=''
 
 # core_runs GROUP PROFILE SIZE A B: the runs every pair gets.
 core_runs() {
@@ -544,7 +624,7 @@ gen_pair() {
 
 # ---- standard runs ---------------------------------------------------------
 
-if [ "$suite" != le ]; then
+if [ "$suite" = standard ] || [ "$suite" = all ]; then
   # A pair small enough for diff and git diff to fit their cap, so all three
   # tools get real times on the same data.
   if [ "$cmpok" = 1 ]; then
@@ -639,7 +719,7 @@ le_run() {
   return "$lrc"
 }
 
-if [ "$suite" != standard ]; then
+if [ "$suite" = le ] || [ "$suite" = all ]; then
   for pt in $le_points; do
     case $pt in
       distinct-*) set -- --profile distinct --distinct "${pt#distinct-}" ;;
@@ -680,6 +760,181 @@ if [ "$suite" != standard ]; then
   fi
 fi
 
+# ---- tools suite -----------------------------------------------------------
+
+# Counters for run_one's counted mode: each reads a tool's output on stdin
+# and prints bytes, changed lines or keys, and the counts by kind, tab-separated.
+# A field with no value is "-": read would merge two tabs into one. A tool
+# that printed no counts gets "no result", which the report lists as failed.
+# Unified diffs: a hunk header says how many lines of A and B follow, so a
+# deleted line that starts with "--" is not taken for a file header.
+count_unified() {
+  LC_ALL=C awk '{ n += length($0) + 1 }
+  ra > 0 || rb > 0 { c = substr($0, 1, 1)
+    if (c == "-") { d++; ra-- } else if (c == "+") { a++; rb-- } else if (c == " ") { ra--; rb-- }
+    next }
+  /^@@ / { split($2, x, ","); ra = (2 in x) ? x[2] + 0 : 1; split($3, y, ","); rb = (2 in y) ? y[2] + 0 : 1 }
+  END { printf "%d\t%d\t-%d +%d\n", n, a + d, d, a }'
+}
+count_lines() { LC_ALL=C awk '{ n += length($0) + 1 } END { printf "%d\t%d\t-\n", n, NR }'; }
+count_rift_keys() {
+  LC_ALL=C awk '{ n += length($0) + 1; c = substr($0, 1, 1) } c == "+" { a++ } c == "-" { r++ } c == "~" { m++ }
+  END { printf "%d\t%d\t+%d -%d ~%d\n", n, a + r + m, a, r, m }'
+}
+# DuckDB prints a header line and one row of counts after the memory limit.
+count_duck_join() { LC_ALL=C awk -F, '{ n += length($0) + 1 } NR == 2 { a = $2; r = $3; m = $4; l = $1; ok = 1 }
+  END { if (ok) printf "%d\t%d\t+%d -%d ~%d (memory_limit %s)\n", n, a + r + m, a, r, m, l; else printf "%d\t-\tno result\n", n }'; }
+count_duck_except() { LC_ALL=C awk -F, '{ n += length($0) + 1 } NR == 2 { x = $2; y = $3; l = $1; ok = 1 }
+  END { if (ok) printf "%d\t%d\trows only in A %d, only in B %d (memory_limit %s)\n", n, x + y, x, y, l; else printf "%d\t-\tno result\n", n }'; }
+# csvdiff prints its counts on stderr, which the command line sends here.
+count_csvdiff() {
+  LC_ALL=C awk '{ n += length($0) + 1 } /^# (Additions|Modifications|Deletions) \(/ { v = $3; gsub(/[()]/, "", v); k[$2] = v; ok = 1 }
+  END { if (ok) printf "%d\t%d\t+%d -%d ~%d\n", n, k["Additions"] + k["Deletions"] + k["Modifications"], k["Additions"], k["Deletions"], k["Modifications"]; else printf "%d\t-\tno result\n", n }'
+}
+# qsv diff writes a changed row as a - row and a + row.
+count_qsv() { LC_ALL=C awk -F, '{ n += length($0) + 1 } NR == 1 { ok = ($NF == "diffresult" || $1 == "diffresult") } NR > 1 && $1 == "+" { a++ } NR > 1 && $1 == "-" { r++ }
+  END { if (ok) printf "%d\t-\trows + %d, - %d\n", n, a, r; else printf "%d\t-\tno result\n", n }'; }
+count_daff() { LC_ALL=C awk -F, '{ n += length($0) + 1 } $1 == "@@" { ok = 1 } $1 == "+++" { a++ } $1 == "---" { r++ } $1 == "->" { m++ }
+  END { if (ok) printf "%d\t%d\t+%d -%d ~%d\n", n, a + r + m, a, r, m; else printf "%d\t-\tno result\n", n }'; }
+
+tfail=$scratch/tools-failed.txt
+: > "$tfail"
+
+# tool_rows PROFILE SIZE TOOL CAP MODE COUNTER CMD...: the repetitions of one
+# row, each stopped after $tool_tmo s. A command that was killed, stopped or
+# printed no counts on a smaller pair is not run on this one.
+tool_rows() {
+  tp=$1 ts=$2 tt=$3 tc=$4 tm=$5; x_counter=$6; shift 6
+  if grep -qxF "$tp|$tt" "$tfail"; then
+    note "$tt on $tp $(gib "$ts") not run: it failed on a smaller pair"
+    return
+  fi
+  for r in $(seq "$reps"); do
+    run_one tools "$tp" "$ts" "$tt" all "$tc" "$r" "$tm" timeout -k 10 "$tool_tmo" "$@"
+    case $result in oom-kill|timeout) echo "$tp|$tt" >> "$tfail" ;; esac
+    [ "$counts" != "no result" ] || echo "$tp|$tt" >> "$tfail"
+  done
+  x_counter=
+}
+
+# timeline NAME CAP CMD...: VmRSS of the command every 100 ms, as
+# milliseconds and KiB, until it ends or $tool_tmo s pass. systemd-run
+# --scope, nice and ionice exec the command, so $! is its pid.
+timeline() {
+  tn=$1 tc=$2; shift 2
+  out=$raw/timeline-$tn.tsv
+  echo "timeline $tn" >&2
+  # shellcheck disable=SC2086
+  case $limiter in
+    systemd) systemd-run --user --scope -q -p MemoryMax="$tc" -p MemorySwapMax=0 $niceio "$@" > /dev/null 2>&1 & ;;
+    *) $niceio "$@" > /dev/null 2>&1 & ;;
+  esac
+  tp=$!
+  t0=$(date +%s%N)
+  printf 'ms\trss_kib\n' > "$out"
+  while kill -0 "$tp" 2>/dev/null; do
+    t=$(( ($(date +%s%N) - t0) / 1000000 ))
+    awk -v t="$t" '/^VmRSS:/ { print t "\t" $2 }' "/proc/$tp/status" >> "$out" 2>/dev/null || true
+    if [ "$t" -gt $((tool_tmo * 1000)) ]; then kill "$tp" 2>/dev/null || true; echo "stopped after $tool_tmo s" >> "$out"; fi
+    sleep 0.1
+  done
+  wait "$tp" 2>/dev/null || true
+}
+
+# One line each: the query is part of the command recorded in runs.tsv.
+duck_join() {
+  tr '\n' ' ' <<SQL
+SET temp_directory='$scratch/duck.tmp'; $1
+SELECT current_setting('memory_limit') AS memory_limit,
+  count(*) FILTER (WHERE a.id IS NULL) AS added,
+  count(*) FILTER (WHERE b.id IS NULL) AS removed,
+  count(*) FILTER (WHERE a.id IS NOT NULL AND b.id IS NOT NULL AND a IS DISTINCT FROM b) AS changed
+FROM read_csv('$2', all_varchar = true) a FULL OUTER JOIN read_csv('$3', all_varchar = true) b ON a.id = b.id;
+SQL
+}
+duck_except() {
+  tr '\n' ' ' <<SQL
+SET temp_directory='$scratch/duck.tmp'; $1
+SELECT current_setting('memory_limit') AS memory_limit,
+  (SELECT count(*) FROM (FROM read_csv('$2', all_varchar = true) EXCEPT FROM read_csv('$3', all_varchar = true))) AS only_a,
+  (SELECT count(*) FROM (FROM read_csv('$3', all_varchar = true) EXCEPT FROM read_csv('$2', all_varchar = true))) AS only_b;
+SQL
+}
+
+if [ "$suite" = tools ]; then
+  for t in diff git difft duckdb csvdiff qsv daff sort cmp; do
+    if have "$t"; then fact "version_$t" "$(tool_version "$t")"; else fact "version_$t" "not installed"; fi
+  done
+  fact tool_timeout_s "$tool_tmo"
+  have difft || note "difftastic not installed: its rows are skipped"
+  have duckdb || note "DuckDB not installed: its rows are skipped"
+  have csvdiff || note "csvdiff not installed: its rows are skipped"
+  have qsv || note "qsv not installed: its rows are skipped"
+  have daff || note "daff not installed: its rows are skipped"
+  first=${tool_plan%% *}; first=${first%%:*}
+  for e in $tool_plan; do
+    ts=${e%%:*} w=${e#*:}; tc=${w#*:}; w=${w%%:*}
+    case $w in
+      none) note "tools: $(gib "$ts") pairs not run: the pair and a 2 GiB cap do not fit within 60% of MemAvailable (--disk-dir puts them on a disk)"; continue ;;
+      disk)
+        mkdir -m 700 "$diskroot/rift-bench-disk-$$" 2>/dev/null || [ -d "$diskroot/rift-bench-disk-$$" ] ||
+          die "cannot create a directory in $diskroot"
+        diskwork=$diskroot/rift-bench-disk-$$
+        pair=$diskwork/pair
+        note "tools: the $(gib "$ts") pairs were on $diskroot ($disk_fstype, $disk_model), page cache not dropped; the other sizes were in tmpfs" ;;
+      tmpfs) pair=$scratch/pair ;;
+    esac
+    for prof in sql csv; do
+      gen_pair "$ts" "$prof" --profile "$prof"
+      a=$pair/a bb=$pair/b
+      tool_rows "$prof" "$ts" "cat a b | wc -c" "$tc" count '' cat "$a" "$bb"
+      tool_rows "$prof" "$ts" "cmp a b" "$tc" count '' cmp "$a" "$bb"
+      tool_rows "$prof" "$ts" "rift --stats --mem 256M" "$tc" counted count_unified "$rift" --stats --mem 256M "$a" "$bb"
+      tool_rows "$prof" "$ts" "diff a b" "$tc" lines '' diff "$a" "$bb"
+      tool_rows "$prof" "$ts" "git diff --no-index a b" "$tc" counted count_unified git diff --no-index "$a" "$bb"
+      tool_rows "$prof" "$ts" "git diff --no-index --text a b" "$tc" counted count_unified git diff --no-index --text "$a" "$bb"
+      have difft && tool_rows "$prof" "$ts" "difft a b" "$tc" count '' difft --color never "$a" "$bb"
+      # Both sorted copies go next to the pair, so they count against the cap.
+      # shellcheck disable=SC2016
+      tool_rows "$prof" "$ts" "sort a, sort b, comm -3" "$tc" counted count_lines \
+        sh -c 'LC_ALL=C sort -T "$3" "$1" > "$3/sa" && LC_ALL=C sort -T "$3" "$2" > "$3/sb" && LC_ALL=C comm -3 "$3/sa" "$3/sb"; s=$?; rm -f "$3/sa" "$3/sb"; exit $s' \
+        sh "$a" "$bb" "$pair"
+      if [ "$ts" = "$tool_tl" ] && [ "$prof" = sql ]; then
+        timeline rift-sql "$tc" "$rift" --stats --mem 256M "$a" "$bb"
+        timeline diff-sql "$tc" diff "$a" "$bb"
+        have difft && timeline difft-sql "$tc" difft --color never "$a" "$bb"
+      fi
+      rm -rf "$pair"
+    done
+    gen_pair "$ts" keys --profile shuffled --rows csv
+    # qsv reads only files whose name says CSV.
+    mv "$pair/a" "$pair/a.csv"; mv "$pair/b" "$pair/b.csv"
+    a=$pair/a.csv bb=$pair/b.csv
+    mkdir -p "$scratch/duck.tmp"
+    tool_rows keys "$ts" "rift --key csv:id" "$tc" counted count_rift_keys "$rift" --key csv:id "$a" "$bb"
+    if have duckdb; then
+      tool_rows keys "$ts" "duckdb full outer join" "$tc" counted count_duck_join duckdb -csv -c "$(duck_join '' "$a" "$bb")"
+      tool_rows keys "$ts" "duckdb full outer join, memory_limit 256MB" "$tc" counted count_duck_join duckdb -csv -c "$(duck_join "SET memory_limit='256MB';" "$a" "$bb")"
+      tool_rows keys "$ts" "duckdb except" "$tc" counted count_duck_except duckdb -csv -c "$(duck_except '' "$a" "$bb")"
+      tool_rows keys "$ts" "duckdb except, memory_limit 256MB" "$tc" counted count_duck_except duckdb -csv -c "$(duck_except "SET memory_limit='256MB';" "$a" "$bb")"
+    fi
+    # shellcheck disable=SC2016
+    have csvdiff && tool_rows keys "$ts" "csvdiff -p 0" "$tc" counted count_csvdiff sh -c 'exec csvdiff "$1" "$2" -p 0 2>&1' sh "$a" "$bb"
+    have qsv && tool_rows keys "$ts" "qsv diff -k 0" "$tc" counted count_qsv qsv diff -k 0 "$a" "$bb"
+    # daff took 7.9 s on a 4 MiB pair on an Apple M1; larger pairs would only time out.
+    if have daff && [ "$ts" = "$first" ]; then
+      tool_rows keys "$ts" "daff diff --id id" "$tc" counted count_daff daff diff --id id --output-format csv "$a" "$bb"
+    fi
+    if [ "$ts" = "$tool_tl" ]; then
+      timeline rift-keys "$tc" "$rift" --key csv:id "$a" "$bb"
+      have duckdb && timeline duckdb-keys "$tc" duckdb -csv -c "$(duck_join '' "$a" "$bb")"
+    fi
+    rm -rf "$pair" "$scratch/duck.tmp"
+    if [ "$w" = disk ]; then rm -rf "$diskwork"; diskwork=; fi
+  done
+  note "tools: diff and difft run on one thread; rift, DuckDB and qsv use every CPU. difftastic is built for code: above its size limits it falls back to a line diff, which its output names \"Text\". git diff --no-index calls files over 512 MiB binary and prints no diff unless given --text. cmp stops at the first differing byte, so its time is not a read of both files. sort | comm compares sorted lines as sets, so moved lines do not count as changes. DuckDB spills to $scratch/duck.tmp, which is tmpfs, so a spill is RAM charged to its cap."
+fi
+
 if [ -n "$ropair" ]; then
   rsz=$(wc -c < "$ropair/a" | tr -d ' ')
   core_runs read-only-pair existing "$rsz" "$ropair/a" "$ropair/b"
@@ -687,7 +942,7 @@ fi
 
 # ---- on-disk pair (--disk-dir) ---------------------------------------------
 
-if [ -n "$diskdir" ]; then
+if [ -n "$diskdir" ] && [ "$suite" != tools ]; then
   # Set only after mkdir succeeds, so the trap never removes a directory it
   # did not create. Interrupt, error or exit removes the pair.
   mkdir -m 700 "$diskroot/rift-bench-disk-$$" || die "cannot create a directory in $diskroot"
@@ -731,9 +986,9 @@ $1 == "F" { f[++nf] = $2; v[nf] = $3; next }
 $1 == "N" { nt[++nn] = $2; next }
 {
   share = ($18 != "" && $19 > 0) ? sprintf("%.6f", $18 / $19) : ""
-  r[++nr] = sprintf("    {\"id\": \"%s\", \"group\": \"%s\", \"profile\": \"%s\", \"size_bytes\": %s, \"tool\": \"%s\", \"threads\": \"%s\", \"cap_bytes\": %s, \"rep\": %s, \"wall_s\": %s, \"user_s\": %s, \"sys_s\": %s, \"max_rss_kb\": %s, \"exit_code\": %s, \"rift_peak_heap_bytes\": %s, \"output_bytes\": %s, \"result\": \"%s\", \"oom_killed\": %s, \"approx_lines\": %s, \"lines_ab\": %s, \"approx_share\": %s, \"changed_lines\": %s, \"roundtrip\": %s, \"command\": \"%s\"}",
+  r[++nr] = sprintf("    {\"id\": \"%s\", \"group\": \"%s\", \"profile\": \"%s\", \"size_bytes\": %s, \"tool\": \"%s\", \"threads\": \"%s\", \"cap_bytes\": %s, \"rep\": %s, \"wall_s\": %s, \"user_s\": %s, \"sys_s\": %s, \"max_rss_kb\": %s, \"exit_code\": %s, \"rift_peak_heap_bytes\": %s, \"output_bytes\": %s, \"result\": \"%s\", \"oom_killed\": %s, \"approx_lines\": %s, \"lines_ab\": %s, \"approx_share\": %s, \"changed_lines\": %s, \"roundtrip\": %s, \"command\": \"%s\", \"counts\": \"%s\"}",
     $2, $3, $4, num($5), esc($6), $7, num($8), num($9), num($10), num($11), num($12), num($13), num($14), num($15), num($16), $17, ($17 == "oom-kill" ? "true" : "false"),
-    num($18), num($19), num(share), num($20), ($21 == "" ? "null" : "\"" $21 "\""), esc($22))
+    num($18), num($19), num(share), num($20), ($21 == "" ? "null" : "\"" $21 "\""), esc($22), esc($23))
 }
 END {
   print "{\n  \"schema_version\": " schema ",\n  \"host\": {"
@@ -747,7 +1002,7 @@ END {
 
 {
   echo "Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
-  [ -z "$diskdir" ] || echo "Exception: the group \`disk\` ran on a pair stored on disk ($disk_fstype); see the notes."
+  [ -z "$diskdir" ] || [ "$suite" = tools ] || echo "Exception: the group \`disk\` ran on a pair stored on disk ($disk_fstype); see the notes."
   echo
   echo "## Host"
   echo
@@ -775,6 +1030,28 @@ END {
   function h(b,   u, i) { if (b == "") return ""; split("B KiB MiB GiB TiB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } return sprintf(i == 1 ? "%d %s" : "%.1f %s", b, u[i]) }
   { printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
       $1, $2, $3, h($4), $5, $6, $8, $9, $10, $11, h($12 == "" ? "" : $12 * 1024), h($14), h($15), $13, $16 }' "$runs"
+  if awk -F'\t' '$2 == "tools" { f = 1 } END { exit !f }' "$runs"; then
+    echo
+    echo "## Tool comparison"
+    echo
+    echo "One row per command and pair. Time is the median wall time of the runs that finished, with the fastest and slowest; RSS is the median peak resident set; counts are what the tool reported, as changed lines (- and +) or keys (+ added, - removed, ~ changed); failed lists the runs the cap killed (oom-kill), the timeout stopped (timeout), that printed no counts (no result, with the exit code; the tool's message is in raw/ID.err), or that were skipped after a kill or a stop. Every tool's version is under Host."
+    echo
+    echo "| pair | size | tool | runs | time | fastest | slowest | RSS | peak heap | output | counts | failed |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
+    LC_ALL=C sort -t "$(printf '\t')" -k3,3 -k4,4n -k1,1 "$runs" | awk -F'\t' '
+    function h(b,   u, i) { if (b == "") return ""; split("B KiB MiB GiB TiB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } return sprintf(i == 1 ? "%d %s" : "%.1f %s", b, u[i]) }
+    function med(s,   v, n, i, j, t) { n = split(s, v, " "); for (i = 2; i <= n; i++) { t = v[i] + 0; for (j = i - 1; j >= 1 && v[j] + 0 > t; j--) v[j + 1] = v[j]; v[j + 1] = t }
+      lo = v[1]; hi = v[n]; return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2 }
+    $2 != "tools" { next }
+    { k = $3 SUBSEP $4 SUBSEP $5; if (!(k in seen)) { seen[k] = 1; ord[++n] = k; p[k] = $3; sz[k] = $4; tl[k] = $5 } tot[k]++ }
+    $16 == "oom-kill" || $16 == "timeout" || $16 == "skipped" { bad[k] = bad[k] (bad[k] == "" ? "" : ", ") $16; next }
+    $22 == "no result" { bad[k] = bad[k] (bad[k] == "" ? "" : ", ") "no result (exit " $13 ")"; next }
+    { ok[k]++; w[k] = w[k] " " $9; r[k] = r[k] " " $12; hp[k] = $14; out[k] = $15; cnt[k] = ($22 != "" ? $22 : ($19 != "" ? $19 " lines" : "")) }
+    END { for (i = 1; i <= n; i++) { k = ord[i]
+      t = ""; f = ""; s = ""; m = ""
+      if (ok[k]) { t = sprintf("%.2f s", med(w[k])); f = sprintf("%.2f s", lo); s = sprintf("%.2f s", hi); m = h(med(r[k]) * 1024) }
+      printf "| %s | %s | %s | %d of %d | %s | %s | %s | %s | %s | %s | %s | %s |\n", p[k], h(sz[k]), tl[k], ok[k], tot[k], t, f, s, m, h(hp[k]), h(out[k]), cnt[k], bad[k] } }'
+  fi
   if awk -F'\t' '$2 == "le" { f = 1 } END { exit !f }' "$runs"; then
     echo
     echo "## Low-entropy runs"
