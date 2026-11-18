@@ -47,6 +47,8 @@
 // With MOCK_LOG set to a file name, every request is appended to it as one JSON line {method, params}.
 // With MOCK_FAIL_INIT=1 in the environment, or while the file named by MOCK_FAIL_INIT_FILE exists,
 // initialize fails (internal error).
+// With MOCK_OLD_SERVER=1 it behaves as rift serve 0.3.x does: initialize refuses a `capabilities` param,
+// the way it refuses any name it does not know (invalid_params, data.param "capabilities").
 // Hunks are stored with context 3; a smaller context trims them, a larger
 // one is served as 3. An equal segment reached by line_a starts at that
 // line, as in the server.
@@ -200,6 +202,7 @@ function handle(body) {
 const METHODS = {
   initialize(p) {
     if (process.env.MOCK_FAIL_INIT || (process.env.MOCK_FAIL_INIT_FILE && fs.existsSync(process.env.MOCK_FAIL_INIT_FILE))) throw new RpcError(-32603, 'initialize failed on purpose');
+    if (process.env.MOCK_OLD_SERVER && p.capabilities !== undefined) throw invalid('capabilities');
     if (p.protocol !== 1) throw invalid('protocol', { supported: [1] });
     initialized = true;
     return fixture.initialize;
@@ -222,7 +225,7 @@ const METHODS = {
     const tries = (busyTries.get(pair) ?? 0) + 1;
     busyTries.set(pair, tries);
     if (pair.includes('stuck') || (pair.includes('busy') && tries <= 2)) {
-      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'sessions', retry_after_ms: 5000 });
+      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'sessions', retry_after_ms: pair.includes('stuck') ? 100 : 150 * tries });
     }
     if (pair.includes('crashy')) setTimeout(() => process.exit(1), 100);
     if (pair.includes('crashlate')) setTimeout(() => process.exit(1), 2300);
@@ -235,7 +238,7 @@ const METHODS = {
     }
     const key = `${p.a}\0${p.b}`;
     if (!key.includes('hog') && ![...sessions.values()].some((s) => s.key === key) && [...sessions.values()].some((s) => s.key.includes('hog'))) {
-      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'memory', retry_after_ms: 5000 });
+      throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'memory', retry_after_ms: 150 });
     }
     for (const [id, s] of sessions) {
       if (s.key !== key) continue;

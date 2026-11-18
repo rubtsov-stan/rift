@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- A `busy` answer that carries `retry_after_ms` is waited as it says, at least 50 ms
+  and at most 5 s, instead of the fixed backoff, and retries stop once the waits
+  would pass 10 s in all. The error shown when they run out says when to try again.
+  `initialize` now declares `capabilities.retry_after`, which tells a `rift serve`
+  that waits for room that this client honours the time it gives. A `rift` before
+  0.4 refuses that field; the extension then sends `initialize` again without it and
+  keeps working, still reading `retry_after_ms` where the server gives one.
+
 ## [0.3.4] - 2026-11-18
 
 - Bundles `rift` 0.3.4.

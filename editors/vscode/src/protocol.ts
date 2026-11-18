@@ -127,6 +127,7 @@ export type Notification =
   | { method: 'segment_ready'; params: { session: number; index: number; status: SegmentStatus } };
 
 export const Code = {
+  invalidParams: -32602,
   budgetExceeded: -32003,
   busy: -32005,
   unknownSession: -32006,
