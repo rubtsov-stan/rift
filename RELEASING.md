@@ -1,8 +1,9 @@
 # Releasing
 
 1. Merge every change planned for the release and wait for main to go green
-   (CI, CodeQL, Site, supply chain). Remove every "not yet published" line
-   from `editors/vscode/README.md` and `CHANGELOG.md` first: the README is
+   (CI, CodeQL, Site, supply chain). Every issue in the release's milestone
+   is closed. Remove every "not yet published" line from
+   `editors/vscode/README.md` and `CHANGELOG.md` first: the README is
    packaged into the VSIX files and becomes the store page.
 
    The release commit sets the version in `Cargo.toml` (`[workspace.package]`),
@@ -11,7 +12,8 @@
    (`npm version X.Y.Z --no-git-tag-version`), the client version in
    `editors/vscode/src/client.ts`, and `man/rift.1` (`cargo xtask man`). Both
    CHANGELOGs get the version and the day of the tag, set just before that
-   commit merges. Then check that dist releases exactly that version:
+   commit merges. CI's `versions` job fails when one of these files differs
+   from `Cargo.toml`. Then check that dist releases exactly that version:
 
    ```sh
    dist plan --tag vX.Y.Z    # lists rift-diff and rift-mcp
