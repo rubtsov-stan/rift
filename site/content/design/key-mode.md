@@ -103,6 +103,8 @@ $ rift --key csv:id a.csv b.csv
 rift: duplicate keys: 1
 ```
 
+In a `pg_dump` a key is a duplicate only within its table, and each key is listed behind its table: `rift: duplicate keys: public.item:7`.
+
 Since a suspect is settled one pass later, a duplicate can surface after the changes of its pass were printed. The command line then adds that "the changes printed above are incomplete and must be discarded".
 
 Sources: `pass.rs`, `Pass::duplicate`, `Pending`, `collect_dups`, `FEW`; `keyed/mod.rs`, `KeyError`; `crates/rift-cli/src/keyed.rs`, `incomplete`.

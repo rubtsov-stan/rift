@@ -150,7 +150,7 @@ fn a_long_record_needs_one_rerun() {
             "copy:id",
             format!("COPY public.t (id, v) FROM stdin;\n1\t{long}\n2\ty\n\\.\n"),
             "COPY public.t (id, v) FROM stdin;\n2\ty\n1\tshort\n\\.\n".to_owned(),
-            "~1\t2\t3\n",
+            "~public.t:1\t2\t3\n",
         ),
     ];
     for (spec, a, b, changed) in cases {

@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Output change: with `--key copy:NAME`, every key line names its table
+  before the key, `~public.item:1` instead of `~1`, in every output mode,
+  so the same key in two tables no longer prints as the same line.
+  Scripts that parse `COPY` key lines must strip the new prefix. A colon
+  in the table name prints as `\:`. Duplicate-key errors name the table
+  too: `duplicate keys: public.item:7`. CSV and NDJSON output is
+  unchanged. In `rift-core`, `KeyedChange` gains a `table` field and
+  `KeyError::Duplicate` lists `TableKey` values.
 - A directory given with a file is refused with `give two files or two
   directories` (exit 2) instead of `not a regular file`.
 - `rift serve` waits up to 5 seconds for room, at most four calls at a

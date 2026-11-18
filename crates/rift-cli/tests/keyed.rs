@@ -339,3 +339,39 @@ fn a_record_pair_too_large_for_the_budget_names_a_mem_that_fits() {
     }
     panic!("no --mem fitted after four reruns");
 }
+
+#[test]
+fn copy_key_lines_name_their_table_in_every_mode() {
+    let a = b"COPY public.item (id, v) FROM stdin;\n1\tx\n\\.\n\
+              COPY public.order (id, v) FROM stdin;\n1\tx\n2\tx\n\\.\n";
+    let b = b"COPY public.item (id, v) FROM stdin;\n1\ty\n\\.\n\
+              COPY public.order (id, v) FROM stdin;\n1\ty\n\\.\n";
+    let plain = "~public.item:1\t2\t2\n~public.order:1\t5\t5\n-public.order:2\t6\t-\n";
+    let out = rift_on(a, b, &["--key", "copy:id"]);
+    assert_eq!(stdout_of(&out, 1), plain);
+    let out = rift_on(a, b, &["--key", "copy:id", "--show-records"]);
+    assert_eq!(
+        stdout_of(&out, 1),
+        "~public.item:1\t2\t2\n  - 1\tx\n  + 1\ty\n\
+         ~public.order:1\t5\t5\n  - 1\tx\n  + 1\ty\n\
+         -public.order:2\t6\t-\n  - 2\tx\n"
+    );
+    let out = rift_on(a, b, &["--key", "copy:id", "--fields", "v"]);
+    assert_eq!(
+        stdout_of(&out, 1),
+        "~public.item:1\t2\t2\n    v: x -> y\n\
+         ~public.order:1\t5\t5\n    v: x -> y\n\
+         -public.order:2\t6\t-\n"
+    );
+}
+
+#[test]
+fn duplicate_copy_keys_name_their_table() {
+    let a = b"COPY public.item (id) FROM stdin;\n7\n7\n\\.\n";
+    let out = rift_on(a, a, &["--key", "copy:id"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        "rift: duplicate keys: public.item:7\n"
+    );
+}

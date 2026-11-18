@@ -159,14 +159,25 @@ fn incomplete(err: anyhow::Error, printed: u64) -> anyhow::Error {
 }
 
 /// `~KEY<tab>A<tab>B`, `-KEY<tab>A<tab>-` or `+KEY<tab>-<tab>B`, lines
-/// counted from 1. Tabs, line breaks and backslashes in the key are
-/// escaped so a change stays on one line.
+/// counted from 1, with `TABLE:` before the key of a `COPY` row. Tabs,
+/// line breaks and backslashes are escaped so a change stays on one line,
+/// and a colon in the table name is written `\:`, so the first colon that
+/// is not part of an escape ends the name.
 fn write_change(out: &mut impl Write, c: &KeyedChange) -> io::Result<()> {
     out.write_all(match c.kind {
         ChangeKind::Added => b"+",
         ChangeKind::Removed => b"-",
         ChangeKind::Changed => b"~",
     })?;
+    if let Some(table) = &c.table {
+        for (i, part) in table.split(|&b| b == b':').enumerate() {
+            if i > 0 {
+                out.write_all(b"\\:")?;
+            }
+            write_escaped(out, part)?;
+        }
+        out.write_all(b":")?;
+    }
     write_escaped(out, &c.key)?;
     let line = |l: Option<LineNo>| l.map_or_else(|| "-".to_owned(), |l| (l.0 + 1).to_string());
     writeln!(out, "\t{}\t{}", line(c.a), line(c.b))
@@ -338,6 +349,23 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "~7\t1\t10\n-\"a\\tb\\nc\\\\\"\t5\t-\n+8\t-\t3\n"
+        );
+    }
+
+    #[test]
+    fn copy_keys_name_their_table_with_its_colons_escaped() {
+        let mut out = Vec::new();
+        for (table, key) in [
+            (&b"public.item"[..], &b"1"[..]),
+            (b"public.\"a:b\tc\"", b"2:3"),
+        ] {
+            let mut c = change(key, ChangeKind::Changed, Some(0), Some(1));
+            c.table = Some(table.into());
+            write_change(&mut out, &c).unwrap();
+        }
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "~public.item:1\t1\t2\n~public.\"a\\:b\\tc\":2:3\t1\t2\n"
         );
     }
 }
