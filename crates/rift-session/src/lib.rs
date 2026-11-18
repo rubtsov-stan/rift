@@ -43,6 +43,11 @@
 //!   [`Sessions::get`] has no pool and refuses excerpts;
 //! - [`Summary`] and pages of [`Session::differing`] and moved blocks: no
 //!   heap; they borrow from the map and the block list;
+//! - a [`Lease`] (key mode in `rift-mcp`): the `mem` of the run counts in
+//!   the total and the run takes a slot, so a keyed run and the diffs
+//!   together stay under [`Limits::total_mem`]; the run's own allocations
+//!   come from a [`Budget`](rift_core::Budget) of that size, built by the
+//!   caller;
 //! - the session table and each session's scan thread: a few hundred
 //!   bytes per session, outside any budget, bounded by
 //!   [`Limits::sessions`] plus the closed sessions whose scan has not yet
@@ -67,7 +72,7 @@ pub use session::{
     Tally,
 };
 pub use sessions::{
-    BUSY_WAIT, DEFAULT_MEM, IDLE_TIMEOUT, Limits, MAX_RESPONSE_POOL, MAX_SESSION_MEM, MAX_SESSIONS,
-    MAX_TOTAL_MEM, MAX_WAITERS, Observed, Opened, RESPONSE_SHARE, Session, SessionId, SessionState,
-    Sessions,
+    BUSY_WAIT, DEFAULT_MEM, IDLE_TIMEOUT, Lease, Limits, MAX_RESPONSE_POOL, MAX_SESSION_MEM,
+    MAX_SESSIONS, MAX_TOTAL_MEM, MAX_WAITERS, Observed, Opened, RESPONSE_SHARE, Session, SessionId,
+    SessionState, Sessions,
 };
