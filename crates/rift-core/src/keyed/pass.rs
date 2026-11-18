@@ -26,7 +26,7 @@
 
 use std::fmt;
 use std::io;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use rayon::prelude::*;
 
@@ -48,7 +48,7 @@ const FEW: usize = 5;
 const WINDOW: u64 = 4 << 20;
 /// Most passes a run may take: a budget that would need more is refused,
 /// with advice that fits the run within them.
-const MAX_PASSES: u64 = 64;
+pub(super) const MAX_PASSES: u64 = 64;
 /// Refine-half bytes a shard should have to itself.
 const SHARD_BYTES: u64 = 1 << 20;
 /// Most shards and most chunks per window. Every shard looks at every
@@ -105,7 +105,9 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    run::<A, B, ()>(a, b, spec, budget, MAX_PASSES, on_change).map_err(|e| doubled(e, budget))
+    let mut on_change = on_change;
+    run::<A, B, ()>(a, b, spec, budget, MAX_PASSES, |c, _| on_change(c))
+        .map_err(|e| doubled(e, budget))
 }
 
 /// [`compare`], handing out each change with the byte ranges of its
@@ -129,7 +131,9 @@ where
     A: Source + ?Sized,
     B: Source + ?Sized,
 {
-    run::<A, B, Ranges>(a, b, spec, budget, MAX_PASSES, on_change).map_err(|e| doubled(e, budget))
+    let mut on_change = on_change;
+    run::<A, B, Ranges>(a, b, spec, budget, MAX_PASSES, |c, _| on_change(c))
+        .map_err(|e| doubled(e, budget))
 }
 
 /// A budget refusal that asks for a half at least twice the size, built
@@ -140,7 +144,7 @@ where
 /// less than twice the least budget that works. Read after every thread
 /// has stopped, the numbers are the same on every run.
 #[cold]
-fn doubled(err: Error, budget: &Budget) -> Error {
+pub(super) fn doubled(err: Error, budget: &Budget) -> Error {
     let Error::Budget(refusal) = err else {
         return err;
     };
@@ -159,13 +163,13 @@ fn doubled(err: Error, budget: &Budget) -> Error {
     clippy::too_many_lines,
     reason = "the pass loop and the three ways a read ends, kept in one place"
 )]
-fn run<A, B, X: Extra>(
+pub(super) fn run<A, B, X: Extra>(
     a: &A,
     b: &B,
     spec: &super::KeySpec,
     budget: &Budget,
     limit: u64,
-    mut on_change: impl FnMut(&X::Change) -> io::Result<()>,
+    mut on_change: impl FnMut(&X::Change, &Tables) -> io::Result<()>,
 ) -> Result<Report>
 where
     A: Source + ?Sized,
@@ -179,7 +183,15 @@ where
     let sizes = Sizes::new(budget.available(Half::Refine).0, shards, lens);
     let mut ra = Reader::new(a, Side::A, spec, budget, sizes.windows[0], sizes.chunks)?;
     let mut rb = Reader::new(b, Side::B, spec, budget, sizes.windows[1], sizes.chunks)?;
-    let tables = Mutex::new(Tables::new(budget)?);
+    if X::HEADS {
+        ra.keep_heads();
+        rb.keep_heads();
+    }
+    let mut tables = Mutex::new(if X::HEADS {
+        Tables::with_heads(budget)?
+    } else {
+        Tables::new(budget)?
+    });
     let keys = ra.estimate_lines()? + rb.estimate_lines()?;
     let (mut shards, _list) = Pass::<X>::shards(budget, keys, sizes.chunks)?;
     let mut pending = Pending::new(budget)?;
@@ -298,7 +310,9 @@ where
                         .into());
                     }
                 }
-                report.changes += emit(&mut shards, &mut on_change)?;
+                // Not locked: a first lock allocates on some platforms.
+                let names = tables.get_mut().unwrap_or_else(PoisonError::into_inner);
+                report.changes += emit(&mut shards, names, &mut on_change)?;
                 report.passes += 1;
                 pending.replace(&mut shards)?;
                 // Both files were read whole: their records above the
@@ -900,8 +914,10 @@ const _: () = assert!(size_of::<Kept<Ranges>>() == 72);
 
 /// What a kept record carries besides its key and lines, and the change
 /// it is handed out as.
-trait Extra: Copy + Send + fmt::Debug {
+pub(super) trait Extra: Copy + Send + fmt::Debug {
     type Change: Send + fmt::Debug;
+    /// Whether the run keeps the headers that name a record's fields.
+    const HEADS: bool = false;
     /// `offset` finds the record's file offset, for an `Extra` that
     /// keeps it.
     fn new(rec: &Record<'_>, offset: impl FnOnce() -> u64) -> Self;
@@ -910,8 +926,8 @@ trait Extra: Copy + Send + fmt::Debug {
     fn change(base: KeyedChange) -> Self::Change;
     fn base(change: &mut Self::Change) -> &mut KeyedChange;
     /// Fills in what `base` does not hold, for a record in A if `in_a`
-    /// and in B if `in_b`.
-    fn fill(&self, change: &mut Self::Change, in_a: bool, in_b: bool);
+    /// and in B if `in_b`, of `COPY` table `table`.
+    fn fill(&self, change: &mut Self::Change, in_a: bool, in_b: bool, table: u32);
 }
 
 impl Extra for () {
@@ -924,13 +940,13 @@ impl Extra for () {
     fn base(change: &mut KeyedChange) -> &mut KeyedChange {
         change
     }
-    fn fill(&self, _: &mut KeyedChange, _: bool, _: bool) {}
+    fn fill(&self, _: &mut KeyedChange, _: bool, _: bool, _: u32) {}
 }
 
 /// Where the record's bytes are in A and B, for reading it back: 24
 /// bytes more per kept record, paid only by [`compare_with_ranges`].
 #[derive(Debug, Clone, Copy)]
-struct Ranges {
+pub(super) struct Ranges {
     off: [u64; 2],
     len: [u32; 2],
 }
@@ -962,10 +978,52 @@ impl Extra for Ranges {
         &mut change.change
     }
 
-    fn fill(&self, change: &mut RangedChange, in_a: bool, in_b: bool) {
+    fn fill(&self, change: &mut RangedChange, in_a: bool, in_b: bool, _: u32) {
         let range = |i: usize| self.off[i]..self.off[i] + u64::from(self.len[i]);
         change.a_range = in_a.then(|| range(0));
         change.b_range = in_b.then(|| range(1));
+    }
+}
+
+/// [`Ranges`], handed out with the record's `COPY` table and with the
+/// headers kept, for field output. Same size as `Ranges`.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Fielded(Ranges);
+
+/// A [`RangedChange`] and the `COPY` table of its records, 0 outside
+/// `pg_dump` files.
+#[derive(Debug)]
+pub(super) struct TabledChange {
+    pub(super) ranged: RangedChange,
+    pub(super) table: u32,
+}
+
+impl Extra for Fielded {
+    type Change = TabledChange;
+    const HEADS: bool = true;
+
+    fn new(rec: &Record<'_>, offset: impl FnOnce() -> u64) -> Self {
+        Self(Ranges::new(rec, offset))
+    }
+
+    fn matched(&mut self, side: Side, rec: &Record<'_>, offset: impl FnOnce() -> u64) {
+        self.0.matched(side, rec, offset);
+    }
+
+    fn change(change: KeyedChange) -> TabledChange {
+        TabledChange {
+            ranged: Ranges::change(change),
+            table: 0,
+        }
+    }
+
+    fn base(change: &mut TabledChange) -> &mut KeyedChange {
+        &mut change.ranged.change
+    }
+
+    fn fill(&self, change: &mut TabledChange, in_a: bool, in_b: bool, table: u32) {
+        self.0.fill(&mut change.ranged, in_a, in_b, table);
+        change.table = table;
     }
 }
 
@@ -1404,7 +1462,8 @@ impl<'b, X: Extra> Pass<'b, X> {
     fn emit_one(
         &mut self,
         i: usize,
-        on_change: &mut impl FnMut(&X::Change) -> io::Result<()>,
+        tables: &Tables,
+        on_change: &mut impl FnMut(&X::Change, &Tables) -> io::Result<()>,
     ) -> io::Result<()> {
         let k = self.kept[i];
         let change = X::base(&mut self.change);
@@ -1421,8 +1480,8 @@ impl<'b, X: Extra> Pass<'b, X> {
         let in_b = change.kind != ChangeKind::Removed;
         change.a = in_a.then_some(LineNo(k.line_a));
         change.b = in_b.then_some(LineNo(k.line_b));
-        k.extra.fill(&mut self.change, in_a, in_b);
-        on_change(&self.change)
+        k.extra.fill(&mut self.change, in_a, in_b, k.table);
+        on_change(&self.change, tables)
     }
 }
 
@@ -1442,7 +1501,8 @@ fn order<X>(k: &Kept<X>) -> (u64, State) {
 /// shards.
 fn emit<X: Extra>(
     shards: &mut [Pass<'_, X>],
-    on_change: &mut impl FnMut(&X::Change) -> io::Result<()>,
+    tables: &Tables,
+    on_change: &mut impl FnMut(&X::Change, &Tables) -> io::Result<()>,
 ) -> Result<u64> {
     for s in shards.iter_mut() {
         s.kept.retain(|k| k.state != State::Dead);
@@ -1460,7 +1520,7 @@ fn emit<X: Extra>(
         let Some(k) = next else {
             return Ok(count);
         };
-        shards[k].emit_one(at[k], on_change)?;
+        shards[k].emit_one(at[k], tables, on_change)?;
         at[k] += 1;
         count += 1;
     }
@@ -1540,7 +1600,7 @@ mod tests {
         let spec: KeySpec = spec.parse().unwrap();
         let budget = Budget::new(Bytes(mem));
         let mut out = Vec::new();
-        let report = super::run::<_, _, ()>(a, b, &spec, &budget, limit, |c| {
+        let report = super::run::<_, _, ()>(a, b, &spec, &budget, limit, |c, _| {
             out.push((
                 c.kind,
                 String::from_utf8_lossy(&c.key).into_owned(),
@@ -1706,7 +1766,7 @@ mod tests {
         };
         let spec: KeySpec = "csv:1".parse().unwrap();
         let mut out = Vec::new();
-        super::run::<_, _, Ranges>(a, b, &spec, &Budget::new(Bytes(mem)), u64::MAX, |c| {
+        super::run::<_, _, Ranges>(a, b, &spec, &Budget::new(Bytes(mem)), u64::MAX, |c, _| {
             let key = String::from_utf8_lossy(&c.change.key).into_owned();
             out.push((key, cut(a, &c.a_range), cut(b, &c.b_range)));
             Ok(())

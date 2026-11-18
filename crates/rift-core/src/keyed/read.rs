@@ -67,6 +67,9 @@ pub fn key_hash(key: &[u8], seed: u64) -> u64 {
     (xxh3_64_with_seed(key, seed) >> 1) | 1
 }
 
+/// A file's CSV header row (table 0) or a `COPY` table's column list.
+type Head = (u32, Side, Box<[u8]>);
+
 /// Names of the `COPY` tables seen so far, shared by both files so a name
 /// gets the same id in each.
 #[derive(Debug)]
@@ -76,7 +79,10 @@ pub struct Tables {
     names: Vec<(Box<[u8]>, u64, [u64; 2])>,
     /// Rounds A and B have begun.
     rounds: [u64; 2],
-    /// Refine half: the names and the list.
+    /// With field output: each file's CSV header row (table 0) or `COPY`
+    /// column list, by table.
+    heads: Option<Vec<Head>>,
+    /// Refine half: the names, the heads and their lists.
     res: Reservation,
 }
 
@@ -90,8 +96,65 @@ impl Tables {
         Ok(Self {
             names: Vec::new(),
             rounds: [0; 2],
+            heads: None,
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
         })
+    }
+
+    /// As [`Tables::new`], and also keeps the headers that name the
+    /// fields of a record, for field output.
+    ///
+    /// # Errors
+    ///
+    /// A budget error from the reservation.
+    pub fn with_heads(budget: &Budget) -> Result<Self> {
+        Ok(Self {
+            heads: Some(Vec::new()),
+            ..Self::new(budget)?
+        })
+    }
+
+    /// The CSV header row (table 0) or `COPY` column list `side` gave for
+    /// `table`, if heads are kept.
+    pub(crate) fn head(&self, table: u32, side: Side) -> Option<&[u8]> {
+        let heads = self.heads.as_ref()?;
+        let (.., head) = heads.iter().find(|h| h.0 == table && h.1 == side)?;
+        Some(head)
+    }
+
+    /// Every head kept, of any table and side.
+    pub(crate) fn heads(&self) -> impl Iterator<Item = &[u8]> {
+        self.heads.iter().flatten().map(|(.., head)| &**head)
+    }
+
+    /// What keeping `head` would cost, 0 when heads are not kept or this
+    /// one is already.
+    fn head_cost(&self, table: u32, side: Side, head: &[u8]) -> u64 {
+        match &self.heads {
+            Some(heads) if !heads.iter().any(|h| h.0 == table && h.1 == side) => {
+                // The list grows one slot at a time, so two slots per head
+                // cover it and the old list while it moves.
+                head.len() as u64 + 2 * size_of::<Head>() as u64
+            }
+            _ => 0,
+        }
+    }
+
+    /// Keeps `head` for `table` and `side`, paid from `credit`; false when
+    /// the credit cannot pay.
+    fn keep_head(&mut self, table: u32, side: Side, head: &[u8], credit: &mut u64) -> bool {
+        let cost = self.head_cost(table, side, head);
+        if cost == 0 {
+            return true;
+        }
+        if !spend(&mut self.res, credit, cost) {
+            return false;
+        }
+        if let Some(heads) = &mut self.heads {
+            heads.reserve_exact(1);
+            heads.push((table, side, head.into()));
+        }
+        true
     }
 
     /// Starts a round of `side`.
@@ -119,7 +182,7 @@ impl Tables {
     /// A and B can name the same table at once, so each side pays for a
     /// name the first time it asks: what a side pays then depends only on
     /// its own file, not on which side asked first.
-    fn id(&mut self, name: &[u8], side: Side, credit: &mut u64) -> Option<(u32, u64)> {
+    fn id(&mut self, name: &[u8], cols: &[u8], side: Side, credit: &mut u64) -> Option<(u32, u64)> {
         let s = side as usize;
         let i = match self.names.iter().position(|(n, ..)| **n == *name) {
             Some(i) if self.names[i].2[s] != 0 => return Some((id(i), self.names[i].1)),
@@ -128,11 +191,18 @@ impl Tables {
         };
         // The list doubles, so two slots per name cover its capacity.
         let slot = size_of::<(Box<[u8]>, u64, [u64; 2])>() as u64;
-        if !spend(&mut self.res, credit, name.len() as u64 + 2 * slot) {
+        let head = self.head_cost(id(i), side, cols);
+        if !spend(&mut self.res, credit, name.len() as u64 + 2 * slot + head) {
             return None;
         }
         if i == self.names.len() {
             self.names.push((name.into(), xxh3_64(name), [0; 2]));
+        }
+        if head > 0
+            && let Some(heads) = &mut self.heads
+        {
+            heads.reserve_exact(1);
+            heads.push((id(i), side, cols.into()));
         }
         self.names[i].2[s] = self.rounds[s];
         Some((id(i), self.names[i].1))
@@ -424,6 +494,7 @@ struct Ctx<'c> {
     tables: &'c Mutex<Tables>,
     filter: &'c Filter<'c>,
     budget: &'c Budget,
+    heads: bool,
 }
 
 impl Ctx<'_> {
@@ -459,6 +530,20 @@ impl Ctx<'_> {
                         name: name.into(),
                     })));
                 };
+                // Only the first chunk of a round reads from where a
+                // sequential read would, so only it may take a header.
+                // Without heads the tables stay unlocked: a first lock
+                // allocates on some platforms.
+                if self.heads
+                    && may_name
+                    && !self
+                        .tables
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .keep_head(0, self.side, rec, credit)
+                {
+                    return Err(Miss::Full);
+                }
                 state.col = Some(i);
                 Ok(Some((key, 0, 0)))
             }
@@ -476,7 +561,9 @@ impl Ctx<'_> {
                                 let mut tables =
                                     self.tables.lock().unwrap_or_else(PoisonError::into_inner);
                                 let (id, seed) = if may_name {
-                                    tables.id(table, self.side, credit).ok_or(Miss::Full)?
+                                    tables
+                                        .id(table, cols, self.side, credit)
+                                        .ok_or(Miss::Full)?
                                 } else {
                                     tables.find(table, self.side).ok_or(Miss::NewTable)?
                                 };
@@ -534,6 +621,8 @@ pub struct Reader<'s, S: ?Sized> {
     oversized: bool,
     /// Credit of each chunk's list per round, see [`grow`].
     share: u64,
+    /// Whether the CSV header row goes to the tables, for field output.
+    heads: bool,
 }
 
 /// Refine-half bytes a reader holds for a `buf`-byte window cut into
@@ -624,7 +713,14 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             seen: [0; SUSPECTS],
             oversized: false,
             share: u64::MAX,
+            heads: false,
         })
+    }
+
+    /// Hands the CSV header row to the tables, which keep it when they
+    /// keep heads ([`Tables::with_heads`]).
+    pub fn keep_heads(&mut self) {
+        self.heads = true;
     }
 
     /// Goes back to the start of the file. A CSV column found in the
@@ -786,6 +882,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             tables,
             filter,
             budget: &self.budget,
+            heads: self.heads,
         };
         let (buf, eof) = (&self.buf[..end], self.eof);
         if k == 1 {
@@ -1134,7 +1231,7 @@ fn csv_field(rec: &[u8], col: u32) -> Option<Range<usize>> {
 }
 
 /// Whether a CSV field, without its quotes, is `name`.
-fn unquoted_eq(field: &[u8], name: &[u8]) -> bool {
+pub(super) fn unquoted_eq(field: &[u8], name: &[u8]) -> bool {
     let Some(inner) = field
         .strip_prefix(b"\"")
         .and_then(|f| f.strip_suffix(b"\""))
@@ -1197,7 +1294,7 @@ fn json_key(line: &[u8], path: &[Box<str>]) -> Option<Range<usize>> {
     found
 }
 
-fn skip_ws(s: &[u8], mut i: usize) -> usize {
+pub(super) fn skip_ws(s: &[u8], mut i: usize) -> usize {
     while s.get(i).is_some_and(u8::is_ascii_whitespace) {
         i += 1;
     }
@@ -1234,7 +1331,7 @@ fn json_field(s: &[u8], i: usize, name: &[u8]) -> Option<Range<usize>> {
 }
 
 /// One past the closing quote of the string starting at `s[i]`.
-fn string_end(s: &[u8], mut i: usize) -> Option<usize> {
+pub(super) fn string_end(s: &[u8], mut i: usize) -> Option<usize> {
     i += 1;
     loop {
         i += memchr2(b'"', b'\\', s.get(i..)?)?;
@@ -1246,7 +1343,7 @@ fn string_end(s: &[u8], mut i: usize) -> Option<usize> {
 }
 
 /// One past the JSON value starting at `s[i]`.
-fn value_end(s: &[u8], mut i: usize) -> Option<usize> {
+pub(super) fn value_end(s: &[u8], mut i: usize) -> Option<usize> {
     match *s.get(i)? {
         b'"' => string_end(s, i),
         b'{' | b'[' => {
