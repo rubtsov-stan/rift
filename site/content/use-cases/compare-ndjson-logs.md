@@ -25,4 +25,12 @@ When the same events can arrive in a different order, compare by key. `json:PATH
 
 {{ term(name="key-ndjson", kind="keys", title="rift --key json:id") }}
 
-The key prints as the file has it, quotes included. A tab, line break or backslash in a key prints as `\t`, `\n` or `\\`. See the [key mode guide](@/guide/key-mode.md) for the output format and the rules.
+The key prints as the file has it, quotes included. A tab, line break or backslash in a key prints as `\t`, `\n` or `\\`. `--show-fields` lists the top-level members that differ under each changed key, with `(none)` for a member only one record has:
+
+```
+~2	2	3
+    old: true -> (none)
+    new: (none) -> "y"
+```
+
+See the [key mode guide](@/guide/key-mode.md) for the output format and the rules.

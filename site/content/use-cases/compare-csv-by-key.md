@@ -32,4 +32,12 @@ A key that occurs twice in one file stops the run with exit status 2. The run ca
 
 Key mode writes no temporary files. When the keys do not fit the budget, Rift splits them by hash and reads both files once per part. A generated 1 GiB CSV pair with shuffled rows took one pass at the default 256 MiB (seed 7, Apple M1). `--stats` reports the number of passes.
 
+To see which columns changed, add `--show-fields`; to compare some columns only, name them with `--fields`:
+
+```
+$ rift --key csv:id --fields price a.csv b.csv
+~1	2	4
+    price: 10 -> 12
+```
+
 More options and rules are in the [key mode guide](@/guide/key-mode.md).

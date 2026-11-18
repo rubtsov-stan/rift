@@ -107,6 +107,16 @@ Since a suspect is settled one pass later, a duplicate can surface after the cha
 
 Sources: `pass.rs`, `Pass::duplicate`, `Pending`, `collect_dups`, `FEW`; `keyed/mod.rs`, `KeyError`; `crates/rift-cli/src/keyed.rs`, `incomplete`.
 
+## Changed fields
+
+`--show-fields` names the fields that differ under each changed key. The two records met in memory during the pass, but the pass prints its changes sorted by line once it ends, so a field diff found then would have to wait in memory for every change of the pass. Instead, as each change is printed, Rift reads its two records back with `pread` into one buffer from the refine half, splits them into fields and compares the fields byte by byte. The buffer and its field lists start with room for 4 KiB of records and 64 fields, taken before the first pass, since by the time a pass prints its changes it holds most of the refine half. Past that they grow to the largest pair and stay until the run ends. A pair that does not fit stops the run with a budget error that names a `--mem`; a change is never skipped.
+
+A field needs a name, and the names live in headers: the CSV header row for `csv:NAME`, and for a `pg_dump` the column list of each `COPY` block. In field mode only, the table of `COPY` names keeps each file's header row and each table's column list, paid from the refine half like a table name. Fields match by name, so a column that moved between the files is not a change.
+
+`--fields` narrows the comparison when a change is printed, not when the records meet: a key whose named fields are equal still holds its kept record until its pass ends, as any changed key does. Without `--show-fields` and `--fields`, key mode runs the passes it ran before.
+
+Sources: `crates/rift-core/src/keyed/fields.rs`, `compare_fields`, `Pair::load`, `split`, `diff`; `read.rs`, `Tables::with_heads`.
+
 ## Why not keep A's records whole
 
 The plain way to compare by key is to partition both files by key hash and hold one side's records in a table. DESIGN.md measured that layout at about 28 times the memory per record on `shuffled` CSV, 138 bytes against 5 for an 81-byte row, and so about as many more passes. Holding only fingerprints of matched keys, and the bytes of records still waiting, is what keeps a pass at a few bytes per key.
