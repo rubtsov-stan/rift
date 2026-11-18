@@ -1,7 +1,8 @@
 //! MCP server that lets a client explore a Rift diff of two large files
 //! through small, bounded answers.
 //!
-//! Tools: `summary`, `hunks_at` and `next_difference`. Line numbers in
+//! Tools: `summary`, `hunks_at` and `next_difference`, and `keyed_summary`
+//! and `keyed_changes` for records compared by key (see [`keyed`]). Line numbers in
 //! requests and answers are 1-based lines of file A (or B where named). A
 //! range is `start` and `count`; an empty range (`count` 0) sits before line
 //! `start`. A range comes from one segment of the diff, which may be shorter
@@ -13,6 +14,7 @@
 //! is the `rift-session` crate the server keeps its diffs in.
 #![forbid(unsafe_code)]
 
+pub mod keyed;
 pub mod render;
 
 pub use rift_session as sessions;
@@ -30,6 +32,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use file::FileSource;
+use keyed::{KeyedChanges, KeyedPage, KeyedPair, KeyedSummary};
 use sessions::{Limits, Sessions};
 
 /// Differing ranges listed by `summary`; the rest are only counted.
@@ -254,6 +257,14 @@ impl Server {
         self.hunks_at(Parameters(a)).await.map(|j| j.0)
     }
 
+    pub async fn fuzz_keyed_summary(&self, p: KeyedPair) -> Result<KeyedSummary, String> {
+        self.keyed_summary(Parameters(p)).await.map(|j| j.0)
+    }
+
+    pub async fn fuzz_keyed_changes(&self, a: KeyedChanges) -> Result<KeyedPage, String> {
+        self.keyed_changes(Parameters(a)).await.map(|j| j.0)
+    }
+
     pub async fn fuzz_next_difference(&self, a: NextDifference) -> Result<Next, String> {
         self.next_difference(Parameters(a)).await.map(|j| j.0)
     }
@@ -379,6 +390,31 @@ impl Server {
             })
         })
         .await
+    }
+
+    /// Counts of keys added, removed and changed between two files of
+    /// records, and the first keys of each kind.
+    #[tool(
+        description = "Compare two files of records by key, independent of row order: CSV, NDJSON or pg_dump COPY blocks. Returns how many keys were added, removed and changed, and the first 10 of each with their lines and, for COPY, their table. `key` is `csv:NAME`, `csv:N`, `json:PATH` or `copy:NAME`. Reads both files on every call and keeps nothing between calls. Needs a `mem` of at least about 260K to 400K, depending on the pair, because 128 KiB of it is held for the answer. Duplicate keys fail the call."
+    )]
+    async fn keyed_summary(
+        &self,
+        Parameters(p): Parameters<KeyedPair>,
+    ) -> Result<Json<KeyedSummary>, String> {
+        let this = self.clone();
+        blocking(move || this.keyed_summary_now(&p)).await
+    }
+
+    /// A page of the changed keys, with their records and changed fields.
+    #[tool(
+        description = "A page of the keys that differ between two files of records, as `keyed_summary` compares them: kind, table (COPY) and key, lines, both records, and for a changed key the fields that differ with old and new value. At most `limit` changes. For the next page pass the returned `next` as `cursor`, with the same files, `key`, `mem` and `fields`: a cursor of another call is refused, and then start again without one. Every page reruns the whole comparison over both files and keeps nothing, so a page costs as much as `keyed_summary`. Needs a `mem` of at least about 260K to 400K, depending on the pair, because 128 KiB of it is held for the answer. `fields` limits the comparison to named fields."
+    )]
+    async fn keyed_changes(
+        &self,
+        Parameters(args): Parameters<KeyedChanges>,
+    ) -> Result<Json<KeyedPage>, String> {
+        let this = self.clone();
+        blocking(move || this.keyed_changes_now(&args)).await
     }
 }
 

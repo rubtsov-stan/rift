@@ -14,7 +14,7 @@ cargo-fuzz targets for rift, and `run-linux.sh`, which builds and runs all of th
 | `tui_render` | `rift_tui::App::draw` on a test backend, after keys from the input | no cell holds a control, bidirectional, zero-width or other default-ignorable character |
 | `sanitize` | the interface's line sanitizer alone | no hidden character in the output; one column per character within the budget; a smaller budget gives a prefix; plain text passes unchanged |
 | `mcp_request` | JSON-RPC parsing, then a `rift-mcp` tool call through an in-process client | no panic or hang; answers keep the documented size bounds |
-| `mcp_tools` | session lookup, the three tools and `render::hunk_text`, without the protocol | as `mcp_request`, and a rendered hunk has one text line per shown line within the line limit |
+| `mcp_tools` | session lookup, the five tools and `render::hunk_text`, without the protocol | as `mcp_request`, and a rendered hunk has one text line per shown line within the line limit; a keyed page has at most 100 changes and 64 KiB of text, and a `next` cursor only after a page with changes, good for the same call; garbage cursors are refused |
 
 The checks live in `src/`, one module per target family; `fuzz_targets/` holds one line per target. The direct targets (`keyed_reader`, `sanitize`, `mcp_tools`) reach internals that rift-core, rift-tui and rift-mcp expose only under `--cfg fuzzing`, which cargo-fuzz sets; a normal build has no such items. Each module documents its input layout. The patch applier in `src/lib.rs` is the oracle for both diff targets.
 

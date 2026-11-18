@@ -1,9 +1,10 @@
-//! rift-mcp: JSON-RPC message parsing and the three tools, through an
+//! rift-mcp: JSON-RPC message parsing and the five tools, through an
 //! in-process client over a pipe.
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use rift_mcp::keyed::{FIRST_KEYS, MAX_CHANGES};
 use rift_mcp::render::{MAX_LINE_BYTES, MAX_LINES, MAX_TEXT_BYTES};
 use rift_mcp::{SUMMARY_RANGES, Server};
 use rmcp::ServiceExt;
@@ -13,7 +14,13 @@ use tokio::runtime::Runtime;
 
 use crate::{config, fields};
 
-const TOOLS: [&str; 3] = ["summary", "hunks_at", "next_difference"];
+const TOOLS: [&str; 5] = [
+    "summary",
+    "hunks_at",
+    "next_difference",
+    "keyed_summary",
+    "keyed_changes",
+];
 
 pub(crate) static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_current_thread()
@@ -49,7 +56,8 @@ pub(crate) fn write_pair(a: &[u8], b: &[u8]) -> (String, String) {
 /// Properties: no panic or hang on any message or arguments; an answer
 /// that is not an error keeps the bounds rift-mcp documents (diff text
 /// within `MAX_TEXT_BYTES` plus one line, at most `MAX_LINES` lines and
-/// no more than the hunk has, at most `SUMMARY_RANGES` ranges).
+/// no more than the hunk has, at most `SUMMARY_RANGES` ranges, at most
+/// `FIRST_KEYS` keys per kind, at most `MAX_CHANGES` changes).
 ///
 /// # Panics
 ///
@@ -109,6 +117,20 @@ pub fn check(data: &[u8]) {
             assert!(
                 shown <= MAX_LINES && shown <= total,
                 "{shown} of {total} lines"
+            );
+        }
+        "keyed_summary" => {
+            for k in ["first_added", "first_removed", "first_changed"] {
+                let n = v[k].as_array().map_or(0, Vec::len);
+                assert!(n <= FIRST_KEYS, "{n} keys in {k}");
+            }
+        }
+        "keyed_changes" => {
+            let n = v["changes"].as_array().map_or(0, Vec::len);
+            assert!(n as u64 <= MAX_CHANGES, "{n} changes");
+            assert!(
+                v["next"].is_null() || n > 0,
+                "a next page after an empty one"
             );
         }
         _ => {}

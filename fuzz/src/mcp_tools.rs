@@ -1,8 +1,9 @@
-//! rift-mcp without the protocol: session lookup, the three tools and
+//! rift-mcp without the protocol: session lookup, the five tools and
 //! `render::hunk_text`, through the `fuzz_*` entry points of `Server` and
 //! `Session`.
 
 use rift_core::{DiffView, SegmentStatus};
+use rift_mcp::keyed::{FIRST_KEYS, KeyedChanges, KeyedPair, MAX_CHANGES};
 use rift_mcp::render::{self, MAX_CONTEXT, MAX_LINE_BYTES, MAX_LINES, MAX_TEXT_BYTES};
 use rift_mcp::{HunksAt, NextDifference, Pair, SUMMARY_RANGES, Server};
 use serde_json::Value;
@@ -45,7 +46,7 @@ pub fn check(data: &[u8]) {
     let server = Server::default();
 
     mcp::RUNTIME.block_on(async {
-        match cfg % 3 {
+        match cfg % 5 {
             0 => {
                 if let Ok(p) = serde_json::from_value::<Pair>(args.clone())
                     && let Ok(s) = server.fuzz_summary(p).await
@@ -64,11 +65,50 @@ pub fn check(data: &[u8]) {
                     assert_eq!(r.found, r.range.is_some());
                 }
             }
-            _ => {
+            2 => {
                 if let Ok(n) = serde_json::from_value::<NextDifference>(args.clone())
                     && let Ok(r) = server.fuzz_next_difference(n).await
                 {
                     assert_eq!(r.found, r.range.is_some());
+                }
+            }
+            3 => {
+                if let Ok(p) = serde_json::from_value::<KeyedPair>(args.clone())
+                    && let Ok(s) = server.fuzz_keyed_summary(p).await
+                {
+                    for list in [&s.first_added, &s.first_removed, &s.first_changed] {
+                        assert!(list.len() <= FIRST_KEYS);
+                    }
+                    assert!(s.first_added.len() as u64 <= s.added);
+                    assert!(s.first_removed.len() as u64 <= s.removed);
+                    assert!(s.first_changed.len() as u64 <= s.changed);
+                }
+            }
+            _ => {
+                if let Ok(c) = serde_json::from_value::<KeyedChanges>(args.clone())
+                    && let Ok(p) = server.fuzz_keyed_changes(c).await
+                {
+                    let n = p.changes.len() as u64;
+                    assert!(n <= MAX_CHANGES);
+                    assert_eq!(p.total, p.added + p.removed + p.changed);
+                    // A next page means this one moved forward, and its
+                    // cursor is good for the same call.
+                    if let Some(next) = &p.next {
+                        assert!(n > 0, "a next page after an empty one");
+                        let mut again = args.clone();
+                        again["cursor"] = next.clone().into();
+                        let again = serde_json::from_value::<KeyedChanges>(again).expect("shape");
+                        match server.fuzz_keyed_changes(again).await {
+                            Ok(q) => assert_eq!(q.total, p.total),
+                            Err(e) => assert!(!e.starts_with("cursor:"), "{e}"),
+                        }
+                    }
+                    let text: usize = p
+                        .changes
+                        .iter()
+                        .map(|e| e.key.key.len() + e.a_record.as_ref().map_or(0, String::len))
+                        .sum();
+                    assert!(text <= MAX_TEXT_BYTES, "{text} bytes of text");
                 }
             }
         }
