@@ -1735,6 +1735,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "xxhash-rust",
 ]
 
 [[package]]

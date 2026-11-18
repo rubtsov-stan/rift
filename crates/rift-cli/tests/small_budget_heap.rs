@@ -187,6 +187,27 @@ fn key_mode_refuses_too_many_passes_and_advises_a_mem_that_works() {
     assert!(over.is_empty(), "{over:#?}");
 }
 
+/// Two trees: a changed generated file, a renamed one, files only in
+/// one tree, and a directory of 2000 entries, as a diff and a summary.
+#[test]
+fn the_directory_diff_peaks_under_mem() {
+    let p = generated(2 << 20, Profile::Sql, Rows::Csv);
+    let dir = tempfile::tempdir().unwrap();
+    for (root, file, extra) in [("A", &p.a, "gone"), ("B", &p.b, "new")] {
+        let r = dir.path().join(root);
+        std::fs::create_dir_all(r.join("sub/many")).unwrap();
+        std::fs::copy(file, r.join("sub/data.sql")).unwrap();
+        std::fs::write(r.join(format!("{root}-moved")), "moved\n").unwrap();
+        std::fs::write(r.join(extra), "x\n").unwrap();
+        for i in 0..2000 {
+            std::fs::write(r.join(format!("sub/many/{i:05}")), format!("{i}\n")).unwrap();
+        }
+    }
+    let (a, b) = (dir.path().join("A"), dir.path().join("B"));
+    diff_peaks_under_mem(&[], &a, &b);
+    diff_peaks_under_mem(&["--summary"], &a, &b);
+}
+
 #[test]
 fn git_diff_peaks_under_mem() {
     let p = generated(2 << 20, Profile::Sql, Rows::Csv);

@@ -1,6 +1,6 @@
-//! Operands that are not regular files: Rift reads by offset, so a pipe,
-//! a FIFO or a directory is refused with the path and a way forward, never
-//! diffed as empty.
+//! Operands that are not regular files: Rift reads by offset, so a pipe
+//! or a FIFO is refused with the path and a way forward, never diffed as
+//! empty, and a directory is refused unless the other operand is one too.
 
 use std::fs;
 use std::os::unix::net::UnixListener;
@@ -73,12 +73,18 @@ fn a_pipe_from_process_substitution_is_refused() {
     assert!(err.contains("write the input to a file first"), "{err}");
 }
 
+/// A directory compares only with a directory.
 #[test]
-fn a_directory_names_its_path() {
+fn a_directory_and_a_file_name_both_paths() {
     let dir = tempfile::tempdir().unwrap();
     let b = dir.path().join("b");
     fs::write(&b, "x\n").unwrap();
-    refused(&rift(&[dir.path(), &b]), dir.path());
+    let out = rift(&[dir.path(), &b]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr: {err}");
+    assert_eq!(out.stdout, b"");
+    assert!(err.contains(&dir.path().display().to_string()), "{err}");
+    assert!(err.contains("give two files or two directories"), "{err}");
 }
 
 #[test]
