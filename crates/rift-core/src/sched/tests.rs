@@ -711,8 +711,7 @@ fn asking_again_wakes_a_worker_that_waited_for_outside_bytes() {
         estimate: Box::new(|_| Bytes(u64::MAX / 2)),
         ..Fake::new()
     };
-    let s = Scheduler::new(job, segments(n, |_| false), &budget, 1).unwrap();
-    s.set_background(false);
+    let s = Scheduler::start(job, segments(n, |_| false), &budget, 1, false).unwrap();
     // Far longer than the test may take, so only a wakeup gets the
     // worker going again.
     s.shared.lock().retry = std::time::Duration::from_secs(10);
@@ -742,8 +741,7 @@ fn a_blocked_waiter_gets_its_hunk_once_outside_bytes_are_released() {
         estimate: Box::new(|_| Bytes(u64::MAX / 2)),
         ..Fake::new()
     };
-    let s = Arc::new(Scheduler::new(job, segments(n, |_| false), &budget, 1).unwrap());
-    s.set_background(false);
+    let s = Arc::new(Scheduler::start(job, segments(n, |_| false), &budget, 1, false).unwrap());
     let held = budget.try_reserve(Half::Refine, Bytes(64)).unwrap();
     let t = Arc::clone(&s);
     let waiter = std::thread::spawn(move || t.wait_hunk(0).map(|_| ()));
