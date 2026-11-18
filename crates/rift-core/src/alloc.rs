@@ -4,14 +4,26 @@
 //! `#[global_allocator]`; tests read the peak to check it stays under
 //! `--mem`. The counters are process-wide, so a test that asserts on them
 //! lives in its own integration test binary (see `tests/alloc.rs`).
+//!
+//! [`StrictAlloc`] is the tests' stricter variant: it also tracks how far
+//! the heap runs ahead of what a [`Budget`] has reserved, so an allocation
+//! no reservation pays for shows however much of `--mem` is spare.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::ptr;
+use std::sync::atomic::{AtomicI64, AtomicPtr, AtomicUsize, Ordering};
 
+use crate::budget::{Budget, Half};
 use crate::types::Bytes;
 
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
+/// The budget [`StrictAlloc`] compares the heap with; null for none.
+static WATCHED: AtomicPtr<Budget> = AtomicPtr::new(ptr::null_mut());
+/// Heap less the watched budget's reservations: when [`watch`] began, and
+/// the most since.
+static BASE: AtomicI64 = AtomicI64::new(0);
+static EXCESS: AtomicI64 = AtomicI64::new(0);
 
 /// Wrapper over the system allocator that keeps the two counters.
 #[derive(Debug, Default, Clone, Copy)]
@@ -85,6 +97,80 @@ unsafe impl GlobalAlloc for CountingAlloc {
                 sub(layout.size() - new_size);
             }
         }
+        p
+    }
+}
+
+/// [`CountingAlloc`] that, on every allocation, also compares the heap
+/// with the bytes the [`watch`]ed budget holds in both halves.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StrictAlloc;
+
+/// Starts comparing the heap with `budget`'s reservations, from what the
+/// heap holds beyond them now.
+///
+/// `'static` because a thread may still read the budget while the next
+/// watch begins; tests leak it.
+pub fn watch(budget: &'static Budget) {
+    WATCHED.store(ptr::from_ref(budget).cast_mut(), Ordering::SeqCst);
+    let now = beyond(budget);
+    BASE.store(now, Ordering::SeqCst);
+    EXCESS.store(now, Ordering::SeqCst);
+}
+
+/// The most bytes the heap has held beyond the watched budget's
+/// reservations since [`watch`], less what it held beyond them then. Above
+/// 0, something allocated what no reservation pays for.
+#[must_use]
+pub fn excess() -> i64 {
+    EXCESS.load(Ordering::SeqCst) - BASE.load(Ordering::SeqCst)
+}
+
+fn beyond(budget: &Budget) -> i64 {
+    let reserved = budget.used(Half::Skeleton).0 + budget.used(Half::Refine).0;
+    let current = CURRENT.load(Ordering::Relaxed) as u64;
+    current.cast_signed() - reserved.cast_signed()
+}
+
+fn check() {
+    let p = WATCHED.load(Ordering::Acquire);
+    if !p.is_null() {
+        // SAFETY: `watch` stores only `'static` references.
+        let budget = unsafe { &*p };
+        let now = beyond(budget);
+        // Load first: most allocations set no new maximum.
+        if now > EXCESS.load(Ordering::Relaxed) {
+            EXCESS.fetch_max(now, Ordering::Relaxed);
+        }
+    }
+}
+
+// SAFETY: every method forwards to `CountingAlloc` unchanged and only reads
+// counters after it, so the allocator contract is inherited from it.
+unsafe impl GlobalAlloc for StrictAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded with the caller's guarantees.
+        let p = unsafe { CountingAlloc.alloc(layout) };
+        check();
+        p
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded with the caller's guarantees.
+        let p = unsafe { CountingAlloc.alloc_zeroed(layout) };
+        check();
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: forwarded with the caller's guarantees.
+        unsafe { CountingAlloc.dealloc(ptr, layout) };
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: forwarded with the caller's guarantees.
+        let p = unsafe { CountingAlloc.realloc(ptr, layout, new_size) };
+        check();
         p
     }
 }

@@ -131,7 +131,10 @@ low-entropy measurements.
 The budget covers the heap. Files are read through `pread` into fixed-size
 buffers, never through `mmap`, so resident memory does not grow with file
 pages. A counting global allocator tracks current and peak heap, and tests
-assert the peak of the whole process against `--mem`.
+assert the peak of the whole process against `--mem`. The key mode heap
+tests also check, on every allocation, that the heap holds no more than
+the budget has reserved, so an allocation no reservation pays for fails
+however much of `--mem` is spare.
 
 ## Architecture
 
