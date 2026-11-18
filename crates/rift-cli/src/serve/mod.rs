@@ -33,7 +33,8 @@ use std::time::Duration;
 use rift_core::Bytes;
 use rift_diff::ServeArgs;
 use rift_session::{
-    Limits, MAX_CONTEXT, MAX_LINE_BYTES, MAX_LINES, MAX_PAGE, MAX_SESSIONS, Sessions, code,
+    BUSY_WAIT, Limits, MAX_CONTEXT, MAX_LINE_BYTES, MAX_LINES, MAX_PAGE, MAX_SESSIONS, Sessions,
+    code,
 };
 use serde_json::{Value, json};
 
@@ -160,12 +161,20 @@ impl Server {
     }
 
     fn initialize(&self, params: Option<Value>) -> Result<Value, RpcError> {
-        let p = Params::new(params, &["protocol", "client"])?;
+        let p = Params::new(params, &["protocol", "client", "capabilities"])?;
         let version = p.need_count("protocol", 1)?;
         if let Some(client) = p.object("client", &["name", "version"])? {
             client.text("name")?.ok_or_else(|| invalid("client"))?;
             client.text("version")?;
         }
+        // Names it does not know are ignored, so a later client can declare more.
+        let retry_after = match p.open_object("capabilities")? {
+            Some(caps) => caps
+                .flag("retry_after")
+                .map_err(|_| invalid("capabilities"))?
+                .unwrap_or(false),
+            None => false,
+        };
         if version != PROTOCOL {
             return Err(RpcError::new(
                 code::INVALID_PARAMS,
@@ -173,6 +182,14 @@ impl Server {
             )
             .with(json!({"param": "protocol", "value": version, "supported": [PROTOCOL]})));
         }
+        // Waiting for room is for a client that waits the time it is told
+        // before trying again; one that retries on its own would add its
+        // retries to the wait.
+        self.sessions.set_wait(if retry_after {
+            BUSY_WAIT
+        } else {
+            Duration::ZERO
+        });
         Ok(json!({
             "protocol": PROTOCOL,
             "server": {"name": "rift", "version": env!("CARGO_PKG_VERSION")},
@@ -309,9 +326,8 @@ fn run(cli: &ServeArgs) -> anyhow::Result<()> {
             session_mem: per_session,
             total_mem: sessions_mem,
             idle: Duration::MAX,
-            // Busy at once: the VS Code client retries with its own
-            // backoff, and a server wait would add to it. Waiting like
-            // rift-mcp comes once the client honours retry_after_ms (#64).
+            // Busy at once until `initialize` says the client honours
+            // retry_after_ms; see `Server::initialize`.
             wait: Duration::ZERO,
             ..Limits::default()
         }),

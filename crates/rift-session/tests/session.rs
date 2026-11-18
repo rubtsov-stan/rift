@@ -731,6 +731,30 @@ fn a_new_pair_is_busy_with_a_retry_time_when_no_room_frees() {
     assert!(waited >= Duration::from_secs(1), "busy after {waited:?}");
 }
 
+/// `rift serve` starts with no wait and sets one when its client says it
+/// honours the time to retry after.
+#[test]
+fn set_wait_changes_how_long_a_call_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = write(dir.path(), "c", b"other\n");
+    let s = Sessions::new(Limits {
+        sessions: 1,
+        wait: Duration::ZERO,
+        ..Limits::default()
+    });
+    let _held = open(&s, &a, &b);
+    let began = Instant::now();
+    assert!(matches!(s.open(&a, &c, MEM), Err(Error::Busy { .. })));
+    assert!(began.elapsed() < SHORT_WAIT);
+    s.set_wait(SHORT_WAIT);
+    let began = Instant::now();
+    let err = s.open(&a, &c, MEM).unwrap_err();
+    assert!(matches!(err, Error::Busy { .. }), "{err}");
+    assert!(began.elapsed() >= SHORT_WAIT, "{:?}", began.elapsed());
+    assert_eq!(err.retry_after(), Some(SHORT_WAIT));
+}
+
 #[test]
 fn busy_beside_a_scan_says_to_retry_when_the_scan_may_end() {
     let dir = tempfile::tempdir().unwrap();

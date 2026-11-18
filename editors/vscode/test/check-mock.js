@@ -44,8 +44,8 @@ function checkKeywords(schema, where) {
       checkKeywords(v, `${where}/items`);
     } else if (k === 'oneOf') {
       v.forEach((sub, i) => checkKeywords(sub, `${where}/oneOf/${i}`));
-    } else if (k === 'additionalProperties' && v !== false) {
-      throw new Error(`${where}: additionalProperties must be false`);
+    } else if (k === 'additionalProperties' && v !== false && v !== true) {
+      throw new Error(`${where}: additionalProperties must be false, or true where names are open on purpose`);
     }
   }
 }
@@ -220,6 +220,10 @@ async function main() {
   const init = await ok('initialize', { protocol: 1, client: { name: 'check' } });
   assert.strictEqual(init.protocol, 1);
   await err('initialize', { protocol: 2 }, -32602);
+  // The client says it honours retry_after_ms; a name the server does not know is ignored, a known one must be a boolean.
+  await ok('initialize', { protocol: 1, client: { name: 'check' }, capabilities: { retry_after: true } });
+  await err('initialize', { protocol: 1, capabilities: { retry_after: 'yes' } }, -32602);
+  await ok('initialize', { protocol: 1, capabilities: { teleport: true } });
   await err('nope', {}, -32601);
 
   // Errors open itself reports.

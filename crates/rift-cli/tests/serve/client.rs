@@ -233,6 +233,14 @@ impl Client {
         )
     }
 
+    /// `initialize` as a client that honours `retry_after_ms` sends it.
+    pub fn initialize_patient(&mut self) -> Value {
+        self.ok(
+            "initialize",
+            json!({"protocol": 1, "client": {"name": "test"}, "capabilities": {"retry_after": true}}),
+        )
+    }
+
     /// Notifications of `method` about `session`.
     pub fn notes_of(&self, method: &str, session: u64) -> Vec<Value> {
         self.notes

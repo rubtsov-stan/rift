@@ -22,6 +22,15 @@
         "name"
       ],
       "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "retry_after": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
     }
   },
   "required": [
