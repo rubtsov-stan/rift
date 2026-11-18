@@ -1,0 +1,11 @@
+A  added.txt
+A  empty/
+T  fd
+M  link
+D  onlydir/
+D  removed.txt
+M  sub/changed.txt
+R  old-name.txt -> sub/new-name.txt
+added 1, removed 3, renamed 1, changed 2, type changed 1, same 1
+peak heap 142.1 KiB of 256.0 MiB (145490 bytes)
+time 0.00 s

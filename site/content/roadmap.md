@@ -26,7 +26,7 @@ lead = "What comes after the current release. Nothing here has a date."
   - On a cold disk, Rift will ask the OS to read ahead the parts it is about to diff.
   - Refining a hunk will read larger blocks and stop copying each line.
   - `rift serve` will answer the VS Code extension with fewer reads.
-- **Directory diff.** `rift old/ new/` compares two trees, such as `pg_dump -Fd` output or sharded exports, under the same `--mem`, even with millions of files. It lists added, removed and changed files and finds renames by content.
+- **Directory diff.** `rift old/ new/` compares two trees, such as `pg_dump -Fd -Z0` output or sharded exports, under the same `--mem`: a tree can hold millions of files, and one directory up to about 2 million entries at the default `256M`. It lists added, removed and changed files and finds renames by content. A default `pg_dump -Fd` is compressed and shows as binary files; reading the `.gz` files is [#73](https://github.com/rubtsov-stan/rift/issues/73). See the [guide](@/guide/directories.md).
 - **Which fields changed.** In key mode, a changed record will show the columns that differ (`price: 10 → 12`), with `--fields` to narrow the output.
 - **Key mode over MCP**, so an agent can compare CSV and NDJSON files by key. See the [MCP guide](@/guide/mcp.md).
 - **Large files from Source Control.** In VS Code, open a big tracked file's changes in Rift straight from the Source Control view. See the [VS Code guide](@/guide/vscode.md).

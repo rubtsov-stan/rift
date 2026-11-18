@@ -27,6 +27,13 @@ Include:
 This is a one-person project. I read every report and reply when I can,
 without a fixed timeline.
 
+## Paths
+
+`rift A B` on two directories never follows a symbolic link inside the
+trees: it compares the link's target as bytes, so a link cannot lead the
+walk out of the tree or into a loop. It never opens a FIFO, socket or
+device inside the trees. The two operands themselves are followed.
+
 ## Unsafe code
 
 `rift-gen`, `rift-mcp`, `rift-session` and `rift-tui` forbid `unsafe_code`. `rift-cli`

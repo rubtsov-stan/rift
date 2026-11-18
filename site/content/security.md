@@ -22,6 +22,10 @@ Include:
 
 This is a one-person project. Every report gets read, and the reply comes when there is time, without a fixed timeline.
 
+## Paths
+
+`rift A B` on two directories never follows a symbolic link inside the trees. It compares the link's target as bytes, so a link cannot lead the walk out of the tree or into a loop. It never opens a FIFO, socket or device inside the trees. The two operands themselves are followed.
+
 ## Unsafe code
 
 `rift-gen`, `rift-mcp`, `rift-session` and `rift-tui` forbid `unsafe_code`. `rift-cli` denies it except in two FFI modules. `rift-core` has one `unsafe` item, the counting allocator. Every block has a `// SAFETY:` comment, and the lint `clippy::undocumented_unsafe_blocks` is set to `deny`.

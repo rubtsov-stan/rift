@@ -1,0 +1,1 @@
+rift: list big-a: 40000 entries in the two trees take 737780 bytes, more than is left of the walk's quarter of the budget: skeleton budget exceeded: requested 1475560 bytes, 149480 available; rerun with --mem 3638K

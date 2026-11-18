@@ -13,7 +13,7 @@ summary = "What each exit status means and how to use it in a script."
 |---|---|
 | 0 | The files are identical. |
 | 1 | The files differ. |
-| 2 | An error: an unreadable file, an operand that is not a regular file (a pipe, FIFO, `<(command)` or directory), a budget too small, a duplicate key in key mode, an invalid option, or `-i` in a build without the terminal view. The message goes to standard error. |
+| 2 | An error: an unreadable file, an operand that is not a regular file (a pipe, FIFO or `<(command)`), a directory given with a file, a budget too small, a duplicate key in key mode, an invalid option, or `-i` in a build without the terminal view. The message goes to standard error. |
 
 The three cases on the generated pair, with the status printed after each run:
 
@@ -34,6 +34,10 @@ status=$?
 If standard output closes before Rift finishes, as in `rift a b | head`, Rift stops without a message and exits 141. That is the status a shell reports for `diff` killed by SIGPIPE, so `${PIPESTATUS[0]}` in bash holds 141 for both. This applies to the unified diff, `--summary` and `--key` output.
 
 A standard output that is closed before Rift starts, as in `rift a b >&-`, is not detected. The Rust runtime reopens it on `/dev/null` before Rift runs, so Rift writes there and exits 0 or 1 as usual. It cannot tell this apart from a read-write `/dev/null` that a launcher such as Python's `subprocess.DEVNULL` hands it on purpose.
+
+## Two directories
+
+For two directories the codes follow `diff -r`: 0 when the trees are the same, 1 when they differ, 2 when an entry could not be compared, such as an unreadable directory or a FIFO on both sides. With 2 the message for each such entry goes to standard error and the rest of the output is complete. See [directory diff](@/guide/directories.md).
 
 ## Key mode can stop late
 

@@ -31,6 +31,10 @@ The patch is a unified diff. `patch a.sql changes.patch` turns the first dump in
 
 Row order in a `pg_dump` can change between runs without any row changing. If it does, compare by key instead of by line: [key mode](@/guide/key-mode.md) reads the `COPY` blocks with `--key copy:id`.
 
+## 4. If the dump is a directory (`pg_dump -Fd`)
+
+`rift old/ new/` compares two dump directories file by file. Dump with `-Z0` (`--compress=0`): by default each table is a `.gz` file and shows as `Binary files ... differ` (reading them is [#73](https://github.com/rubtsov-stan/rift/issues/73)). `toc.dat` is binary in either case. See [directory diff](@/guide/directories.md).
+
 ## Memory
 
 The default limit is 256 MiB. On a 1 GiB pair the heap peaked at 83.6 MiB, and the resident set at 113 MiB, in the [benchmarks](@/benchmarks.md). Raise the limit with `--mem` if you want a finer diff: see [the memory guide](@/guide/memory.md).
