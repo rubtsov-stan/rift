@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--fields a,b` compares only the named fields and implies
   `--show-fields`: a key whose other fields changed is not printed and
   does not count for the exit status.
+- `rift-mcp` has two tools for key mode. `keyed_summary` counts the keys
+  added, removed and changed between two files and lists the first ten
+  of each kind. `keyed_changes` returns a page of the changed keys with
+  both records and, for a changed key, the fields that differ, a page at a
+  time by an opaque `cursor`: one from another call, or after a file
+  changed, is refused with a message to start again. A key from
+  a `pg_dump` carries its `COPY` table as a `table` field. `key` takes
+  the CLI's `csv:NAME`, `csv:N`, `json:PATH` and `copy:NAME`, and errors
+  use the CLI's wording, a budget refusal ending in `rerun with --mem`.
+  A keyed run counts its `mem` in the server's 512 MiB total and takes
+  one of its four slots, but is not kept between calls: each page reruns
+  the whole comparison, and a `mem` under about 260K to 400K, depending on
+  the pair, is refused (caching is #89).
 
 ### Changed
 

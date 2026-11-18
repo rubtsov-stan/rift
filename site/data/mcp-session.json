@@ -207,6 +207,414 @@
          }
         },
         {
+         "name": "keyed_changes",
+         "description": "A page of the keys that differ between two files of records, as `keyed_summary` compares them: kind, table (COPY) and key, lines, both records, and for a changed key the fields that differ with old and new value. At most `limit` changes. For the next page pass the returned `next` as `cursor`, with the same files, `key`, `mem` and `fields`: a cursor of another call is refused, and then start again without one. Every page reruns the whole comparison over both files and keeps nothing, so a page costs as much as `keyed_summary`. Needs a `mem` of at least about 260K to 400K, depending on the pair, because 128 KiB of it is held for the answer. `fields` limits the comparison to named fields.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "cursor": {
+            "description": "Where the page starts: absent for the first page, else the `next` of\nthe last answer. A cursor is good only for the same files, `key`,\n`mem` and `fields` it was issued for; any other call is refused,\nand the client starts again without a cursor. `limit` may differ.",
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "fields": {
+            "description": "Compare only these fields, as `--fields`: a changed key whose\nlisted fields are equal is not returned and not counted. Names are\nheader cells, member names or COPY columns; for `csv:N` keys, column\nnumbers. An empty list means all fields.",
+            "items": {
+             "type": "string"
+            },
+            "type": [
+             "array",
+             "null"
+            ]
+           },
+           "key": {
+            "description": "Where the key is, as `--key`: `csv:NAME` (header name), `csv:N`\n(column N, from 1), `json:PATH` (NDJSON field, dotted for nested)\nor `copy:NAME` (column of a `pg_dump` COPY block).",
+            "type": "string"
+           },
+           "limit": {
+            "description": "Most changes to return, default 20, at most 100. An answer also\nstops at 64 KiB.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "key"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Entry": {
+            "description": "One changed key.",
+            "properties": {
+             "a_line": {
+              "description": "The record's first line in A, 1-based; null for an added key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "a_record": {
+              "description": "A's record without its line terminator, cut at 1024 bytes; null for\nan added key.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "b_line": {
+              "description": "The record's first line in B; null for a removed key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "b_record": {
+              "description": "B's record; null for a removed key.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "fields": {
+              "description": "For a changed key, the fields that differ, at most 32, in A's order.\nEmpty when the records differ only in layout. Null for an added or\nremoved key, and for a record that does not split into fields (an\nNDJSON line that is not one JSON object).",
+              "items": {
+               "$ref": "#/$defs/FieldEntry"
+              },
+              "type": [
+               "array",
+               "null"
+              ]
+             },
+             "fields_more": {
+              "description": "Differing fields beyond those listed.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "key": {
+              "description": "The key as the file has it, quotes included, cut at 256 bytes.",
+              "type": "string"
+             },
+             "key_truncated": {
+              "description": "`key` or `table` was cut.",
+              "type": "boolean"
+             },
+             "kind": {
+              "description": "`added`, `removed` or `changed`.",
+              "type": "string"
+             },
+             "records_truncated": {
+              "description": "A record was cut.",
+              "type": "boolean"
+             },
+             "table": {
+              "description": "The `COPY` table as its header names it, unescaped; null outside\n`pg_dump` files.",
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            },
+            "required": [
+             "kind",
+             "table",
+             "key",
+             "key_truncated",
+             "a_line",
+             "b_line",
+             "a_record",
+             "b_record",
+             "records_truncated",
+             "fields",
+             "fields_more"
+            ],
+            "type": "object"
+           },
+           "FieldEntry": {
+            "description": "One field that differs.",
+            "properties": {
+             "a": {
+              "description": "The value in A, cut at 256 bytes; null when A's record lacks it.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "b": {
+              "description": "The value in B; null when B's record lacks it.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "name": {
+              "description": "Header cell, member name or COPY column; the column number, from\n1, for `csv:N` keys.",
+              "type": "string"
+             },
+             "truncated": {
+              "description": "A name or a value was cut.",
+              "type": "boolean"
+             }
+            },
+            "required": [
+             "name",
+             "a",
+             "b",
+             "truncated"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "added": {
+            "description": "Keys only B has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "changed": {
+            "description": "Keys in both with different record bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "changes": {
+            "description": "The changes, in the order of the comparison.",
+            "items": {
+             "$ref": "#/$defs/Entry"
+            },
+            "type": "array"
+           },
+           "mem_budget_bytes": {
+            "description": "Memory budget of the run, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "next": {
+            "description": "The `cursor` of the next page; null after the last change.",
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "removed": {
+            "description": "Keys only A has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "total": {
+            "description": "All changes, those of other pages included.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "total",
+           "added",
+           "removed",
+           "changed",
+           "next",
+           "changes",
+           "mem_budget_bytes"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "keyed_summary",
+         "description": "Compare two files of records by key, independent of row order: CSV, NDJSON or pg_dump COPY blocks. Returns how many keys were added, removed and changed, and the first 10 of each with their lines and, for COPY, their table. `key` is `csv:NAME`, `csv:N`, `json:PATH` or `copy:NAME`. Reads both files on every call and keeps nothing between calls. Needs a `mem` of at least about 260K to 400K, depending on the pair, because 128 KiB of it is held for the answer. Duplicate keys fail the call.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "key": {
+            "description": "Where the key is, as `--key`: `csv:NAME` (header name), `csv:N`\n(column N, from 1), `json:PATH` (NDJSON field, dotted for nested)\nor `copy:NAME` (column of a `pg_dump` COPY block).",
+            "type": "string"
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "key"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "KeyRef": {
+            "description": "A key and where it is.",
+            "properties": {
+             "a_line": {
+              "description": "The record's first line in A, 1-based; null for an added key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "b_line": {
+              "description": "The record's first line in B; null for a removed key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "key": {
+              "description": "The key as the file has it, quotes included, cut at 256 bytes.",
+              "type": "string"
+             },
+             "key_truncated": {
+              "description": "`key` or `table` was cut.",
+              "type": "boolean"
+             },
+             "table": {
+              "description": "The `COPY` table as its header names it, unescaped; null outside\n`pg_dump` files.",
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            },
+            "required": [
+             "table",
+             "key",
+             "key_truncated",
+             "a_line",
+             "b_line"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a_records": {
+            "description": "Records in A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "added": {
+            "description": "Keys only B has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "b_records": {
+            "description": "Records in B.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "changed": {
+            "description": "Keys in both with different record bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "first_added": {
+            "description": "The first added keys, at most 10.",
+            "items": {
+             "$ref": "#/$defs/KeyRef"
+            },
+            "type": "array"
+           },
+           "first_changed": {
+            "description": "The first changed keys, at most 10.",
+            "items": {
+             "$ref": "#/$defs/KeyRef"
+            },
+            "type": "array"
+           },
+           "first_removed": {
+            "description": "The first removed keys, at most 10.",
+            "items": {
+             "$ref": "#/$defs/KeyRef"
+            },
+            "type": "array"
+           },
+           "mem_budget_bytes": {
+            "description": "Memory budget of the run, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "passes": {
+            "description": "Passes over the files. More than 1 means the budget was tight.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "removed": {
+            "description": "Keys only A has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "a_records",
+           "b_records",
+           "passes",
+           "added",
+           "removed",
+           "changed",
+           "first_added",
+           "first_removed",
+           "first_changed",
+           "mem_budget_bytes"
+          ],
+          "type": "object"
+         }
+        },
+        {
          "name": "next_difference",
          "description": "The first differing range of A that starts after the 1-based line `after_line` (0 for the first one). Pass a returned a.start to step to the next. The range is from the segment map before refinement and can take in equal lines next to a change; `hunks_at` gives the exact lines.",
          "inputSchema": {
@@ -514,7 +922,7 @@
        ]
       }
      },
-     "response_bytes": 8399
+     "response_bytes": 17243
     },
     {
      "note": "How different are the two dumps?",
@@ -1007,6 +1415,1512 @@
       }
      },
      "response_bytes": 142
+    }
+   ]
+  },
+  {
+   "id": "keyed",
+   "what": "32 MiB CSV pair keyed by id, with the same keys in a different order and some inserted, deleted and edited rows",
+   "rift_gen": "rift-gen --seed 7 --size 32M --profile shuffled --rows csv",
+   "a_bytes": 33554461,
+   "b_bytes": 33752031,
+   "server": {
+    "name": "rift-mcp",
+    "version": "0.3.4"
+   },
+   "steps": [
+    {
+     "note": "The client opens the connection.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+       "protocolVersion": "2025-06-18",
+       "capabilities": {},
+       "clientInfo": {
+        "name": "example-client",
+        "version": "1.0"
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+       "protocolVersion": "2025-06-18",
+       "capabilities": {
+        "tools": {}
+       },
+       "serverInfo": {
+        "name": "rift-mcp",
+        "version": "0.3.4"
+       }
+      }
+     },
+     "response_bytes": 145
+    },
+    {
+     "note": "The client asks which tools the server has.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "tools/list",
+      "params": {}
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+       "tools": [
+        {
+         "name": "hunks_at",
+         "description": "The difference in or next to a 1-based line of A, as unified diff text cut at `max_lines`.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "context": {
+            "description": "Equal lines to show around the change, default 3, at most 20.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "line": {
+            "description": "1-based line of A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "max_lines": {
+            "description": "Most diff lines to return, default 100, at most 500.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "line"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Lines": {
+            "description": "A run of lines.",
+            "properties": {
+             "count": {
+              "description": "Number of lines.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "start": {
+              "description": "First line, 1-based.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "start",
+             "count"
+            ],
+            "type": "object"
+           },
+           "Range": {
+            "description": "A differing range.",
+            "properties": {
+             "a": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of A."
+             },
+             "b": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of B."
+             },
+             "status": {
+              "description": "`differs`, or `approx` when the local diff was cut short.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "a",
+             "b",
+             "status"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "found": {
+            "description": "Whether a difference lies within `context` lines of the line.",
+            "type": "boolean"
+           },
+           "lines_shown": {
+            "description": "Diff lines in `text`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "lines_total": {
+            "description": "Diff lines the whole hunk has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "range": {
+            "anyOf": [
+             {
+              "$ref": "#/$defs/Range"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "description": "The range, with its context, when found."
+           },
+           "text": {
+            "description": "Unified diff text of the range, when found.",
+            "type": "string"
+           },
+           "truncated": {
+            "description": "`text` stops before the end of the hunk.",
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "found",
+           "range",
+           "text",
+           "lines_shown",
+           "lines_total",
+           "truncated"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "keyed_changes",
+         "description": "A page of the keys that differ between two files of records, as `keyed_summary` compares them: kind, table (COPY) and key, lines, both records, and for a changed key the fields that differ with old and new value. At most `limit` changes. For the next page pass the returned `next` as `cursor`, with the same files, `key`, `mem` and `fields`: a cursor of another call is refused, and then start again without one. Every page reruns the whole comparison over both files and keeps nothing, so a page costs as much as `keyed_summary`. Needs a `mem` of at least about 260K to 400K, depending on the pair, because 128 KiB of it is held for the answer. `fields` limits the comparison to named fields.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "cursor": {
+            "description": "Where the page starts: absent for the first page, else the `next` of\nthe last answer. A cursor is good only for the same files, `key`,\n`mem` and `fields` it was issued for; any other call is refused,\nand the client starts again without a cursor. `limit` may differ.",
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "fields": {
+            "description": "Compare only these fields, as `--fields`: a changed key whose\nlisted fields are equal is not returned and not counted. Names are\nheader cells, member names or COPY columns; for `csv:N` keys, column\nnumbers. An empty list means all fields.",
+            "items": {
+             "type": "string"
+            },
+            "type": [
+             "array",
+             "null"
+            ]
+           },
+           "key": {
+            "description": "Where the key is, as `--key`: `csv:NAME` (header name), `csv:N`\n(column N, from 1), `json:PATH` (NDJSON field, dotted for nested)\nor `copy:NAME` (column of a `pg_dump` COPY block).",
+            "type": "string"
+           },
+           "limit": {
+            "description": "Most changes to return, default 20, at most 100. An answer also\nstops at 64 KiB.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "key"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Entry": {
+            "description": "One changed key.",
+            "properties": {
+             "a_line": {
+              "description": "The record's first line in A, 1-based; null for an added key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "a_record": {
+              "description": "A's record without its line terminator, cut at 1024 bytes; null for\nan added key.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "b_line": {
+              "description": "The record's first line in B; null for a removed key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "b_record": {
+              "description": "B's record; null for a removed key.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "fields": {
+              "description": "For a changed key, the fields that differ, at most 32, in A's order.\nEmpty when the records differ only in layout. Null for an added or\nremoved key, and for a record that does not split into fields (an\nNDJSON line that is not one JSON object).",
+              "items": {
+               "$ref": "#/$defs/FieldEntry"
+              },
+              "type": [
+               "array",
+               "null"
+              ]
+             },
+             "fields_more": {
+              "description": "Differing fields beyond those listed.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "key": {
+              "description": "The key as the file has it, quotes included, cut at 256 bytes.",
+              "type": "string"
+             },
+             "key_truncated": {
+              "description": "`key` or `table` was cut.",
+              "type": "boolean"
+             },
+             "kind": {
+              "description": "`added`, `removed` or `changed`.",
+              "type": "string"
+             },
+             "records_truncated": {
+              "description": "A record was cut.",
+              "type": "boolean"
+             },
+             "table": {
+              "description": "The `COPY` table as its header names it, unescaped; null outside\n`pg_dump` files.",
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            },
+            "required": [
+             "kind",
+             "table",
+             "key",
+             "key_truncated",
+             "a_line",
+             "b_line",
+             "a_record",
+             "b_record",
+             "records_truncated",
+             "fields",
+             "fields_more"
+            ],
+            "type": "object"
+           },
+           "FieldEntry": {
+            "description": "One field that differs.",
+            "properties": {
+             "a": {
+              "description": "The value in A, cut at 256 bytes; null when A's record lacks it.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "b": {
+              "description": "The value in B; null when B's record lacks it.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "name": {
+              "description": "Header cell, member name or COPY column; the column number, from\n1, for `csv:N` keys.",
+              "type": "string"
+             },
+             "truncated": {
+              "description": "A name or a value was cut.",
+              "type": "boolean"
+             }
+            },
+            "required": [
+             "name",
+             "a",
+             "b",
+             "truncated"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "added": {
+            "description": "Keys only B has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "changed": {
+            "description": "Keys in both with different record bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "changes": {
+            "description": "The changes, in the order of the comparison.",
+            "items": {
+             "$ref": "#/$defs/Entry"
+            },
+            "type": "array"
+           },
+           "mem_budget_bytes": {
+            "description": "Memory budget of the run, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "next": {
+            "description": "The `cursor` of the next page; null after the last change.",
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "removed": {
+            "description": "Keys only A has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "total": {
+            "description": "All changes, those of other pages included.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "total",
+           "added",
+           "removed",
+           "changed",
+           "next",
+           "changes",
+           "mem_budget_bytes"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "keyed_summary",
+         "description": "Compare two files of records by key, independent of row order: CSV, NDJSON or pg_dump COPY blocks. Returns how many keys were added, removed and changed, and the first 10 of each with their lines and, for COPY, their table. `key` is `csv:NAME`, `csv:N`, `json:PATH` or `copy:NAME`. Reads both files on every call and keeps nothing between calls. Needs a `mem` of at least about 260K to 400K, depending on the pair, because 128 KiB of it is held for the answer. Duplicate keys fail the call.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "key": {
+            "description": "Where the key is, as `--key`: `csv:NAME` (header name), `csv:N`\n(column N, from 1), `json:PATH` (NDJSON field, dotted for nested)\nor `copy:NAME` (column of a `pg_dump` COPY block).",
+            "type": "string"
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "key"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "KeyRef": {
+            "description": "A key and where it is.",
+            "properties": {
+             "a_line": {
+              "description": "The record's first line in A, 1-based; null for an added key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "b_line": {
+              "description": "The record's first line in B; null for a removed key.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             },
+             "key": {
+              "description": "The key as the file has it, quotes included, cut at 256 bytes.",
+              "type": "string"
+             },
+             "key_truncated": {
+              "description": "`key` or `table` was cut.",
+              "type": "boolean"
+             },
+             "table": {
+              "description": "The `COPY` table as its header names it, unescaped; null outside\n`pg_dump` files.",
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            },
+            "required": [
+             "table",
+             "key",
+             "key_truncated",
+             "a_line",
+             "b_line"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a_records": {
+            "description": "Records in A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "added": {
+            "description": "Keys only B has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "b_records": {
+            "description": "Records in B.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "changed": {
+            "description": "Keys in both with different record bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "first_added": {
+            "description": "The first added keys, at most 10.",
+            "items": {
+             "$ref": "#/$defs/KeyRef"
+            },
+            "type": "array"
+           },
+           "first_changed": {
+            "description": "The first changed keys, at most 10.",
+            "items": {
+             "$ref": "#/$defs/KeyRef"
+            },
+            "type": "array"
+           },
+           "first_removed": {
+            "description": "The first removed keys, at most 10.",
+            "items": {
+             "$ref": "#/$defs/KeyRef"
+            },
+            "type": "array"
+           },
+           "mem_budget_bytes": {
+            "description": "Memory budget of the run, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "passes": {
+            "description": "Passes over the files. More than 1 means the budget was tight.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "removed": {
+            "description": "Keys only A has.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "a_records",
+           "b_records",
+           "passes",
+           "added",
+           "removed",
+           "changed",
+           "first_added",
+           "first_removed",
+           "first_changed",
+           "mem_budget_bytes"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "next_difference",
+         "description": "The first differing range of A that starts after the 1-based line `after_line` (0 for the first one). Pass a returned a.start to step to the next. The range is from the segment map before refinement and can take in equal lines next to a change; `hunks_at` gives the exact lines.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "after_line": {
+            "description": "The answer starts after this 1-based line of A; 0 for the first\ndifference. Pass a returned `a.start` to get the one after it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b",
+           "after_line"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Lines": {
+            "description": "A run of lines.",
+            "properties": {
+             "count": {
+              "description": "Number of lines.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "start": {
+              "description": "First line, 1-based.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "start",
+             "count"
+            ],
+            "type": "object"
+           },
+           "Range": {
+            "description": "A differing range.",
+            "properties": {
+             "a": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of A."
+             },
+             "b": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of B."
+             },
+             "status": {
+              "description": "`differs`, or `approx` when the local diff was cut short.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "a",
+             "b",
+             "status"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "found": {
+            "description": "Whether another difference follows.",
+            "type": "boolean"
+           },
+           "range": {
+            "anyOf": [
+             {
+              "$ref": "#/$defs/Range"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "description": "The difference, when found. Like the ranges of `summary`, it can take\nin equal lines next to a change; `hunks_at` gives the exact lines."
+           }
+          },
+          "required": [
+           "found",
+           "range"
+          ],
+          "type": "object"
+         }
+        },
+        {
+         "name": "summary",
+         "description": "Summarize the diff of two text files: line counts, segment counts by status, the first differing ranges and memory use. The ranges come from the segment map before refinement: they can take in equal lines next to a change. `hunks_at` gives the exact lines. Builds the diff and keeps it for the other tools.",
+         "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a": {
+            "description": "Path of file A, the old one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "b": {
+            "description": "Path of file B, the new one. Must be a regular file, not a symlink.",
+            "type": "string"
+           },
+           "mem": {
+            "description": "Memory budget for the diff of this pair, like `--mem`: `64M`, `1G`.\nUsed only when the call builds the diff; a live diff keeps its own.\nDefault 64M, at most 256M.",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "a",
+           "b"
+          ],
+          "type": "object"
+         },
+         "outputSchema": {
+          "$defs": {
+           "Lines": {
+            "description": "A run of lines.",
+            "properties": {
+             "count": {
+              "description": "Number of lines.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "start": {
+              "description": "First line, 1-based.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "start",
+             "count"
+            ],
+            "type": "object"
+           },
+           "Range": {
+            "description": "A differing range.",
+            "properties": {
+             "a": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of A."
+             },
+             "b": {
+              "$ref": "#/$defs/Lines",
+              "description": "Lines of B."
+             },
+             "status": {
+              "description": "`differs`, or `approx` when the local diff was cut short.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "a",
+             "b",
+             "status"
+            ],
+            "type": "object"
+           },
+           "Tally": {
+            "description": "Segments of one status.",
+            "properties": {
+             "a_lines": {
+              "description": "Their lines in A.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "b_lines": {
+              "description": "Their lines in B.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             },
+             "segments": {
+              "description": "Segments.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "segments",
+             "a_lines",
+             "b_lines"
+            ],
+            "type": "object"
+           }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+           "a_bytes": {
+            "description": "Bytes in A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "a_lines": {
+            "description": "Lines in A.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "approx": {
+            "$ref": "#/$defs/Tally",
+            "description": "Refined segments whose local diff was cut short, out of\n`refined_segments`."
+           },
+           "b_bytes": {
+            "description": "Bytes in B.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "b_lines": {
+            "description": "Lines in B.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "differs": {
+            "$ref": "#/$defs/Tally",
+            "description": "Differing segments not known to be approximate: not refined yet, or\nrefined exactly."
+           },
+           "equal": {
+            "$ref": "#/$defs/Tally",
+            "description": "Equal segments."
+           },
+           "first_differences": {
+            "description": "The first differing ranges in file order, at most 20. They come from\nthe segment map before refinement and can take in equal lines next to\na change; `hunks_at` gives the exact lines.",
+            "items": {
+             "$ref": "#/$defs/Range"
+            },
+            "type": "array"
+           },
+           "identical": {
+            "description": "The files hold the same bytes.",
+            "type": "boolean"
+           },
+           "mem_budget_bytes": {
+            "description": "Memory budget of this diff, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "mem_reserved_bytes": {
+            "description": "Bytes of that budget the diff holds now.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "more_differences": {
+            "description": "Differing ranges beyond those listed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           },
+           "refined_segments": {
+            "description": "Differing segments refined so far. It grows as hunks are asked for.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "a_lines",
+           "b_lines",
+           "a_bytes",
+           "b_bytes",
+           "identical",
+           "equal",
+           "differs",
+           "approx",
+           "refined_segments",
+           "first_differences",
+           "more_differences",
+           "mem_budget_bytes",
+           "mem_reserved_bytes"
+          ],
+          "type": "object"
+         }
+        }
+       ]
+      }
+     },
+     "response_bytes": 17243
+    },
+    {
+     "note": "Which rows changed, whatever their order?",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "tools/call",
+      "params": {
+       "name": "keyed_summary",
+       "arguments": {
+        "a": "a.csv",
+        "b": "b.csv",
+        "key": "csv:id"
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"a_records\":423698,\"added\":6535,\"b_records\":426209,\"changed\":5047,\"first_added\":[{\"a_line\":null,\"b_line\":140,\"key\":\"191\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":141,\"key\":\"192\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1310,\"key\":\"1332\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1311,\"key\":\"1333\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1312,\"key\":\"1334\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1313,\"key\":\"1335\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1314,\"key\":\"1336\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1315,\"key\":\"1337\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1316,\"key\":\"1338\",\"key_truncated\":false,\"table\":null},{\"a_line\":null,\"b_line\":1317,\"key\":\"1339\",\"key_truncated\":false,\"table\":null}],\"first_changed\":[{\"a_line\":6419,\"b_line\":6634,\"key\":\"6650\",\"key_truncated\":false,\"table\":null},{\"a_line\":6420,\"b_line\":6635,\"key\":\"6651\",\"key_truncated\":false,\"table\":null},{\"a_line\":6421,\"b_line\":6636,\"key\":\"6652\",\"key_truncated\":false,\"table\":null},{\"a_line\":6422,\"b_line\":6637,\"key\":\"6653\",\"key_truncated\":false,\"table\":null},{\"a_line\":6423,\"b_line\":6638,\"key\":\"6654\",\"key_truncated\":false,\"table\":null},{\"a_line\":6424,\"b_line\":6639,\"key\":\"6655\",\"key_truncated\":false,\"table\":null},{\"a_line\":6425,\"b_line\":6640,\"key\":\"6656\",\"key_truncated\":false,\"table\":null},{\"a_line\":9743,\"b_line\":9958,\"key\":\"9974\",\"key_truncated\":false,\"table\":null},{\"a_line\":9744,\"b_line\":9959,\"key\":\"9975\",\"key_truncated\":false,\"table\":null},{\"a_line\":9745,\"b_line\":9960,\"key\":\"9976\",\"key_truncated\":false,\"table\":null}],\"first_removed\":[{\"a_line\":145,\"b_line\":null,\"key\":\"144\",\"key_truncated\":false,\"table\":null},{\"a_line\":146,\"b_line\":null,\"key\":\"145\",\"key_truncated\":false,\"table\":null},{\"a_line\":147,\"b_line\":null,\"key\":\"146\",\"key_truncated\":false,\"table\":null},{\"a_line\":148,\"b_line\":null,\"key\":\"147\",\"key_truncated\":false,\"table\":null},{\"a_line\":149,\"b_line\":null,\"key\":\"148\",\"key_truncated\":false,\"table\":null},{\"a_line\":150,\"b_line\":null,\"key\":\"149\",\"key_truncated\":false,\"table\":null},{\"a_line\":151,\"b_line\":null,\"key\":\"150\",\"key_truncated\":false,\"table\":null},{\"a_line\":4350,\"b_line\":null,\"key\":\"4573\",\"key_truncated\":false,\"table\":null},{\"a_line\":4351,\"b_line\":null,\"key\":\"4574\",\"key_truncated\":false,\"table\":null},{\"a_line\":4352,\"b_line\":null,\"key\":\"4575\",\"key_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"passes\":1,\"removed\":4024}"
+        }
+       ],
+       "structuredContent": {
+        "a_records": 423698,
+        "added": 6535,
+        "b_records": 426209,
+        "changed": 5047,
+        "first_added": [
+         {
+          "a_line": null,
+          "b_line": 140,
+          "key": "191",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 141,
+          "key": "192",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1310,
+          "key": "1332",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1311,
+          "key": "1333",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1312,
+          "key": "1334",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1313,
+          "key": "1335",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1314,
+          "key": "1336",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1315,
+          "key": "1337",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1316,
+          "key": "1338",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "b_line": 1317,
+          "key": "1339",
+          "key_truncated": false,
+          "table": null
+         }
+        ],
+        "first_changed": [
+         {
+          "a_line": 6419,
+          "b_line": 6634,
+          "key": "6650",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 6420,
+          "b_line": 6635,
+          "key": "6651",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 6421,
+          "b_line": 6636,
+          "key": "6652",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 6422,
+          "b_line": 6637,
+          "key": "6653",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 6423,
+          "b_line": 6638,
+          "key": "6654",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 6424,
+          "b_line": 6639,
+          "key": "6655",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 6425,
+          "b_line": 6640,
+          "key": "6656",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 9743,
+          "b_line": 9958,
+          "key": "9974",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 9744,
+          "b_line": 9959,
+          "key": "9975",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 9745,
+          "b_line": 9960,
+          "key": "9976",
+          "key_truncated": false,
+          "table": null
+         }
+        ],
+        "first_removed": [
+         {
+          "a_line": 145,
+          "b_line": null,
+          "key": "144",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 146,
+          "b_line": null,
+          "key": "145",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 147,
+          "b_line": null,
+          "key": "146",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 148,
+          "b_line": null,
+          "key": "147",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 149,
+          "b_line": null,
+          "key": "148",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 150,
+          "b_line": null,
+          "key": "149",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 151,
+          "b_line": null,
+          "key": "150",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 4350,
+          "b_line": null,
+          "key": "4573",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 4351,
+          "b_line": null,
+          "key": "4574",
+          "key_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 4352,
+          "b_line": null,
+          "key": "4575",
+          "key_truncated": false,
+          "table": null
+         }
+        ],
+        "mem_budget_bytes": 67108864,
+        "passes": 1,
+        "removed": 4024
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 5480
+    },
+    {
+     "note": "Show the first five changes with their records.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "tools/call",
+      "params": {
+       "name": "keyed_changes",
+       "arguments": {
+        "a": "a.csv",
+        "b": "b.csv",
+        "key": "csv:id",
+        "limit": 5
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"added\":6535,\"changed\":5047,\"changes\":[{\"a_line\":null,\"a_record\":null,\"b_line\":140,\"b_record\":\"191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4\",\"fields\":null,\"fields_more\":0,\"key\":\"191\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":141,\"b_record\":\"192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3\",\"fields\":null,\"fields_more\":0,\"key\":\"192\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":145,\"a_record\":\"144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"144\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":146,\"a_record\":\"145,2024-04-28 07:54:46,3,40.267342,-73.946462,40.750486,-73.241186,17.54,4\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"145\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":147,\"a_record\":\"146,2024-05-13 02:26:00,3,40.013963,-73.809069,40.880483,-73.519581,135.73,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"146\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r10000000000000005c4425dca36b170a081f3a03891511939\",\"removed\":4024,\"total\":15606}"
+        }
+       ],
+       "structuredContent": {
+        "added": 6535,
+        "changed": 5047,
+        "changes": [
+         {
+          "a_line": null,
+          "a_record": null,
+          "b_line": 140,
+          "b_record": "191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4",
+          "fields": null,
+          "fields_more": 0,
+          "key": "191",
+          "key_truncated": false,
+          "kind": "added",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "a_record": null,
+          "b_line": 141,
+          "b_record": "192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3",
+          "fields": null,
+          "fields_more": 0,
+          "key": "192",
+          "key_truncated": false,
+          "kind": "added",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 145,
+          "a_record": "144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "144",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 146,
+          "a_record": "145,2024-04-28 07:54:46,3,40.267342,-73.946462,40.750486,-73.241186,17.54,4",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "145",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 147,
+          "a_record": "146,2024-05-13 02:26:00,3,40.013963,-73.809069,40.880483,-73.519581,135.73,1",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "146",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         }
+        ],
+        "mem_budget_bytes": 67108864,
+        "next": "r10000000000000005c4425dca36b170a081f3a03891511939",
+        "removed": 4024,
+        "total": 15606
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 3118
+    },
+    {
+     "note": "The next five, from the cursor of the first page.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "tools/call",
+      "params": {
+       "name": "keyed_changes",
+       "arguments": {
+        "a": "a.csv",
+        "b": "b.csv",
+        "key": "csv:id",
+        "cursor": "r10000000000000005c4425dca36b170a081f3a03891511939",
+        "limit": 5
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"added\":6535,\"changed\":5047,\"changes\":[{\"a_line\":148,\"a_record\":\"147,2024-09-08 00:39:51,4,40.207368,-73.915545,40.465025,-73.433635,106.63,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"147\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":149,\"a_record\":\"148,2024-01-17 07:01:47,4,40.938484,-73.611234,40.854302,-73.369168,37.37,3\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"148\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":150,\"a_record\":\"149,2024-07-15 14:59:20,3,40.235429,-73.781100,40.081443,-73.459107,106.30,4\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"149\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":151,\"a_record\":\"150,2024-05-25 21:57:10,6,40.306799,-73.901825,40.457387,-73.643065,81.60,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"150\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":1310,\"b_record\":\"1332,2024-09-21 01:08:38,4,40.563462,-73.362729,40.367389,-73.870327,104.48,4\",\"fields\":null,\"fields_more\":0,\"key\":\"1332\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r1000000000000000ac4425dca36b170a080e26fa93cc0e38e\",\"removed\":4024,\"total\":15606}"
+        }
+       ],
+       "structuredContent": {
+        "added": 6535,
+        "changed": 5047,
+        "changes": [
+         {
+          "a_line": 148,
+          "a_record": "147,2024-09-08 00:39:51,4,40.207368,-73.915545,40.465025,-73.433635,106.63,1",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "147",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 149,
+          "a_record": "148,2024-01-17 07:01:47,4,40.938484,-73.611234,40.854302,-73.369168,37.37,3",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "148",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 150,
+          "a_record": "149,2024-07-15 14:59:20,3,40.235429,-73.781100,40.081443,-73.459107,106.30,4",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "149",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 151,
+          "a_record": "150,2024-05-25 21:57:10,6,40.306799,-73.901825,40.457387,-73.643065,81.60,1",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "150",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "a_record": null,
+          "b_line": 1310,
+          "b_record": "1332,2024-09-21 01:08:38,4,40.563462,-73.362729,40.367389,-73.870327,104.48,4",
+          "fields": null,
+          "fields_more": 0,
+          "key": "1332",
+          "key_truncated": false,
+          "kind": "added",
+          "records_truncated": false,
+          "table": null
+         }
+        ],
+        "mem_budget_bytes": 67108864,
+        "next": "r1000000000000000ac4425dca36b170a080e26fa93cc0e38e",
+        "removed": 4024,
+        "total": 15606
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 3130
+    },
+    {
+     "note": "Start again, comparing only the fare. Rows whose fare is the same drop out.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "tools/call",
+      "params": {
+       "name": "keyed_changes",
+       "arguments": {
+        "a": "a.csv",
+        "b": "b.csv",
+        "key": "csv:id",
+        "limit": 3,
+        "fields": [
+         "fare"
+        ]
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "{\"added\":6535,\"changed\":5046,\"changes\":[{\"a_line\":null,\"a_record\":null,\"b_line\":140,\"b_record\":\"191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4\",\"fields\":null,\"fields_more\":0,\"key\":\"191\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":141,\"b_record\":\"192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3\",\"fields\":null,\"fields_more\":0,\"key\":\"192\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":145,\"a_record\":\"144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"144\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r10000000000000003c3fd96531f303d3940f57258a58ff32c\",\"removed\":4024,\"total\":15605}"
+        }
+       ],
+       "structuredContent": {
+        "added": 6535,
+        "changed": 5046,
+        "changes": [
+         {
+          "a_line": null,
+          "a_record": null,
+          "b_line": 140,
+          "b_record": "191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4",
+          "fields": null,
+          "fields_more": 0,
+          "key": "191",
+          "key_truncated": false,
+          "kind": "added",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": null,
+          "a_record": null,
+          "b_line": 141,
+          "b_record": "192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3",
+          "fields": null,
+          "fields_more": 0,
+          "key": "192",
+          "key_truncated": false,
+          "kind": "added",
+          "records_truncated": false,
+          "table": null
+         },
+         {
+          "a_line": 145,
+          "a_record": "144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2",
+          "b_line": null,
+          "b_record": null,
+          "fields": null,
+          "fields_more": 0,
+          "key": "144",
+          "key_truncated": false,
+          "kind": "removed",
+          "records_truncated": false,
+          "table": null
+         }
+        ],
+        "mem_budget_bytes": 67108864,
+        "next": "r10000000000000003c3fd96531f303d3940f57258a58ff32c",
+        "removed": 4024,
+        "total": 15605
+       },
+       "isError": false
+      }
+     },
+     "response_bytes": 2044
+    },
+    {
+     "note": "A key that is not a column.",
+     "request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "tools/call",
+      "params": {
+       "name": "keyed_summary",
+       "arguments": {
+        "a": "a.csv",
+        "b": "b.csv",
+        "key": "csv:driver"
+       }
+      }
+     },
+     "response": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": {
+       "content": [
+        {
+         "type": "text",
+         "text": "a (a.csv) has no column \"driver\""
+        }
+       ],
+       "isError": true
+      }
+     },
+     "response_bytes": 122
     }
    ]
   }

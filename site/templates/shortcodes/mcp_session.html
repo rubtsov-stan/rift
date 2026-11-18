@@ -25,6 +25,10 @@
 {% for x in v | slice(end=2) %}    {{ x | json_encode }},
 {% endfor %}<span class="t-acc">    ... {{ v | length - 2 }} more ranges</span>
   ],
+{% elif k == "changes" %}  "{{ k }}": [
+{% for x in v | slice(end=2) %}    {{ x | json_encode }},
+{% endfor %}{% if v | length > 2 %}<span class="t-acc">    ... {{ v | length - 2 }} more changes</span>
+{% endif %}  ],
 {% else %}  "{{ k }}": {{ v | json_encode }}{% if not loop.last %},{% endif %}
 {% endif %}{% endfor %}}
 {%- endif -%}

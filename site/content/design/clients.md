@@ -23,7 +23,7 @@ Sources: `crates/rift-cli/src/serve/mod.rs`, module docs, `Server::start`, `MAX_
 
 ## Two front ends, one session layer
 
-`rift-mcp` does not speak this protocol. It speaks MCP, has three tools of its own (`summary`, `hunks_at`, `next_difference`) and renders its own unified text. What it shares with `rift serve` is the crate below both, `rift-session`: one diff per pair of files, opened read-only after the same path checks, reused while neither file changes, bounded in count and in the sum of budgets.
+`rift-mcp` does not speak this protocol. It speaks MCP, has five tools of its own (`summary`, `hunks_at` and `next_difference` for the line diff, `keyed_summary` and `keyed_changes` for key mode) and renders its own unified text. The key mode tools use the layer only for room: `Sessions::lease` counts the run's `mem` in the total and takes a slot, and nothing is kept after the call. What it shares with `rift serve` is the crate below both, `rift-session`: one diff per pair of files, opened read-only after the same path checks, reused while neither file changes, bounded in count and in the sum of budgets.
 
 A pair counts as unchanged while both files keep their device, inode, length and modification time. A symbolic link in the last path component, a directory, a device, a FIFO or a socket is refused before anything is read.
 

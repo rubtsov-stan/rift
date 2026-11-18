@@ -191,8 +191,10 @@ copy git makes.
 ## MCP server
 
 `rift-mcp` serves a diff to an MCP client, so the client reads a few
-kilobytes about two huge files instead of the files. It is released next
-to `rift`; see the
+kilobytes about two huge files instead of the files. Besides the line
+diff it compares CSV, NDJSON and `pg_dump` records by key: counts of
+added, removed and changed keys, and pages of changes with the fields
+that differ. It is released next to `rift`; see the
 [MCP guide](https://rubtsov-stan.github.io/rift/guide/mcp/).
 
 ## VS Code

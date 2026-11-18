@@ -26,6 +26,8 @@ def tool(name):
 SESSIONS = [
     dict(id='sql', seed=7, size='1G', gen=['--profile', 'sql'], a='a.sql', b='b.sql',
          what='1 GiB pg_dump-like SQL pair with inserts, deletes, edits and moved blocks'),
+    dict(id='keyed', seed=7, size='32M', gen=['--profile', 'shuffled', '--rows', 'csv'], a='a.csv', b='b.csv',
+         what='32 MiB CSV pair keyed by id, with the same keys in a different order and some inserted, deleted and edited rows'),
 ]
 
 
@@ -92,12 +94,24 @@ def session_sql(c, a, b):
     c.tool('summary', {**pair, 'mem': '1G'}, 'Ask for a bigger memory budget than the server allows.')
 
 
+def session_keyed(c, a, b):
+    pair = {'a': a, 'b': b, 'key': 'csv:id'}
+    handshake(c)
+    s = c.tool('keyed_summary', pair, 'Which rows changed, whatever their order?')
+    p = c.tool('keyed_changes', {**pair, 'limit': 5}, 'Show the first five changes with their records.')
+    assert p['next'], 'the recorded call no longer shows a next page'
+    c.tool('keyed_changes', {**pair, 'cursor': p['next'], 'limit': 5}, 'The next five, from the cursor of the first page.')
+    c.tool('keyed_changes', {**pair, 'limit': 3, 'fields': ['fare']},
+           'Start again, comparing only the fare. Rows whose fare is the same drop out.')
+    c.tool('keyed_summary', {**pair, 'key': 'csv:driver'}, 'A key that is not a column.')
+
+
 work = tempfile.mkdtemp(prefix='record-mcp-')
 try:
     data = dict(
         about='Recorded by site/scripts/record-mcp.py. Requests and answers as they crossed standard input and output of rift-mcp.',
         sessions=[])
-    for spec, run in zip(SESSIONS, (session_sql,)):
+    for spec, run in zip(SESSIONS, (session_sql, session_keyed)):
         d = os.path.join(work, spec['id'])
         cmd = [tool('rift-gen'), '--seed', str(spec['seed']), '--size', spec['size'], *spec['gen'], '--out', d]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)

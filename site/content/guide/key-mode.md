@@ -113,6 +113,10 @@ The same on NDJSON, by the `id` field. The key prints as the file has it, quotes
 - A budget too small stops the run with a budget error that names a `--mem` to rerun with: one under which a long record fits, and otherwise about twice the limit. Following the advice reaches a limit that works in a few reruns.
 - `--key` cannot be combined with `--summary`, `--interactive` or `--no-moves`. `--show-records`, `--show-fields` and `--fields` need `--key`, and `--stats` works with both.
 
+## From an MCP client
+
+`rift-mcp` has the same comparison as two tools, `keyed_summary` and `keyed_changes`. A `COPY` table comes as a field of its own, not in front of the key. See the [MCP guide](@/guide/mcp.md).
+
 ## Memory
 
 Key mode writes no temporary files. When the keys do not fit `--mem`, Rift splits them by hash and reads both files once per part, so a smaller budget means more passes over the files. Each pass prints its changes sorted by line. `--stats` reports the number of passes.
