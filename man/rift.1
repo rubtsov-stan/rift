@@ -8,7 +8,7 @@ rift \- Diff large text files under a hard memory limit
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH SYNOPSIS
-\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-\-show\-records\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> [\fIsubcommands\fR]
+\fBrift\fR [\fB\-\-summary\fR] [\fB\-\-mem\fR] [\fB\-i\fR|\fB\-\-interactive\fR] [\fB\-\-no\-moves\fR] [\fB\-\-stats\fR] [\fB\-\-key\fR] [\fB\-\-show\-records\fR] [\fB\-\-show\-fields\fR] [\fB\-\-fields\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIA\fR> <\fIB\fR> [\fIsubcommands\fR]
 .SH DESCRIPTION
 \fBrift\fR compares two large text files under a heap limit set
 with \fB\-\-mem\fR. It writes a unified diff that \fBpatch\fR(1)
@@ -51,7 +51,13 @@ After a diff, print peak heap, time and approximate regions to standard error, a
 Compare records by key instead of lines, regardless of row order: csv:N (column, from 1), csv:NAME (header), json:PATH (dotted field) or copy:NAME (COPY column of a Postgres dump)
 .TP
 \fB\-\-show\-records\fR
-With \-\-key, print the records under each change: the one from A behind "  \- ", the one from B behind "  + ", each of their lines behind the same prefix. Field\-level output, which names the fields that changed, is planned for 0.4
+With \-\-key, print the records under each change: the one from A behind "  \- ", the one from B behind "  + ", each of their lines behind the same prefix
+.TP
+\fB\-\-show\-fields\fR
+With \-\-key, print under each changed key the fields that differ, one per line: "    NAME: OLD \-> NEW". Values print as the file has them, cut at 64 bytes with "..."; "(none)" stands for a field the record lacks
+.TP
+\fB\-\-fields\fR \fI<NAMES>\fR
+With \-\-key, compare only these fields, comma\-separated: header names, column numbers for csv:N, top\-level names for json:, column names for copy:. A key whose other fields changed is not reported. Implies \-\-show\-fields
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
@@ -173,8 +179,35 @@ quotes, carries the prefix on each of its lines. Strip the prefixes and
 you get the record's bytes as the file has them, without its line
 terminator. Rift reads each record back from its file through a 64 KiB
 buffer, so a long record takes no more memory than a short one. Without
-\fB\-\-key\fR, Rift refuses the option. Field-level output, which names
-the fields that changed, is planned for 0.4.
+\fB\-\-key\fR, Rift refuses the option.
+.TP
+\fB\-\-show\-fields\fR
+With \fB\-\-key\fR, prints under each changed key the fields that
+differ, one per line, four spaces in:
+.RS
+.nf
+~\fIKEY\fR	\fIA\fR	\fIB\fR
+    \fIname\fR: \fIvalue in A\fR \-> \fIvalue in B\fR
+.fi
+.RE
+.IP
+A field is a CSV column, named by the file's header row for
+\fBcsv:\fR\fINAME\fR and numbered from 1 for \fBcsv:\fR\fIN\fR, a
+top-level member of an NDJSON object, or a column of a \fBCOPY\fR row.
+Values print as the file has them, with tabs, line breaks and
+backslashes escaped, and are cut at 64 bytes with \fB...\fR.
+\fB(none)\fR stands for a field the record lacks, and
+\fB(no field differs)\fR marks records that differ only in layout. CSV
+cells compare without their quotes; NDJSON values and \fBCOPY\fR cells
+compare as their bytes. With \fB\-\-show\-records\fR the records follow
+the field lines. A pair of records too large for \fB\-\-mem\fR stops the
+run with a budget error.
+.TP
+\fB\-\-fields\fR \fINAMES\fR
+With \fB\-\-key\fR, compares only the comma-separated fields named and
+implies \fB\-\-show\-fields\fR. A key whose other fields changed is not
+printed and does not count for the exit status. A name in no header
+stops the run with exit status 2.
 .TP
 \fB\-\-stats\fR
 After a diff, prints to standard error the peak heap, the time, the

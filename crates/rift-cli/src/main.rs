@@ -106,7 +106,11 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
             spec,
             args.mem,
             args.stats,
-            args.show_records,
+            keyed::Show {
+                records: args.show_records,
+                fields: args.show_fields || args.fields.is_some(),
+                only: args.fields.as_deref(),
+            },
         );
     }
     if args.summary {

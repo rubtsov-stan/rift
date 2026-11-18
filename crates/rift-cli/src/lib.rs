@@ -88,10 +88,21 @@ pub struct Args {
     pub key: Option<rift_core::keyed::KeySpec>,
     /// With --key, print the records under each change: the one from A
     /// behind "  - ", the one from B behind "  + ", each of their lines
-    /// behind the same prefix. Field-level output, which names the fields
-    /// that changed, is planned for 0.4.
+    /// behind the same prefix.
     #[arg(long, requires = "key")]
     pub show_records: bool,
+    /// With --key, print under each changed key the fields that differ,
+    /// one per line: "    NAME: OLD -> NEW". Values print as the file
+    /// has them, cut at 64 bytes with "..."; "(none)" stands for a field
+    /// the record lacks.
+    #[arg(long, requires = "key")]
+    pub show_fields: bool,
+    /// With --key, compare only these fields, comma-separated: header
+    /// names, column numbers for csv:N, top-level names for json:, column
+    /// names for copy:. A key whose other fields changed is not reported.
+    /// Implies --show-fields.
+    #[arg(long, requires = "key", value_name = "NAMES", value_delimiter = ',')]
+    pub fields: Option<Vec<String>>,
 }
 
 /// What Rift runs instead of a diff of two files.
