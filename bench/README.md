@@ -98,7 +98,7 @@ Rift against other line-diff and CSV tools on the same pairs. Each tool runs onl
 - Line tools, on the `sql` and `csv` profiles: `rift --stats --mem 256M`, GNU `diff`, `git diff --no-index` with and without `--text`, `difft` (difftastic), and three floors: `cat a b | wc -c`, `cmp a b` (stops at the first differing byte) and `sort` both files then `comm -3` (sort cost included, sorted copies counted against the cap).
 - Key tools, on a shuffled CSV pair with an `id` column (`rift-gen --profile shuffled --rows csv`): `rift --key csv:id`, DuckDB (a FULL OUTER JOIN on `id` and an `EXCEPT` both ways, each at DuckDB's default `memory_limit` and at `256MB`, all columns read as text, spills to the scratch tmpfs), `csvdiff -p 0`, `qsv diff -k 0`, and `daff diff --id id` on the smallest pair only.
 - Pairs of 256 MiB, 1 GiB and 4 GiB, seed 7, 0.1% changes. A size runs in tmpfs when the pair, a cap of at least 2 GiB and the 2 GiB margin fit 60% of `MemAvailable`; the cap is 12 GiB or what that leaves. On a 16 GB host that is about 6 GiB for 256 MiB and 4.7 GiB for 1 GiB, and 4 GiB does not fit: with `--disk-dir DIR` it runs from `DIR` (page cache not dropped, about 18 GiB of free space needed), otherwise it is skipped with a note. `--disk-dir` with this suite runs no 50 GiB pair.
-- Every run is stopped after 600 s. A command the cap killed, the timeout stopped or that printed no counts is not run again on that pair or on larger ones; the report says so.
+- Every run is stopped after 600 s. A command the cap killed, the timeout stopped, that printed no counts or that exited with a status above 1 (1 means the files differ) is not run again on that pair or on larger ones; the report says so.
 - Each row records the counts the tool reported, changed lines or keys added, removed and changed, so a mismatch with rift shows in the table. The "Tool comparison" section of the report has the median, fastest and slowest time, the median RSS and the counts per command and pair.
 - On the 1 GiB pairs, the resident set of `rift`, `diff` and `difft` (sql) and of `rift --key` and DuckDB (key pair) is sampled every 100 ms into `raw/timeline-*.tsv`.
 
@@ -107,8 +107,8 @@ Needs a systemd user scope for the caps: `prlimit --as` would stop DuckDB and qs
 ```sh
 sudo apt install diffutils git        # GNU diff, cmp, git
 cargo install difftastic              # or a release binary of difftastic
-# DuckDB CLI, qsv, csvdiff: release binaries from their GitHub pages, on PATH
-pip install --user daff
+# DuckDB CLI, qsv, csvdiff (aswinkarthik/csvdiff): release binaries from their GitHub pages, on PATH
+pipx install daff                     # pip --user is refused on Ubuntu 24.04 and later (PEP 668)
 bench/linux-safe.sh --suite tools --reps 5 --ref main --dry-run
 ```
 
