@@ -773,6 +773,7 @@ mod tests {
                     kind: ChangeKind::Changed,
                     a: Some(crate::types::LineNo(0)),
                     b: Some(crate::types::LineNo(0)),
+                    table: None,
                 },
                 a_range: Some(0..len),
                 b_range: Some(0..len),

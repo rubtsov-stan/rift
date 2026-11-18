@@ -31,7 +31,7 @@ use std::sync::{Mutex, PoisonError};
 use rayon::prelude::*;
 
 use super::read::{Filter, Reader, Record, SUSPECTS, Suspect, Tables, grow, reader_bytes, spend};
-use super::{ChangeKind, KeyError, KeyedChange, RangedChange, Side};
+use super::{ChangeKind, KeyError, KeyedChange, RangedChange, Side, TableKey};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::source::Source;
@@ -44,6 +44,8 @@ const WAITING: u32 = 1 << 31;
 const EMPTY: u32 = 0;
 /// Duplicate keys listed in the error.
 const FEW: usize = 5;
+/// A duplicate key and its `COPY` table id, named once the run stops.
+type Dup = (u32, Vec<u8>);
 /// Read window per file, from the refine half.
 const WINDOW: u64 = 4 << 20;
 /// Most passes a run may take: a budget that would need more is refused,
@@ -255,7 +257,7 @@ where
                             workers.as_ref(),
                             solo,
                         );
-                        return Err(or_duplicates(e, dups));
+                        return Err(or_duplicates(e, dups, unlocked(&mut tables)));
                     }
                 }
             }
@@ -282,14 +284,14 @@ where
                 return Err(if dups.is_empty() {
                     KeyError::Collisions
                 } else {
-                    KeyError::Duplicate(dups)
+                    named(dups, unlocked(&mut tables))
                 }
                 .into());
             }
             Outcome::Done => {
                 let dups = collect_dups(&mut shards, pending.duplicates(&ra, &rb));
                 if !dups.is_empty() {
-                    return Err(KeyError::Duplicate(dups).into());
+                    return Err(named(dups, unlocked(&mut tables)).into());
                 }
                 if let Some(bytes) = shards.iter().map(|s| u64::from(s.lost)).find(|&b| b > 0) {
                     // A duplicate went unlisted and no other turned up:
@@ -316,9 +318,7 @@ where
                         .into());
                     }
                 }
-                // Not locked: a first lock allocates on some platforms.
-                let names = tables.get_mut().unwrap_or_else(PoisonError::into_inner);
-                report.changes += emit(&mut shards, names, &mut on_change)?;
+                report.changes += emit(&mut shards, unlocked(&mut tables), &mut on_change)?;
                 report.passes += 1;
                 pending.replace(&mut shards)?;
                 // Both files were read whole: their records above the
@@ -340,7 +340,7 @@ where
                         workers.as_ref(),
                         solo,
                     );
-                    return Err(or_duplicates(e, dups));
+                    return Err(or_duplicates(e, dups, unlocked(&mut tables)));
                 }
                 // A range cut short by waiting records may leave the
                 // tables half empty; widen the next pass toward 90%.
@@ -772,7 +772,7 @@ fn settle<A, B, X: Extra>(
     readers: &mut Readers<'_, '_, A, B>,
     workers: Option<&rayon::ThreadPool>,
     solo: bool,
-) -> Result<Vec<Vec<u8>>>
+) -> Result<Vec<Dup>>
 where
     A: Source + ?Sized,
     B: Source + ?Sized,
@@ -800,16 +800,34 @@ where
 
 /// A data error before a budget refusal: duplicate keys, if `dups` names
 /// any, else `refusal`.
-fn or_duplicates(refusal: Error, dups: Result<Vec<Vec<u8>>>) -> Error {
+fn or_duplicates(refusal: Error, dups: Result<Vec<Dup>>, tables: &Tables) -> Error {
     match dups {
-        Ok(dups) if !dups.is_empty() => KeyError::Duplicate(dups).into(),
+        Ok(dups) if !dups.is_empty() => named(dups, tables).into(),
         _ => refusal,
     }
 }
 
+/// The table names, not locked: a first lock allocates on some platforms.
+fn unlocked(tables: &mut Mutex<Tables>) -> &Tables {
+    tables.get_mut().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The duplicate-key error for `dups`, each key with its table's name.
+#[cold]
+fn named(dups: Vec<Dup>, tables: &Tables) -> KeyError {
+    KeyError::Duplicate(
+        dups.into_iter()
+            .map(|(table, key)| TableKey {
+                table: tables.name(table).cloned(),
+                key,
+            })
+            .collect(),
+    )
+}
+
 /// `dups` and then the waiting duplicates the shards found, the first
 /// few.
-fn collect_dups<X: Extra>(shards: &mut [Pass<'_, X>], mut dups: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+fn collect_dups<X: Extra>(shards: &mut [Pass<'_, X>], mut dups: Vec<Dup>) -> Vec<Dup> {
     for s in shards {
         for d in s.dups.drain(..) {
             if dups.len() < FEW && !dups.contains(&d) {
@@ -874,12 +892,13 @@ impl Pending {
         &self,
         ra: &Reader<'_, A>,
         rb: &Reader<'_, B>,
-    ) -> Vec<Vec<u8>> {
-        let mut dups: Vec<Vec<u8>> = Vec::new();
+    ) -> Vec<Dup> {
+        let mut dups: Vec<Dup> = Vec::new();
         for (i, s) in self.list.iter().enumerate() {
             let seen = ra.seen()[i] + rb.seen()[i];
-            if seen > 1 && dups.len() < FEW && !dups.contains(&s.key) {
-                dups.push(s.key.clone());
+            if seen > 1 && dups.len() < FEW && !dups.iter().any(|d| d.0 == s.table && d.1 == s.key)
+            {
+                dups.push((s.table, s.key.clone()));
             }
         }
         dups
@@ -921,7 +940,7 @@ const _: () = assert!(size_of::<Kept<Ranges>>() == 72);
 /// What a kept record carries besides its key and lines, and the change
 /// it is handed out as.
 pub(super) trait Extra: Copy + Send + fmt::Debug {
-    type Change: Send + fmt::Debug;
+    type Change: fmt::Debug;
     /// Whether the run keeps the headers that name a record's fields.
     const HEADS: bool = false;
     /// `offset` finds the record's file offset, for an `Extra` that
@@ -1063,11 +1082,13 @@ struct Pass<'b, X: Extra> {
     /// Arena bytes and entries of `kept` no longer needed.
     garbage: usize,
     dead: usize,
-    dups: Vec<Vec<u8>>,
+    dups: Vec<Dup>,
     suspects: Vec<Suspect>,
-    change: X::Change,
+    /// The key of the change being handed out, kept so its capacity is
+    /// paid for once; the change itself is built on the stack.
+    key: Vec<u8>,
     /// Refine half: `kept`, the arena, the duplicates, the suspects and
-    /// the key of `change`.
+    /// `key`.
     res: Reservation,
     /// Refine-half bytes `res` may still grow by this round, see [`grow`].
     credit: u64,
@@ -1104,12 +1125,7 @@ impl<'b, X: Extra> Pass<'b, X> {
             dead: 0,
             dups: Vec::new(),
             suspects: Vec::new(),
-            change: X::change(KeyedChange {
-                key: Vec::new(),
-                kind: ChangeKind::Changed,
-                a: None,
-                b: None,
-            }),
+            key: Vec::new(),
             res: budget.try_reserve(Half::Refine, Bytes(0))?,
             credit: u64::MAX,
             share: u64::MAX,
@@ -1139,15 +1155,15 @@ impl<'b, X: Extra> Pass<'b, X> {
         self.arena.clear();
         self.garbage = 0;
         self.dead = 0;
-        for d in self.dups.drain(..) {
-            self.res.shrink(Bytes(d.len() as u64));
+        for (_, key) in self.dups.drain(..) {
+            self.res.shrink(Bytes(key.len() as u64));
         }
         for s in self.suspects.drain(..) {
             self.res.shrink(Bytes(s.key.len() as u64));
         }
         // Emptied, so the next record's key fits the capacity a key as
         // long took before.
-        X::base(&mut self.change).key.clear();
+        self.key.clear();
         self.overflow = None;
         self.alone = false;
         self.lost = 0;
@@ -1171,7 +1187,7 @@ impl<'b, X: Extra> Pass<'b, X> {
         self.kept = Vec::new();
         self.arena = Vec::new();
         self.dups = Vec::new();
-        X::base(&mut self.change).key = Vec::new();
+        self.key = Vec::new();
         (self.garbage, self.dead) = (0, 0);
         self.res
             .shrink(Bytes(self.res.bytes().0.saturating_sub(keep as u64)));
@@ -1264,11 +1280,11 @@ impl<'b, X: Extra> Pass<'b, X> {
                 let k = self.kept[index(v)];
                 if k.hash == rec.hash && k.table == rec.table && self.key(&k) == key {
                     if k.state == waiting {
-                        if !self.duplicate(key) {
+                        if !self.duplicate(rec.table, key) {
                             // The pass must not end as if the second record
                             // were not there, see `run`.
                             self.lost =
-                                u32::try_from(size_of::<Vec<u8>>() + key.len()).unwrap_or(u32::MAX);
+                                u32::try_from(size_of::<Dup>() + key.len()).unwrap_or(u32::MAX);
                         }
                     } else {
                         self.matched(index(v), i, side, rec, || offset(rec));
@@ -1325,8 +1341,8 @@ impl<'b, X: Extra> Pass<'b, X> {
 
     /// A key found waiting from the same file; `false` when it could not
     /// be listed and none is yet.
-    fn duplicate(&mut self, key: &[u8]) -> bool {
-        if self.dups.len() >= FEW || self.dups.iter().any(|d| d == key) {
+    fn duplicate(&mut self, table: u32, key: &[u8]) -> bool {
+        if self.dups.len() >= FEW || self.dups.iter().any(|d| d.0 == table && d.1 == key) {
             return true;
         }
         #[cfg(test)]
@@ -1343,7 +1359,7 @@ impl<'b, X: Extra> Pass<'b, X> {
             )
             && spend(&mut self.res, &mut self.credit, key.len() as u64)
         {
-            self.dups.push(key.to_vec());
+            self.dups.push((table, key.to_vec()));
             return true;
         }
         !self.dups.is_empty()
@@ -1406,7 +1422,7 @@ impl<'b, X: Extra> Pass<'b, X> {
                 len,
             )
             && grow(
-                &mut X::base(&mut self.change).key,
+                &mut self.key,
                 &mut self.res,
                 self.budget,
                 &mut self.credit,
@@ -1472,22 +1488,29 @@ impl<'b, X: Extra> Pass<'b, X> {
         on_change: &mut impl FnMut(&X::Change, &Tables) -> io::Result<()>,
     ) -> io::Result<()> {
         let k = self.kept[i];
-        let change = X::base(&mut self.change);
-        change.key.clear();
-        change.key.extend_from_slice(
+        let mut key = std::mem::take(&mut self.key);
+        key.clear();
+        key.extend_from_slice(
             &self.arena[k.start as usize + k.key_off as usize..][..k.key_len as usize],
         );
-        change.kind = match k.state {
+        let kind = match k.state {
             State::A => ChangeKind::Removed,
             State::B => ChangeKind::Added,
             State::Changed | State::Dead => ChangeKind::Changed,
         };
-        let in_a = change.kind != ChangeKind::Added;
-        let in_b = change.kind != ChangeKind::Removed;
-        change.a = in_a.then_some(LineNo(k.line_a));
-        change.b = in_b.then_some(LineNo(k.line_b));
-        k.extra.fill(&mut self.change, in_a, in_b, k.table);
-        on_change(&self.change, tables)
+        let in_a = kind != ChangeKind::Added;
+        let in_b = kind != ChangeKind::Removed;
+        let mut change = X::change(KeyedChange {
+            key,
+            kind,
+            a: in_a.then_some(LineNo(k.line_a)),
+            b: in_b.then_some(LineNo(k.line_b)),
+            table: tables.name(k.table).cloned(),
+        });
+        k.extra.fill(&mut change, in_a, in_b, k.table);
+        let sent = on_change(&change, tables);
+        self.key = std::mem::take(&mut X::base(&mut change).key);
+        sent
     }
 }
 
@@ -1587,6 +1610,14 @@ mod tests {
     }
 
     type Change = (ChangeKind, String, Option<u64>, Option<u64>);
+
+    /// Key `1` of a CSV file, as a duplicate-key error lists it.
+    fn key_one() -> TableKey {
+        TableKey {
+            table: None,
+            key: b"1".to_vec(),
+        }
+    }
     type Rows = Vec<(u32, u32)>;
 
     /// [`compare`] with no limit on the passes, for tests of what many
@@ -1733,7 +1764,7 @@ mod tests {
         ] {
             let err = run(a, b, "csv:1", 1 << 20).unwrap_err();
             assert!(
-                matches!(&err, Error::Keyed(KeyError::Duplicate(k)) if k == &[b"1".to_vec()]),
+                matches!(&err, Error::Keyed(KeyError::Duplicate(k)) if k == &[key_one()]),
                 "{err}"
             );
         }
@@ -2163,7 +2194,7 @@ mod tests {
             let b = format!("{dup},v\n{fill}");
             let err = run(a.as_bytes(), b.as_bytes(), "csv:1", mem).unwrap_err();
             let named = matches!(&err, Error::Keyed(KeyError::Duplicate(keys))
-                if keys.iter().any(|k| *k == dup.as_bytes()));
+                if keys.iter().any(|k| k.key == dup.as_bytes()));
             assert!(named, "band {at}: {err}");
         }
         COLLIDES.with(|c| c.set(|_| false));
@@ -2228,7 +2259,7 @@ mod tests {
         let advised = refusal.mem_advice(Bytes(mem)).unwrap().0;
         let err = run(a, b, "csv:1", advised).unwrap_err();
         assert!(
-            matches!(&err, Error::Keyed(KeyError::Duplicate(k)) if k == &[b"1".to_vec()]),
+            matches!(&err, Error::Keyed(KeyError::Duplicate(k)) if k == &[key_one()]),
             "{err}"
         );
     }

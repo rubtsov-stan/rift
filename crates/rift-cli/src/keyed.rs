@@ -300,6 +300,7 @@ mod tests {
             kind,
             a: a.map(LineNo),
             b: b.map(LineNo),
+            table: None,
         }
     }
 
