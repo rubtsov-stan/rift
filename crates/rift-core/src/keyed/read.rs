@@ -206,6 +206,10 @@ impl Tables {
             return None;
         }
         if i == self.names.len() {
+            // Doubling from one slot, not from the 4 a first `push` takes.
+            if self.names.len() == self.names.capacity() {
+                self.names.reserve_exact(self.names.len().max(1));
+            }
             self.names.push((name.into(), xxh3_64(name), [0; 2]));
         }
         if head > 0
