@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays under `--mem`; one directory's listing must fit in a quarter of
   it, about 2 million entries at the default `256M`, or the run is
   refused with a limit to rerun with.
+- `rift --key --show-fields` prints under each changed key the fields
+  that differ, one per line: `    price: 10 -> 12`. Fields are CSV
+  columns named by the header (numbered for `csv:N`), top-level NDJSON
+  members, or `COPY` columns. Values are cut at 64 bytes with `...`, and
+  `(none)` marks a field one record lacks.
+- `--fields a,b` compares only the named fields and implies
+  `--show-fields`: a key whose other fields changed is not printed and
+  does not count for the exit status.
 
 ### Changed
 

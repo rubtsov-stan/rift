@@ -681,6 +681,28 @@ first pass. A record longer than the buffer streams through it in
 pieces: cutting it short would lose bytes, and streaming costs no more
 memory.
 
+`--show-fields` names the fields that differ under each changed key.
+`compare_fields` runs the passes of `compare_with_ranges` and, as each
+change is handed out, reads its two records back with `pread` into one
+buffer from the refine half. Room for 4 KiB of records and 64 fields is
+reserved before the first pass, since at emit the pass holds most of the
+half; past that the buffer grows to the largest pair and is kept to the
+end of the run. A pair that does not fit is a budget
+error built like any other refusal, never a skipped change. The records
+met in memory during the pass, but the pass hands out its changes sorted
+by line once it ends, so a field diff found then would have to be kept
+per change; reading back keeps one pair at a time. Fields are CSV cells
+named by the file's header row, NDJSON top-level members, or `COPY`
+cells named by their table's column list. In this mode only, the table
+of names (`Tables`) keeps each file's header row and each table's
+column list, paid from the same refine-half credit as a table name.
+Fields match by name and compare byte by byte: CSV cells without their
+quotes, with an unquoted empty cell apart from `""`, NDJSON values and
+`COPY` cells as they are. `--fields` drops a changed key whose named
+fields are equal when it is handed out, so the key holds its kept
+record until its pass ends, as any changed key does. `compare` and
+`compare_with_ranges` run as before.
+
 ### Moved blocks
 
 A block that moved shows up as a deletion and an insertion. Its lines
