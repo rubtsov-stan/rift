@@ -11,6 +11,14 @@ export class RpcError extends Error implements RpcErrorObject {
   }
 }
 
+// A busy answer's `retry_after_ms` is waited as it says, within these bounds: the server's
+// estimate of a scan's end can be tiny or hours, and a retry should not spin or sit for long.
+const RETRY_MIN_MS = 50;
+const RETRY_MAX_MS = 5000;
+// Where busy retries stop in total, counted from the first attempt. A server that waits for
+// room itself (up to 5 s) has then used most of it with one attempt.
+const BUSY_TOTAL_MS = 10000;
+
 // What Server needs of one server process.
 export interface Link {
   readonly startedAt: number;
@@ -144,8 +152,11 @@ export class Superseded extends Error {
 export interface ServerOptions {
   command: () => string;
   args: string[];
-  // Waits between attempts after a `busy` answer; the request fails after the last.
+  // Waits between attempts after a `busy` answer that gives no `retry_after_ms`; the request
+  // fails after the last, and an answer that gives one counts against the same number of retries.
   busyDelaysMs?: number[];
+  // A busy request stops retrying once its waits would end this long after its first attempt.
+  busyTotalMs?: number;
   // A process that dies sooner than this after starting is not restarted, so a broken binary does not loop.
   minUptimeMs?: number;
   // `epoch` is the process that sent it.
@@ -203,7 +214,13 @@ export class Server {
         if (restarting) this.connect().then(() => this.opts.onRestarted?.(), (e) => this.opts.onRestartFailed?.(e));
       };
       const c = this.opts.link?.(onNotification, onClose) ?? new Connection(this.opts.command(), this.opts.args, onNotification, onClose);
-      c.request<InitializeResult>('initialize', { protocol: 1, client: { name: 'rift-vscode', version: '0.3.4' } }).then((r) => {
+      const hello = { protocol: 1, client: { name: 'rift-vscode', version: '0.3.4' } };
+      c.request<InitializeResult>('initialize', { ...hello, capabilities: { retry_after: true } }).catch((e) => {
+        // A rift before 0.4 refuses any param it does not know. Ask again without it: such a
+        // server still sends retry_after_ms with busy, it only does not wait for room.
+        if (e instanceof RpcError && e.code === Code.invalidParams && e.data?.param === 'capabilities') return c.request<InitializeResult>('initialize', hello);
+        throw e;
+      }).then((r) => {
         this.limits = r.limits;
         resolve(c);
       }, (e) => {
@@ -226,6 +243,7 @@ export class Server {
   // each attempt.
   async request<T>(method: string, params: object, wanted: () => boolean = () => true, epoch?: number, before?: () => Promise<unknown>): Promise<T> {
     const delays = this.opts.busyDelaysMs ?? [150, 300, 600, 1200];
+    const started = Date.now();
     const gone = () => epoch !== undefined && !this.alive(epoch);
     for (let attempt = 0; ; attempt++) {
       await before?.();
@@ -235,8 +253,15 @@ export class Server {
         if (!wanted() || gone()) throw new Superseded();
         return await conn.request<T>(method, params);
       } catch (e) {
-        if (!(e instanceof RpcError && e.code === Code.busy) || attempt >= delays.length) throw e;
-        await new Promise((r) => setTimeout(r, delays[attempt]));
+        if (!(e instanceof RpcError && e.code === Code.busy)) throw e;
+        const said = e.data?.retry_after_ms;
+        const wait = typeof said === 'number' && Number.isFinite(said) ? Math.min(Math.max(said, RETRY_MIN_MS), RETRY_MAX_MS) : delays[attempt];
+        if (attempt >= delays.length || Date.now() - started + wait >= (this.opts.busyTotalMs ?? BUSY_TOTAL_MS)) {
+          // The server's own wording ("retry in N ms") already says it.
+          if (typeof said !== 'number' || /retry in \d+ ms/.test(e.message)) throw e;
+          throw new RpcError(e.code, `${e.message} (try again in ${Math.ceil(said / 100) / 10} s)`, e.data);
+        }
+        await new Promise((r) => setTimeout(r, wait));
       }
     }
   }
