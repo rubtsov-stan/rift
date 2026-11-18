@@ -201,7 +201,7 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
         moves: true,
     };
     // Built before anything is printed, so a refusal leaves no half header.
-    let diff = full::build(&files, cli.mem)?;
+    let diff = full::build(&files, &crate::budget(cli.mem, true), cli.mem)?;
     let (old_label, new_label) = call.labels();
     let opts = Options {
         context: DEFAULT_CONTEXT,

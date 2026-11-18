@@ -1,7 +1,8 @@
 #!/bin/sh
 # CI memory gate: generates a pair, runs `rift --summary --mem MEM`, the
-# full diff `rift --stats --mem MEM`, `rift git-diff --stats --mem MEM`
-# and, on a shuffled CSV pair, key mode `rift --stats --key csv:1 --mem
+# full diff `rift --stats --mem MEM`, `rift git-diff --stats --mem MEM`,
+# the directory diff of two trees that hold the pair and, on a shuffled
+# CSV pair, key mode `rift --stats --key csv:1 --mem
 # MEM`, and fails when the counting allocator's peak heap of any of them
 # exceeds MEM.
 #
@@ -83,8 +84,22 @@ rc=0
 ended git-diff "$rc"
 check git-diff "$work/err"
 
+# The pair as one changed file in two trees, with files only in one tree
+# and a renamed one; hard links, so the trees take no space.
+for t in a b; do
+  mkdir -p "$work/tree-$t/sub"
+  ln "$work/pair/$t" "$work/tree-$t/sub/data"
+  echo "only in $t" > "$work/tree-$t/only-$t"
+  echo moved > "$work/tree-$t/moved-$t"
+done
+rc=0
+/usr/bin/time $tf "$root/target/release/rift" --stats --mem "$mem" \
+  "$work/tree-a" "$work/tree-b" > /dev/null 2> "$work/err" || rc=$?
+ended dir "$rc"
+check dir "$work/err"
+
 # Key mode on a shuffled pair of the same size; its changes go nowhere.
-rm -rf "$work/pair" "$work/diff"
+rm -rf "$work/pair" "$work/diff" "$work/tree-a" "$work/tree-b"
 "$root/target/release/rift-gen" --seed 7 --size "$size" --profile shuffled --rows csv --out "$work/keyed"
 rc=0
 /usr/bin/time $tf "$root/target/release/rift" --stats --key csv:1 --mem "$mem" \

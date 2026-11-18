@@ -48,14 +48,17 @@ pub struct Args {
     pub command: Option<Command>,
     /// First file. It must be a regular file: Rift reads at offsets, so a
     /// pipe, FIFO or `<(command)` is refused. `-` is a file name, not
-    /// standard input.
+    /// standard input. Two directories are compared as trees: files only
+    /// in one tree, renamed files (same content) and a diff of each
+    /// changed file, in the format of `diff -r`.
     #[arg(required = true)]
     pub a: Option<PathBuf>,
-    /// Second file, under the same rules as the first.
+    /// Second file, or second directory, under the same rules as the first.
     #[arg(required = true)]
     pub b: Option<PathBuf>,
     /// Print line counts, the segment map and resource use instead of a
-    /// diff.
+    /// diff. For two directories, one status per path (A, D, M, R, T) and
+    /// the counts.
     #[arg(long)]
     pub summary: bool,
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),

@@ -1,6 +1,7 @@
 //! Command-line entry point for Rift.
 #![deny(unsafe_code)]
 
+mod dir;
 mod full;
 mod gitdiff;
 mod keyed;
@@ -76,6 +77,25 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
     let (Some(path_a), Some(path_b)) = (&args.a, &args.b) else {
         unreachable!("clap requires both files when no subcommand is given");
     };
+    let (dir_a, dir_b) = (path_a.is_dir(), path_b.is_dir());
+    if dir_a || dir_b {
+        anyhow::ensure!(
+            dir_a && dir_b,
+            "{} and {}: give two files or two directories",
+            shown(path_a),
+            shown(path_b)
+        );
+        anyhow::ensure!(
+            args.key.is_none() && !args.interactive,
+            "--key and -i compare two files, not directories"
+        );
+        let opts = dir::Opts {
+            summary: args.summary,
+            moves: !args.no_moves,
+            stats: args.stats,
+        };
+        return dir::run(path_a, path_b, args.mem, &opts);
+    }
     let a = FileSource::open(path_a).with_context(|| format!("open {}", shown(path_a)))?;
     let b = FileSource::open(path_b).with_context(|| format!("open {}", shown(path_b)))?;
     if let Some(spec) = &args.key {

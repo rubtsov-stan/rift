@@ -11,7 +11,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::Context;
 use rift_core::diff::{Config, Diff};
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict, quote_diff_name};
-use rift_core::{ApproxReason, Bytes};
+use rift_core::{ApproxReason, Budget, Bytes};
 
 use crate::source::FileSource;
 use crate::summary::{peak_heap, print_moves};
@@ -32,12 +32,16 @@ fn threads(mem: Bytes) -> usize {
     rift_core::budget::threads(mem).min(rift_core::budget::cores())
 }
 
-pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, FileSource>> {
-    let budget = crate::budget(mem, true);
+/// The diff of `files` under `budget`, the budget of `--mem mem`.
+pub fn build(
+    files: &Files<'_>,
+    budget: &Budget,
+    mem: Bytes,
+) -> anyhow::Result<Diff<FileSource, FileSource>> {
     Ok(Diff::with_config(
         Arc::clone(&files.a),
         Arc::clone(&files.b),
-        &budget,
+        budget,
         threads(mem),
         Config {
             moves: files.moves,
@@ -50,7 +54,7 @@ pub fn build(files: &Files<'_>, mem: Bytes) -> anyhow::Result<Diff<FileSource, F
 /// are identical, 1 when they differ.
 pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
-    let diff = build(files, mem)?;
+    let diff = build(files, &crate::budget(mem, true), mem)?;
     let (old_name, old_time) = label(files.path_a)?;
     let (new_name, new_time) = label(files.path_b)?;
     let opts = Options {
@@ -119,7 +123,7 @@ pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
         io::stdin().is_terminal() && io::stdout().is_terminal(),
         "-i needs a terminal"
     );
-    let diff = build(files, mem)?;
+    let diff = build(files, &crate::budget(mem, true), mem)?;
     let identical = rift_core::DiffView::segments(&diff)
         .iter()
         .all(|s| s.status == rift_core::SegmentStatus::Equal);
@@ -137,7 +141,7 @@ pub fn interactive(files: &Files<'_>, mem: Bytes) -> anyhow::Result<ExitCode> {
 
 /// The header of a file as `diff -u` prints it: the name, quoted as GNU diff
 /// quotes it, and the modification time in the local zone.
-fn label(path: &Path) -> anyhow::Result<(Vec<u8>, Timestamp)> {
+pub fn label(path: &Path) -> anyhow::Result<(Vec<u8>, Timestamp)> {
     let modified = std::fs::metadata(path)
         .and_then(|m| m.modified())
         .with_context(|| format!("stat {}", crate::source::shown(path)))?;

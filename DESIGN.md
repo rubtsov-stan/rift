@@ -175,15 +175,17 @@ runs in the background.
   never treated as equality.
 - Peak heap stays under `--mem`. CI checks it on macOS and Linux with
   `bench/ci-mem.sh`, which asserts the counting allocator's peak heap
-  against `--mem` for `--summary`, the full diff, `rift git-diff` and key
-  mode, on a 1 GiB pair at 256M and on 16 MiB pairs at 64K, 1M and 4M,
+  against `--mem` for `--summary`, the full diff, `rift git-diff`, the
+  directory diff and key mode, on a 1 GiB pair at 256M and on 16 MiB pairs at 64K, 1M and 4M,
   where a budget refusal still has its peak checked. The script prints
   peak RSS but does not assert it.
 - Approximate regions are marked explicitly in every output: terminal
   interface, unified diff and summary statistics. The unified diff,
   `--stats`, the terminal status line and `rift-mcp`'s hunk text also
   give the reason in plain words.
-- Exit codes follow `diff`: 0 identical, 1 different, 2 error.
+- Exit codes follow `diff`: 0 identical, 1 different, 2 error. For two
+  directories, as `diff -r`: 2 when an entry could not be compared, with
+  the rest of the output complete.
 
 ## Non-guarantees
 
@@ -832,3 +834,81 @@ Errors are typed from the core to the client. Each has a JSON-RPC code
 in Rift's range and structured data; a budget refusal carries the
 `--mem` to reopen with, computed by `BudgetExceeded::mem_advice`, the
 same function behind the CLI's `rerun with --mem`.
+
+## Directory diff (0.4)
+
+`rift A B` on two directories compares the trees in the CLI only; the
+walk lives in `rift-cli` (`src/dir/`), and `rift-core` sees each file
+pair through `Source` as before. The terminal view, `rift serve` and the
+VS Code tree are later.
+
+Output follows `diff -r`: `Only in DIR: NAME`, `diff -r A/x B/x` before
+a changed file's unified diff, `Binary files A/x and B/x differ` when
+the first 8 KiB of either file hold a NUL (directory mode only, #72),
+`Symbolic links A/x and B/x differ`, and GNU's line for a type change.
+`Renamed: A/x -> B/y` and a first line `Renames approximate: ...` are
+Rift's own. `--summary` prints a status per relative path and counts.
+
+The walk goes depth first through both trees in step and sorts each
+directory's names as bytes, so the order depends on the trees alone.
+Each directory is listed twice: once to count entries and name bytes,
+once to fill two vectors of exactly that size (8 bytes per entry plus
+its name), so a listing never reallocates. Both trees' listings of a
+level are reserved together. Symbolic links are not followed; special
+files are never opened. One directory handle is open at a time.
+
+A directory that changes between the two listings cannot overrun them:
+the fill stops at the counted entries and name bytes, so a directory
+that gained an entry or a longer name is an error for that directory,
+reported on standard error with exit status 2, and the walk does not
+descend there. One that lost entries lists what is left. A directory
+that grows between the walks needs more than the first walk held; the
+later walk then takes it from the share like any listing, and a refusal
+ends the run with a `--mem` to rerun with.
+
+Renames are exact content only, in three walks: the first counts
+one-sided regular files per bucket of sizes (64 Ki buckets, two 2-bit
+counters each); the second keeps the one-sided files whose bucket has
+files in both trees, hashed with xxh3 unless the bucket holds one file
+per tree; the tables are sorted by size, hash and path, and files are
+paired only after a byte compare. A file of A takes the first file of B
+in path order with equal bytes; a file that fails 8 compares stops
+looking. Paths sort by component, as the walk visits them. When a walk
+finds no shared bucket, the second walk is skipped.
+
+### Memory
+
+The listings on the current path, the two path buffers (4 KiB of
+relative path each), the 32 KiB output buffer, two 32 KiB compare
+buffers, the 64 KiB size counters and the two rename tables all come
+from the Skeleton half, and together take at most half of it, `B/4`
+(`take` in `dir/mod.rs`). A file diff runs below them with at least the
+other half of the Skeleton half and the whole Refine half, so the floor
+of a full diff does not move. A refusal reports its figures doubled, as
+if the share were the whole half, so `mem_advice` names a `--mem` whose
+share holds what was asked; the share's fixed part does not grow with
+`--mem`, so one rerun at that limit gets past the listing that failed.
+
+The first walk records the peak the Skeleton half reached. The rename
+tables get what is left of `B/4` after that peak, half each, so the later
+walks, which list the same directories, always fit. A table grows by
+doubling into a new allocation, and both are counted until the copy is
+done. When a table is full, the run says so on its first line and the
+remaining one-sided files are listed as only in one tree.
+
+What `--mem` bounds is one directory, not the tree: the walk holds the
+listings of the directories on its path and frees each on the way back.
+Measured on an Apple M1 with flat directories of empty files named
+`f0000000` to `f0199999` on both sides, the peak heap of
+`rift --summary --mem 256M` grew by 16 bytes per entry per side, the
+8-byte entry plus the 8-byte name. At `256M` the share is 64 MiB less
+about 172 KiB of fixed buffers, so a directory both trees hold fits
+about 2.09 million entries with 8-byte names (inferred from the measured
+cost; not run at that size).
+
+A file diff inside a tree can differ from `rift A/x B/x` at the same
+`--mem`, since its skeleton gets less room. The walk's holdings at each
+file depend only on the trees and `--mem`, so the same trees and
+`--mem` give the same bytes on any machine and thread count;
+`tests/dir.rs` checks two creation orders and three thread settings.
+

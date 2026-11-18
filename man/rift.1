@@ -33,7 +33,7 @@ diff prints it in the \fB\-\fR and \fB+\fR lines. There is no
 .SH OPTIONS
 .TP
 \fB\-\-summary\fR
-Print line counts, the segment map and resource use instead of a diff
+Print line counts, the segment map and resource use instead of a diff. For two directories, one status per path (A, D, M, R, T) and the counts
 .TP
 \fB\-\-mem\fR \fI<MEM>\fR [default: 256M]
 Heap limit, in bytes or with a K, M, G or T unit (powers of 1024), at least 64K. The output is identical on any machine for the same \-\-mem and input. A full diff needs about 10.3 MiB (10475K), whatever the files hold, for the buffers that compare the lines of a region; \-\-summary and \-\-key go lower. A refused run names a \-\-mem to rerun with, at least twice the one refused
@@ -60,15 +60,19 @@ Print help
 Print version
 .TP
 <\fIA\fR>
-First file. It must be a regular file: Rift reads at offsets, so a pipe, FIFO or `<(command)` is refused. `\-` is a file name, not standard input
+First file. It must be a regular file: Rift reads at offsets, so a pipe, FIFO or `<(command)` is refused. `\-` is a file name, not standard input. Two directories are compared as trees: files only in one tree, renamed files (same content) and a diff of each changed file, in the format of `diff \-r`
 .TP
 <\fIB\fR>
-Second file, under the same rules as the first
+Second file, or second directory, under the same rules as the first
 .SH MODES
 .TP
 \fBrift\fR [\fIoptions\fR] \fIA\fR \fIB\fR
 Writes a unified diff to standard output, as \fBdiff \-u\fR does.
 \fBpatch\fR(1) applied to \fIA\fR gives \fIB\fR.
+.TP
+\fBrift\fR [\fIoptions\fR] \fIDIR\-A\fR \fIDIR\-B\fR
+Compares two directory trees, as \fBdiff \-r\fR prints them; see
+DIRECTORIES. Added in 0.4.
 .TP
 \fBrift serve\fR [\fIoptions\fR]
 Serves Rift's protocol to an editor or another program; see SERVE.
@@ -201,6 +205,44 @@ limit and thread count. Their order depends on the limit, since each
 pass prints its own changes sorted by line, and on nothing else: the
 same files under the same limit print the same bytes, errors included,
 on every run and machine.
+.SH DIRECTORIES
+Given two directories, Rift walks both trees in step, depth first, with
+the names of each directory in byte order, and prints:
+.IP \(bu 2
+\fBOnly in\fR \fIDIR\fR\fB:\fR \fINAME\fR for an entry in one tree. A
+directory in one tree is one line.
+.IP \(bu 2
+\fBdiff \-r\fR \fIA/x\fR \fIB/x\fR and the unified diff of a changed
+file, or \fBBinary files\fR \fIA/x\fR \fBand\fR \fIB/x\fR \fBdiffer\fR
+when the first 8 KiB of either file hold a NUL byte.
+.IP \(bu 2
+\fBRenamed:\fR \fIA/x\fR \fB\->\fR \fIB/y\fR for a file only in A and a
+file only in B with the same bytes. Several files with the same content
+pair in byte order of their paths, first with first. When the rename
+table is full, the first line of the output says so and names a
+\fB\-\-mem\fR to try; the files that did not fit are listed as only in
+one tree.
+.IP \(bu 2
+\fBSymbolic links\fR \fIA/x\fR \fBand\fR \fIB/x\fR \fBdiffer\fR when the
+targets differ. Links are never followed.
+.IP \(bu 2
+\fBFile\fR \fIA/x\fR \fBis a directory while file\fR \fIB/x\fR \fBis a
+regular file\fR, and the like, when the type differs.
+.PP
+A FIFO, socket or device on both sides, and an entry that cannot be read,
+are reported on standard error; the walk goes on and Rift exits with
+status 2. With \fB\-\-summary\fR Rift prints one status per relative path
+(\fBA\fR, \fBD\fR, \fBM\fR, \fBR\fR, \fBT\fR) and the counts. A directory
+and a file are refused, and so are \fB\-\-key\fR and \fB\-i\fR with
+directories.
+.PP
+Each changed file is diffed in turn under the same \fB\-\-mem\fR. The
+walk holds the listings of the directories on its path, 8 bytes per entry
+plus its name on each side, in a quarter of the budget: at the default
+256M a directory both trees hold fits about 2 million entries with 8-byte
+names. A directory that does not fit is refused with a limit to rerun
+with. For \fBpg_dump \-Fd\fR, dump with \fB\-Z0\fR, or every table shows as
+a binary file.
 .SH EXIT STATUS
 Exit status follows \fBdiff\fR(1).
 .TP
@@ -212,7 +254,8 @@ The files differ.
 .TP
 \fB2\fR
 An error: an unreadable file, an operand that is not a regular file
-(a pipe, FIFO or directory), a budget too small, a duplicate key, an
+(a pipe or FIFO), a directory given with a file, an entry of two
+directories that could not be compared, a budget too small, a duplicate key, an
 invalid option or \fB\-i\fR in a build without the terminal view.
 The message goes to standard error.
 .PP
@@ -400,6 +443,14 @@ Compare two CSV files by the column \fBid\fR, whatever the row order:
 .RS
 .nf
 rift \-\-key csv:id a.csv b.csv
+.fi
+.RE
+.PP
+Compare two dump directories written by \fBpg_dump \-Fd \-Z0\fR:
+.PP
+.RS
+.nf
+rift old\-dump/ new\-dump/ > changes.diff
 .fi
 .RE
 .PP
