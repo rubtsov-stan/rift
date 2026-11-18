@@ -1,8 +1,17 @@
 name: CI
 
+# A pull request branch runs CI once, from pull_request; push covers main.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A new push to a pull request drops the run for its old head. Each run on
+# main gets a group of its own: in a shared group a newer pending run would
+# cancel an older pending one even without cancel-in-progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -139,10 +148,10 @@ jobs:
       - run: cargo build --no-default-features -p rift-diff
       - run: cargo test --no-default-features -p rift-diff
 
-  # Miri runs nightly (miri.yml). A branch or pull request that adds or
-  # changes a line with `unsafe` in Rust code runs it here too.
+  # Miri runs nightly (miri.yml). A pull request that adds or changes a
+  # line with `unsafe` in Rust code runs it here too.
   unsafe-diff:
-    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       touched: ${{ steps.diff.outputs.touched }}
