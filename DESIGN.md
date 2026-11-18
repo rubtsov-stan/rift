@@ -774,6 +774,19 @@ text. It reads a segment's script through `DiffView` and renders it
 itself; the ranges it reports come from segments, so they can be a few
 lines wider than the change.
 
+Two more tools, `keyed_summary` and `keyed_changes`, run key mode. They
+keep nothing between calls: a keyed run holds tables sized from its
+budget, so each call, each page included, runs the whole comparison.
+The run takes a lease from the same set of sessions: its `mem` counts
+in the 512 MiB total and it takes one of the four slots until it
+returns. The core's own budget of that size pays for the run, and 128
+KiB of its refine half is held for the answer, which stops at 64 KiB of
+JSON. A page is addressed by an opaque cursor that carries the position
+and a fingerprint of the key, `mem`, `fields` and both files, so a
+cursor of another call is refused and a page never comes from a
+different comparison. The fingerprint only guards paging; the
+comparison confirms every match byte by byte.
+
 ### Performance
 
 The performance pass profiles the full diff and `--summary` on a 10 GiB
