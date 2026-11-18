@@ -29,6 +29,8 @@ The server builds the diff of a pair of files once and keeps it for the next cal
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rubtsov-stan/rift/releases/latest/download/rift-mcp-installer.sh | sh
 ```
 
+`rift-mcp` is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.rubtsov-stan/rift-mcp`.
+
 Or build it from the repository:
 
 ```
@@ -50,6 +52,18 @@ claude mcp add --transport stdio --scope user rift -- /path/to/rift-mcp
 The `--` ends Claude Code's options and starts the server command. `--scope user` makes the server available in every project. Without it the server belongs to the current project. See [Claude Code: connect to tools with MCP](https://code.claude.com/docs/en/mcp).
 
 ### Claude Desktop
+
+#### Install the bundle
+
+Each release carries `rift-mcp-<version>.mcpb`, a bundle of `rift-mcp` for macOS and for Linux on x86_64 and aarch64. Windows is not in it yet. Download the file from the [latest release](https://github.com/rubtsov-stan/rift/releases/latest), open Claude Desktop's Settings, then Extensions, and drag the file onto the window. Claude Desktop installs it and starts the server; no path to set.
+
+The bundle is not signed yet. Its provenance can be checked with the file next to it in the release:
+
+```
+gh attestation verify rift-mcp-<version>.mcpb --bundle rift-mcp-<version>.mcpb.sigstore.json --repo rubtsov-stan/rift
+```
+
+#### Or edit the config
 
 Open Settings, then Developer, then Edit Config. The file is `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and `%APPDATA%\Claude\claude_desktop_config.json` on Windows.
 

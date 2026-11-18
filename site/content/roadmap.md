@@ -1,6 +1,6 @@
 +++
 title = "Rift roadmap: what is next, and what is not planned"
-description = "What comes after Rift 0.3.2: a faster 0.4, directory diff, field-level key diff and key mode over MCP. No dates."
+description = "What comes after Rift 0.3.4: a faster 0.4, directory diff, field-level key diff and key mode over MCP. No dates."
 weight = 5
 [extra]
 nav = "Roadmap"
@@ -10,6 +10,8 @@ lead = "What comes after the current release. Nothing here has a date."
 
 ## Shipped
 
+- **0.3.4.** `rift-mcp` waits up to 5 seconds for room when four diffs are alive, and a busy answer says when to retry. Each release carries an MCP bundle, `rift-mcp-<version>.mcpb`, and `rift-mcp` is in the MCP Registry. See the [MCP guide](@/guide/mcp.md).
+- **0.3.3.** The same files under the same `--mem` give the same output on any machine and any thread count. A refused `--mem` names one at least twice as large, so a few reruns reach a budget that works. Key mode always reports a duplicate key, and runs on several threads from `--mem 16M`. `rift git-diff` and the plain diff quote file names the way git and GNU diff do.
 - **0.3.2.** A pipe, FIFO or process substitution such as `rift <(cmd) file` is refused with a message to write the input to a file first; earlier versions read it as an empty file and printed a wrong diff. A file cut while Rift reads it is an error naming the file.
 - **0.3.1.** `--show-records` prints the records of each change in [key mode](@/guide/key-mode.md). Two files, or two regions, that share no line get an exact diff and no `approx` mark, and an approximate hunk says why in plain words. The heap stays within `--mem`, which is now at least 64K, with a reserve for the heap no budget counts. A closed pipe, as in `rift a b | head`, ends without a message.
 - **VS Code extension.** Compares two huge files from VS Code and opens each difference in VS Code's own diff editor. See the [VS Code guide](@/guide/vscode.md).
