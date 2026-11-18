@@ -224,6 +224,18 @@ impl<J: Job> Scheduler<J> {
     /// [`Error::Io`](crate::Error::Io) when a worker thread cannot be
     /// spawned.
     pub fn new(job: J, segments: Vec<Segment>, budget: &Budget, threads: usize) -> Result<Self> {
+        Self::start(job, segments, budget, threads, true)
+    }
+
+    /// [`new`](Self::new) with background refinement set before the workers
+    /// exist, so no worker can take a segment first.
+    fn start(
+        job: J,
+        segments: Vec<Segment>,
+        budget: &Budget,
+        threads: usize,
+        background: bool,
+    ) -> Result<Self> {
         let free = budget.available(Half::Refine);
         let table = Cache::table_bytes(segments.len());
         let share = free.0.saturating_sub(table.0) / 2;
@@ -257,7 +269,7 @@ impl<J: Job> Scheduler<J> {
                 wanted_from: 0,
                 retry: RETRY,
                 cursor: 0,
-                background: true,
+                background,
                 running: Vec::with_capacity(threads),
                 failures: Vec::new(),
                 approx: ApproxTally::default(),
