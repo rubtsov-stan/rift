@@ -475,6 +475,7 @@ pub struct Sessions {
 }
 
 /// Counts a session [`Sessions::get`] is building; uncounts it on drop.
+#[derive(Debug)]
 struct Building<'s> {
     sessions: &'s Sessions,
     id: SessionId,
@@ -484,6 +485,24 @@ impl Drop for Building<'_> {
     fn drop(&mut self) {
         self.sessions.lock().building.retain(|s| s.id != self.id);
         self.sessions.released.notify_all();
+    }
+}
+
+/// Room taken by [`Sessions::lease`]; given back on drop.
+#[derive(Debug)]
+pub struct Lease<'s> {
+    mem: Bytes,
+    // Dropped in this order: the memory is given back when `_building`
+    // leaves the list, which wakes the waiters, so `_held` must let go first.
+    _held: Arc<Session>,
+    _building: Building<'s>,
+}
+
+impl Lease<'_> {
+    /// The memory budget the lease stands for.
+    #[must_use]
+    pub fn mem(&self) -> Bytes {
+        self.mem
     }
 }
 
@@ -646,6 +665,36 @@ impl Sessions {
             used: Instant::now(),
         });
         Ok(session)
+    }
+
+    /// Room for a run that is not a session, such as key mode: `mem` (the
+    /// default when `None`) of the total and one slot, held until the
+    /// [`Lease`] drops. Waits for room as [`get`](Self::get) does, evicting
+    /// idle and then least recently used ready sessions.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MemOverLimit`] or [`Error::Busy`].
+    pub fn lease(&self, mem: Option<Bytes>) -> Result<Lease<'_>, Error> {
+        let mem = self.check_mem(mem)?;
+        let mut waiter = None;
+        loop {
+            let mut s = self.lock();
+            if let Err(full) = self.make_room(&mut s, mem) {
+                drop(self.wait_for_room(s, full, &mut waiter)?);
+                continue;
+            }
+            // A session that is never built: it carries the share of the
+            // total, and `building` carries the slot.
+            let held = self.new_session(&mut s, mem, [Bytes(0); 2]);
+            s.building.push(Arc::clone(&held));
+            let id = held.id;
+            return Ok(Lease {
+                mem,
+                _held: held,
+                _building: Building { sessions: self, id },
+            });
+        }
     }
 
     /// Opens the files at `a` and `b` and returns their session, with a
@@ -1028,5 +1077,29 @@ mod tests {
         });
         eprintln!("{busy} of {OPENS} opens were busy");
         assert_eq!(busy, 0);
+    }
+
+    #[test]
+    fn a_lease_holds_room_like_a_session_until_it_drops() {
+        let (_dir, s, [a, b, ..]) = pairs(Bytes::mib(16));
+        let lease = s.lease(Some(Bytes::mib(16))).unwrap();
+        assert_eq!(lease.mem(), Bytes::mib(16));
+        assert_eq!(s.mem(), Bytes::mib(16));
+        let opened = s.open(&a, &b, Some(Bytes::mib(16)));
+        assert!(matches!(opened, Err(Error::Busy { .. })), "{opened:?}");
+        let over = s.lease(Some(Bytes::mib(17)));
+        assert!(matches!(over, Err(Error::MemOverLimit { .. })), "{over:?}");
+        drop(lease);
+        assert_eq!(s.mem(), Bytes(0));
+        assert!(s.open(&a, &b, Some(Bytes::mib(16))).is_ok());
+    }
+
+    #[test]
+    fn a_lease_evicts_a_ready_session_for_room() {
+        let (_dir, s, [a, b, ..]) = pairs(Bytes::mib(16));
+        let id = ready(&s, &a, &b);
+        let lease = s.lease(Some(Bytes::mib(16))).unwrap();
+        assert!(s.session(id).is_err(), "the idle session made room");
+        drop(lease);
     }
 }
