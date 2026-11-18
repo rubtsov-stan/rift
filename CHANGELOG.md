@@ -68,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Key mode gave its threads' memory back to the budget before the
   threads had exited, so a few KiB they allocated on the way out counted
   against no reservation, and under `rift serve` or the MCP server
-  against the next comparison. It now waits for them.
+  against the next comparison. It now waits for them. With `--key copy:`
+  the first table name could also take 80 bytes more than reserved.
 
 ## [0.3.4] - 2026-11-18
 
