@@ -565,6 +565,12 @@ run_one() {
       if [ "$result" = oom-kill ]; then round=killed
       elif [ "$ec" = 0 ] && [ "$(cat "$b.cmp")" = same ]; then round=ok; else round=failed; fi ;;
   esac
+  # diff, cmp, git and rift exit 1 when the files differ; above that the
+  # tool failed (git diff --text exits 128 on files over 1 GiB), and the
+  # counter's "-0 +0" for its empty output is not a count.
+  if [ "$grp" = tools ] && [ "${ec:-0}" -gt 1 ]; then
+    case $result in oom-kill|timeout) ;; *) counts="no result" ;; esac
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$id" "$grp" "$prof" "$sz" "$tool" "$thr" "$cap" "$rep" "$wall" "$user" "$sys" "$rss" "$ec" "$heap" "$out" "$result" \
     "$approx" "$x_lines" "$changed" "$round" "$(printf '%s' "$*" | tr '\t\n' '  ')" "$counts" >> "$runs"
@@ -1034,7 +1040,7 @@ END {
     echo
     echo "## Tool comparison"
     echo
-    echo "One row per command and pair. Time is the median wall time of the runs that finished, with the fastest and slowest; RSS is the median peak resident set; counts are what the tool reported, as changed lines (- and +) or keys (+ added, - removed, ~ changed); failed lists the runs the cap killed (oom-kill), the timeout stopped (timeout), that printed no counts (no result, with the exit code; the tool's message is in raw/ID.err), or that were skipped after a kill or a stop. Every tool's version is under Host."
+    echo "One row per command and pair. Time is the median wall time of the runs that finished, with the fastest and slowest; RSS is the median peak resident set; counts are what the tool reported, as changed lines (- and +) or keys (+ added, - removed, ~ changed); failed lists the runs the cap killed (oom-kill), the timeout stopped (timeout), that printed no counts or exited above 1 (no result, with the exit code; the tool's message is in raw/ID.err), or that were skipped after a kill or a stop. Every tool's version is under Host."
     echo
     echo "| pair | size | tool | runs | time | fastest | slowest | RSS | peak heap | output | counts | failed |"
     echo "|---|---|---|---|---|---|---|---|---|---|---|---|"
