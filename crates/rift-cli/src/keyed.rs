@@ -6,8 +6,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use rift_core::keyed::{
-    ChangeKind, KeyError, KeySpec, KeyedChange, RangedChange, RecordReader, Side, compare,
-    compare_with_ranges,
+    ChangeKind, FieldChange, FieldName, KeyError, KeySpec, KeyedChange, RangedChange, RecordReader,
+    Side, compare, compare_fields, compare_with_ranges,
 };
 use rift_core::{Bytes, Error, LineNo, Source};
 
@@ -18,9 +18,23 @@ use crate::summary::peak_heap;
 /// longer than this streams through it.
 const RECORD_BUF: usize = 64 << 10;
 
+/// Bytes of a field value printed before it is cut.
+const VALUE_CUT: usize = 64;
+
+/// What key mode prints under each change line.
+#[derive(Debug, Clone, Copy)]
+pub struct Show<'a> {
+    /// The records, behind `  - ` and `  + `.
+    pub records: bool,
+    /// The fields that differ, for a changed key.
+    pub fields: bool,
+    /// Only these fields count, from `--fields`.
+    pub only: Option<&'a [String]>,
+}
+
 /// Compares `a` and `b` record by record, keyed by `spec`, under `mem`,
-/// and prints one line per changed key, followed by its records when
-/// `show_records` is set. Exit code 0 when no key changed, 1 otherwise.
+/// and prints one line per changed key, followed by what `show` asks for.
+/// Exit code 0 when no key changed, 1 otherwise.
 ///
 /// # Errors
 ///
@@ -33,7 +47,7 @@ pub fn run(
     spec: &KeySpec,
     mem: Bytes,
     stats: bool,
-    show_records: bool,
+    show: Show<'_>,
 ) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
     let mut out = BufWriter::new(Out {
@@ -42,7 +56,17 @@ pub fn run(
     });
     let mut printed = 0u64;
     let budget = crate::budget(mem, false);
-    let result = if show_records {
+    let result = if show.fields {
+        compare_fields(a, b, spec, show.only, &budget, |c| {
+            printed += 1;
+            write_change(&mut out, &c.change.change)?;
+            write_fields(&mut out, c)?;
+            if show.records {
+                write_record_pair(&mut out, c)?;
+            }
+            Ok(())
+        })
+    } else if show.records {
         let mut reader = RecordReader::new(&budget, RECORD_BUF)?;
         compare_with_ranges(a, b, spec, &budget, |c| {
             printed += 1;
@@ -143,7 +167,14 @@ fn write_change(out: &mut impl Write, c: &KeyedChange) -> io::Result<()> {
         ChangeKind::Removed => b"-",
         ChangeKind::Changed => b"~",
     })?;
-    let mut rest = &c.key[..];
+    write_escaped(out, &c.key)?;
+    let line = |l: Option<LineNo>| l.map_or_else(|| "-".to_owned(), |l| (l.0 + 1).to_string());
+    writeln!(out, "\t{}\t{}", line(c.a), line(c.b))
+}
+
+/// Writes `bytes` with tabs, line breaks and backslashes escaped, so they
+/// stay on one line.
+fn write_escaped(out: &mut impl Write, mut rest: &[u8]) -> io::Result<()> {
     while let Some(i) = rest
         .iter()
         .position(|b| matches!(b, b'\\' | b'\t' | b'\n' | b'\r'))
@@ -157,9 +188,75 @@ fn write_change(out: &mut impl Write, c: &KeyedChange) -> io::Result<()> {
         })?;
         rest = &rest[i + 1..];
     }
-    out.write_all(rest)?;
-    let line = |l: Option<LineNo>| l.map_or_else(|| "-".to_owned(), |l| (l.0 + 1).to_string());
-    writeln!(out, "\t{}\t{}", line(c.a), line(c.b))
+    out.write_all(rest)
+}
+
+/// For a changed key, `    NAME: OLD -> NEW` per field that differs,
+/// four spaces in, so a field line never looks like a change line or a
+/// record line. A value is cut at 64 bytes, on a character boundary when
+/// it is UTF-8, and ends in `...`; `(none)` stands for a missing field.
+fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
+    if c.change.change.kind != ChangeKind::Changed {
+        return Ok(());
+    }
+    let Some(fields) = c.fields() else {
+        return out.write_all(b"    (record not split into fields)\n");
+    };
+    let mut any = false;
+    for f in fields {
+        any = true;
+        out.write_all(b"    ")?;
+        match f.name {
+            FieldName::Number(n) => write!(out, "{n}")?,
+            FieldName::Bytes(name) => write_escaped(out, name)?,
+        }
+        out.write_all(b": ")?;
+        write_value(out, f.a)?;
+        out.write_all(b" -> ")?;
+        write_value(out, f.b)?;
+        out.write_all(b"\n")?;
+    }
+    if !any {
+        out.write_all(b"    (no field differs)\n")?;
+    }
+    Ok(())
+}
+
+fn write_value(out: &mut impl Write, value: Option<&[u8]>) -> io::Result<()> {
+    let Some(v) = value else {
+        return out.write_all(b"(none)");
+    };
+    if v.len() <= VALUE_CUT {
+        return write_escaped(out, v);
+    }
+    let end = match std::str::from_utf8(&v[..VALUE_CUT]) {
+        // A character cut in two at the end: stop before it.
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        _ => VALUE_CUT,
+    };
+    write_escaped(out, &v[..end])?;
+    out.write_all(b"...")
+}
+
+/// The records of a field change, as [`write_records`] prints them.
+fn write_record_pair(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
+    for (record, prefix) in [(c.a_record, b"  - "), (c.b_record, b"  + ")] {
+        let Some(record) = record else { continue };
+        out.write_all(prefix)?;
+        write_prefixed(out, prefix, record)?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+/// Writes `chunk`, putting `prefix` after each of its line breaks.
+fn write_prefixed(out: &mut impl Write, prefix: &[u8], mut chunk: &[u8]) -> io::Result<()> {
+    while let Some(i) = memchr::memchr(b'\n', chunk) {
+        out.write_all(&chunk[..=i])?;
+        out.write_all(prefix)?;
+        chunk = &chunk[i + 1..];
+    }
+    out.write_all(chunk)
 }
 
 /// The records of `c`, A's then B's, each line behind `  - ` or `  + `.
@@ -174,13 +271,8 @@ fn write_records<S: Source + ?Sized>(
     for (src, range, prefix) in [(a, &c.a_range, b"  - "), (b, &c.b_range, b"  + ")] {
         let Some(range) = range else { continue };
         out.write_all(prefix)?;
-        reader.read(src, range.clone(), |mut chunk| {
-            while let Some(i) = memchr::memchr(b'\n', chunk) {
-                out.write_all(&chunk[..=i])?;
-                out.write_all(prefix)?;
-                chunk = &chunk[i + 1..];
-            }
-            out.write_all(chunk)
+        reader.read(src, range.clone(), |chunk| {
+            write_prefixed(out, prefix, chunk)
         })?;
         out.write_all(b"\n")?;
     }
