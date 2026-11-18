@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `rift A B` on two directories compares the trees, as `diff -r` prints
+  them: files only in one tree, a unified diff per changed file under a
+  `diff -r` header, `Binary files ... differ` for files with a NUL in
+  their first 8 KiB, and `Renamed:` for a file moved with its content
+  unchanged. Symbolic links are compared by target and never followed.
+  `--summary` lists one status per path and the counts. The whole run
+  stays under `--mem`; one directory's listing must fit in a quarter of
+  it, about 2 million entries at the default `256M`, or the run is
+  refused with a limit to rerun with.
+
+### Changed
+
+- A directory given with a file is refused with `give two files or two
+  directories` (exit 2) instead of `not a regular file`.
+
 ## [0.3.4] - 2026-11-18
 
 ### Changed

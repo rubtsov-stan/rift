@@ -164,6 +164,29 @@ call='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"summary","
 echo 'rift-mcp' >"$out/mcp-summary.cmd"
 cd "$work"
 
+# Two small trees for the directory diff, and two directories too large
+# for --mem 1M.
+mkdir "$work/dir" && cd "$work/dir"
+mkdir -p A/sub A/onlydir A/fd B/sub B/empty
+printf 'one\ntwo\nthree\n' > A/sub/changed.txt
+printf 'one\nTWO\nthree\n' > B/sub/changed.txt
+printf 'same\n' | tee A/same.txt > B/same.txt
+printf 'moved content\nline2\n' | tee A/old-name.txt > B/sub/new-name.txt
+printf 'gone\n' > A/removed.txt
+printf 'new\n' > B/added.txt
+printf 'x\n' > A/onlydir/f
+printf 'y\n' > A/fd/inner
+printf 'file\n' > B/fd
+ln -s same.txt A/link
+ln -s other.txt B/link
+cap dir-diff 'rift A B'
+cap dir-summary 'rift --summary A B'
+mkdir big-a big-b
+i=0
+while [ $i -lt 20000 ]; do : > big-a/entry-$i; : > big-b/entry-$i; i=$((i + 1)); done
+cap dir-refused 'rift --summary --mem 1M big-a big-b'
+cd "$work"
+
 {
   rift --version
   echo "built from $(git -C "$root" rev-parse --short HEAD)"

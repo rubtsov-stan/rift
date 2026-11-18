@@ -101,6 +101,30 @@ are followed): Rift reads at offsets, so a pipe, a FIFO or `<(command)` is
 refused with exit 2. Write the input to a file first. `-` is a file name, not
 standard input.
 
+## Directories
+
+New in 0.4. Given two directories, Rift compares the trees and prints
+what `diff -r` prints: `Only in` lines for files in one tree, a unified
+diff under a `diff -r A/x B/x` header for each changed file, and
+`Binary files ... differ` for a file with a NUL byte in its first 8 KiB.
+A file only in A and a file only in B with the same bytes are one
+`Renamed:` line. Symbolic links are compared by target, not followed.
+`--summary` prints one status per path (A, D, M, R, T) and the counts.
+
+```sh
+rift old-dump/ new-dump/ > changes.diff
+```
+
+The whole tree runs under one `--mem`, one directory at a time: a tree
+can hold millions of files, but one directory's listing must fit in a
+quarter of the limit, 8 bytes per entry plus its name, on each side. At
+the default `256M` that is about 2 million entries with 8-byte names in
+a directory both trees have. A directory that does not fit is refused
+with a limit to rerun with. Files that change during the run are not
+detected. For `pg_dump -Fd`, dump with `-Z0` (`--compress=0`), or every
+table shows as `Binary files ... differ`; reading the `.gz` files is
+[#73](https://github.com/rubtsov-stan/rift/issues/73).
+
 ## Documentation
 
 The site has a guide to every mode (the terminal view, `--summary`, key
