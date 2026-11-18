@@ -23,6 +23,7 @@ use std::fmt;
 use std::io;
 use std::ops::Range;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::budget::{Budget, Half, Reservation};
 use crate::error::Result;
@@ -121,6 +122,20 @@ pub struct KeyedChange {
     pub a: Option<LineNo>,
     /// The record's first line in B.
     pub b: Option<LineNo>,
+    /// The `COPY` table of the records, as its header names it; `None`
+    /// outside `pg_dump` files. Shared with the run's list of table
+    /// names, so handing it out copies no bytes.
+    pub table: Option<Arc<[u8]>>,
+}
+
+/// A key and the `COPY` table it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableKey {
+    /// The table, as its `COPY` header names it; `None` outside `pg_dump`
+    /// files.
+    pub table: Option<Arc<[u8]>>,
+    /// The key's bytes as they appear in the file.
+    pub key: Vec<u8>,
 }
 
 /// A [`KeyedChange`] with where its records are, from
@@ -208,9 +223,9 @@ impl fmt::Display for Side {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum KeyError {
-    /// A key occurs more than once in one file.
+    /// A key occurs more than once in one file, or in one `COPY` table.
     #[error("duplicate keys: {}", Keys(.0))]
-    Duplicate(Vec<Vec<u8>>),
+    Duplicate(Vec<TableKey>),
     /// A record has no value for the key.
     #[error("line {} of {side} has no key", line.0 + 1)]
     NoKey {
@@ -243,16 +258,20 @@ pub enum KeyError {
     Collisions,
 }
 
-/// The first few keys of a list, for an error message.
-struct Keys<'k>(&'k [Vec<u8>]);
+/// The first few keys of a list, for an error message, each behind its
+/// table and a colon, a colon in the table written `\:` as on a key line.
+struct Keys<'k>(&'k [TableKey]);
 
 impl fmt::Display for Keys<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, key) in self.0.iter().enumerate() {
+        for (i, k) in self.0.iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{}", String::from_utf8_lossy(key))?;
+            if let Some(table) = &k.table {
+                write!(f, "{}:", String::from_utf8_lossy(table).replace(':', "\\:"))?;
+            }
+            write!(f, "{}", String::from_utf8_lossy(&k.key))?;
         }
         Ok(())
     }
@@ -346,9 +365,89 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
+    fn dup(table: Option<&str>, key: &str) -> TableKey {
+        TableKey {
+            table: table.map(|t| t.as_bytes().into()),
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
     #[test]
     fn duplicate_keys_are_listed() {
-        let err = KeyError::Duplicate(vec![b"7".to_vec(), b"9".to_vec()]);
-        assert_eq!(err.to_string(), "duplicate keys: 7, 9");
+        let err = KeyError::Duplicate(vec![
+            dup(None, "7"),
+            dup(Some("public.item"), "9"),
+            dup(Some("public.\"a:b\""), "1:2"),
+        ]);
+        assert_eq!(
+            err.to_string(),
+            "duplicate keys: 7, public.item:9, public.\"a\\:b\":1:2"
+        );
+    }
+
+    const ITEM_A: &[u8] = b"COPY public.item (id, v) FROM stdin;\n1\tx\n\\.\n";
+    const ORDER_A: &[u8] = b"COPY public.order (id, v) FROM stdin;\n1\tx\n2\tx\n\\.\n";
+
+    #[test]
+    fn copy_changes_name_their_table() {
+        let a = [ITEM_A, ORDER_A].concat();
+        let b = b"COPY public.order (id, v) FROM stdin;\n1\ty\n\\.\n\
+                  COPY public.item (id, v) FROM stdin;\n1\ty\n\\.\n";
+        let budget = Budget::new(Bytes(1 << 20));
+        let mut got = Vec::new();
+        compare(&a[..], &b[..], &parse("copy:id").unwrap(), &budget, |c| {
+            got.push((
+                c.table.as_deref().map(<[u8]>::to_vec),
+                c.key.clone(),
+                c.kind,
+            ));
+            Ok(())
+        })
+        .unwrap();
+        let t = |n: &str| Some(n.as_bytes().to_vec());
+        assert_eq!(
+            got,
+            [
+                (t("public.item"), b"1".to_vec(), ChangeKind::Changed),
+                (t("public.order"), b"1".to_vec(), ChangeKind::Changed),
+                (t("public.order"), b"2".to_vec(), ChangeKind::Removed),
+            ]
+        );
+    }
+
+    #[test]
+    fn csv_changes_name_no_table() {
+        let budget = Budget::new(Bytes(1 << 20));
+        let mut tables = Vec::new();
+        compare(
+            &b"id\n1\n"[..],
+            &b"id\n2\n"[..],
+            &parse("csv:id").unwrap(),
+            &budget,
+            |c| {
+                tables.push(c.table.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(tables, [None, None]);
+    }
+
+    #[test]
+    fn duplicate_copy_keys_name_their_table() {
+        let a = [
+            ITEM_A,
+            b"COPY public.order (id, v) FROM stdin;\n1\tx\n1\ty\n\\.\n",
+        ]
+        .concat();
+        let budget = Budget::new(Bytes(1 << 20));
+        let err = compare(&a[..], ITEM_A, &parse("copy:id").unwrap(), &budget, |_| {
+            Ok(())
+        })
+        .unwrap_err();
+        let crate::Error::Keyed(KeyError::Duplicate(keys)) = err else {
+            panic!("{err}");
+        };
+        assert_eq!(keys, [dup(Some("public.order"), "1")]);
     }
 }

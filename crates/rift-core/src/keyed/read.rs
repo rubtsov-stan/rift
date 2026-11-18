@@ -22,7 +22,7 @@
 
 use std::io;
 use std::ops::Range;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use memchr::{memchr, memchr2, memchr3};
 use rayon::prelude::*;
@@ -75,8 +75,8 @@ type Head = (u32, Side, Box<[u8]>);
 #[derive(Debug)]
 pub struct Tables {
     /// Each name, its hash seed, and the round in which A and B paid for
-    /// it, 0 before.
-    names: Vec<(Box<[u8]>, u64, [u64; 2])>,
+    /// it, 0 before. Changes share a name rather than copy it.
+    names: Vec<(Arc<[u8]>, u64, [u64; 2])>,
     /// Rounds A and B have begun.
     rounds: [u64; 2],
     /// With field output: each file's CSV header row (table 0) or `COPY`
@@ -120,6 +120,12 @@ impl Tables {
         let heads = self.heads.as_ref()?;
         let (.., head) = heads.iter().find(|h| h.0 == table && h.1 == side)?;
         Some(head)
+    }
+
+    /// The name of `table`, `None` for table 0, outside `pg_dump` files.
+    pub(crate) fn name(&self, table: u32) -> Option<&Arc<[u8]>> {
+        let i = table.checked_sub(1)?;
+        self.names.get(i as usize).map(|(name, ..)| name)
     }
 
     /// Every head kept, of any table and side.
@@ -189,10 +195,14 @@ impl Tables {
             Some(i) => i,
             None => self.names.len(),
         };
-        // The list doubles, so two slots per name cover its capacity.
-        let slot = size_of::<(Box<[u8]>, u64, [u64; 2])>() as u64;
+        // The list doubles, so two slots per name cover its capacity. The
+        // name's allocation also holds its two reference counts, and is
+        // padded to their alignment.
+        let slot = size_of::<(Arc<[u8]>, u64, [u64; 2])>() as u64;
+        let name_bytes =
+            (name.len() + 2 * size_of::<usize>()).next_multiple_of(align_of::<usize>()) as u64;
         let head = self.head_cost(id(i), side, cols);
-        if !spend(&mut self.res, credit, name.len() as u64 + 2 * slot + head) {
+        if !spend(&mut self.res, credit, name_bytes + 2 * slot + head) {
             return None;
         }
         if i == self.names.len() {
