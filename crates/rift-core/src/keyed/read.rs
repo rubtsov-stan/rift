@@ -1194,10 +1194,14 @@ fn csv_record(buf: &[u8], col: u32, eof: bool) -> Option<Split> {
             // file's last line break still ends the record, and the line
             // breaks right before it are blank lines, as they are outside
             // quotes: otherwise a change of the final line endings alone
-            // would change the record.
-            if quoted && buf.ends_with(b"\n") {
-                lines -= 1;
-                let mut end = buf.len() - 1;
+            // would change the record. A final lone CR is a line break
+            // too, as `trim_cr` reads it outside quotes.
+            if quoted {
+                let mut end = buf.len();
+                if buf.ends_with(b"\n") {
+                    lines -= 1;
+                    end -= 1;
+                }
                 while let Some(nl) = trim_cr(buf, end).checked_sub(1) {
                     if buf[nl] != b'\n' {
                         break;
@@ -1440,6 +1444,22 @@ mod tests {
         ] {
             let s = csv_record(buf, 0, true).unwrap();
             assert_eq!((s.len, s.next, s.lines), (4, buf.len(), lines), "{buf:?}");
+        }
+    }
+
+    #[test]
+    fn open_quote_at_eof_reads_a_final_cr_as_a_line_break() {
+        for (buf, len, lines) in [
+            (&b"2,\"a\r"[..], 4, 1),
+            (b"2,\"a\nb\r", 6, 2),
+            (b"2,\"a\r\n\n\r", 4, 3),
+            (b"2,\"a\n\r\n\r", 4, 3),
+            // Only the last CR is a line break, as outside quotes.
+            (b"2,\"a\r\r", 5, 1),
+            (b"2,\"a\r\r\n", 5, 1),
+        ] {
+            let s = csv_record(buf, 0, true).unwrap();
+            assert_eq!((s.len, s.next, s.lines), (len, buf.len(), lines), "{buf:?}");
         }
     }
 

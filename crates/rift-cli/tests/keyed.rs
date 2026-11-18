@@ -115,6 +115,24 @@ fn a_malformed_key_is_a_usage_error() {
 }
 
 #[test]
+fn a_final_lone_cr_after_an_open_quote_changes_nothing() {
+    // The second pair leaves the quote open in the key column.
+    for (a, b) in [
+        (&b"id,v\r\n1,\"a\r\n\n\r"[..], &b"id,v\r\n1,\"a\r\n\n"[..]),
+        (b"id,v\r\n\"1,a\r\n\n\r", b"id,v\r\n\"1,a\r\n\n"),
+    ] {
+        let out = rift_on(a, b, &["--key", "csv:id"]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{a:?}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
 fn key_mode_does_not_combine_with_summary() {
     let out = rift(&["--key", "csv:1", "--summary"]);
     assert_eq!(out.status.code(), Some(2));

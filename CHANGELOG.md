@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   immediate busy answer. `initialize` ignores a capability it does not
   know and refuses a known one of the wrong type.
 
+### Fixed
+
+- `--key csv:` on a file whose last record leaves a quote open and that
+  ends in a lone CR reported that record as changed against the same
+  file without the CR, and kept the line breaks in the key when the
+  quote was in the key column. The final CR now counts as a line break,
+  as it does outside quotes, and such files compare equal.
+
 ## [0.3.4] - 2026-11-18
 
 ### Changed
