@@ -17,7 +17,9 @@
   "tools": [
     { "name": "summary", "description": "Counts, sizes and the first differing ranges of two files" },
     { "name": "hunks_at", "description": "The diff lines of one range" },
-    { "name": "next_difference", "description": "The first differing range after a line" }
+    { "name": "next_difference", "description": "The first differing range after a line" },
+    { "name": "keyed_summary", "description": "Keys added, removed and changed between two files of records, and the first of each" },
+    { "name": "keyed_changes", "description": "A page of changed keys with their records and changed fields" }
   ],
   "compatibility": { "platforms": ["darwin", "linux"] }
 }

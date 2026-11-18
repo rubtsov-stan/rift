@@ -19,7 +19,7 @@ pub struct FileSource {
 
 /// What identifies a file's contents for the session cache: a changed file
 /// gets a new id, so a stale skeleton is never reused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId {
     dev: u64,
     ino: u64,

@@ -59,7 +59,7 @@ fn pair(dir: &Path) -> (String, String) {
 }
 
 #[tokio::test]
-async fn the_server_lists_its_three_tools() {
+async fn the_server_lists_its_tools() {
     let c = connect(&Server::default()).await;
     assert_eq!(
         c.peer_info().unwrap().server_info.as_ref().unwrap().name,
@@ -73,7 +73,16 @@ async fn the_server_lists_its_three_tools() {
         .map(|t| t.name.to_string())
         .collect();
     names.sort();
-    assert_eq!(names, ["hunks_at", "next_difference", "summary"]);
+    assert_eq!(
+        names,
+        [
+            "hunks_at",
+            "keyed_changes",
+            "keyed_summary",
+            "next_difference",
+            "summary"
+        ]
+    );
 }
 
 #[tokio::test]
