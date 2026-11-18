@@ -114,7 +114,8 @@ up to about a factor of two. A full diff needs about 10.3 MiB whatever
 the files hold: the refine half must hold the comparison buffers of one
 worker, about 5 MiB (`--mem 10475K`); `--summary` and key mode do not
 refine. Key mode keeps only the 48 KiB: it never starts rayon's global
-pool and holds its own pool's heap in the refine half. `rift serve`
+pool and holds its own pool's heap in the refine half, until the pool's
+threads have exited. `rift serve`
 keeps its own 8 MiB for the protocol out of
 `--max-total-mem` and takes no further reserve per session.
 

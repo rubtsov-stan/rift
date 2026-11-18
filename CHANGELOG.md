@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file without the CR, and kept the line breaks in the key when the
   quote was in the key column. The final CR now counts as a line break,
   as it does outside quotes, and such files compare equal.
+- Key mode gave its threads' memory back to the budget before the
+  threads had exited, so a few KiB they allocated on the way out counted
+  against no reservation, and under `rift serve` or the MCP server
+  against the next comparison. It now waits for them.
 
 ## [0.3.4] - 2026-11-18
 

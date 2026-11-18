@@ -212,7 +212,7 @@ where
     loop {
         let hi = lo + width.min(END - lo);
         let mut readers = (&mut ra, &mut rb, &tables);
-        let read = on(workers.as_ref(), || {
+        let read = on(workers.pool.as_ref(), || {
             read_pass(&mut readers, &mut shards, lo, hi, &pending.list, solo)
         });
         let read = read.map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens));
@@ -254,7 +254,7 @@ where
                             &mut shards,
                             &mut pending,
                             &mut readers,
-                            workers.as_ref(),
+                            workers.pool.as_ref(),
                             solo,
                         );
                         return Err(or_duplicates(e, dups, unlocked(&mut tables)));
@@ -268,7 +268,7 @@ where
                     &mut shards,
                     &mut pending,
                     &mut readers,
-                    workers.as_ref(),
+                    workers.pool.as_ref(),
                     solo,
                 )
                 .map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens))?;
@@ -337,7 +337,7 @@ where
                         &mut shards,
                         &mut pending,
                         &mut readers,
-                        workers.as_ref(),
+                        workers.pool.as_ref(),
                         solo,
                     );
                     return Err(or_duplicates(e, dups, unlocked(&mut tables)));
@@ -599,7 +599,7 @@ fn plan(refine: u64) -> (usize, u64) {
 }
 
 /// The threads that run the shards, as many as the `pool` held for them
-/// pays for, at most rayon's pool size; `None` when it pays for none, as
+/// pays for, at most rayon's pool size; no pool when it pays for none, as
 /// for one shard, which runs on the caller's thread. Rayon's global pool
 /// is never started: its size follows the machine, and its heap is not
 /// in the budget.
@@ -613,16 +613,53 @@ fn plan(refine: u64) -> (usize, u64) {
 /// are mapped by the system, outside the heap. So the threads number
 /// `min(pool size, pool / POOL_PER_THREAD)`, which [`plan`] makes at
 /// most one per shard.
-fn workers(pool: &Reservation) -> Result<Option<rayon::ThreadPool>> {
+fn workers(pool: &Reservation) -> Result<Workers> {
     let paid = usize::try_from(pool.bytes().0 / POOL_PER_THREAD).unwrap_or(usize::MAX);
     if paid == 0 {
-        return Ok(None);
+        return Ok(Workers::default());
     }
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(crate::budget::pool_threads().min(paid))
-        .build()
-        .map(Some)
-        .map_err(|e| Error::Io(io::Error::other(e)))
+    // Counting the cores allocates on Linux (cgroup files), so only a run
+    // whose pool reservation can pay for it asks.
+    let n = crate::budget::pool_threads().min(paid);
+    // Part of the threads' own heap, paid from `pool` like the rest of it.
+    let mut threads = Vec::with_capacity(n);
+    let built = rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .spawn_handler(|thread| {
+            threads.push(std::thread::Builder::new().spawn(|| thread.run())?);
+            Ok(())
+        })
+        .build();
+    // Held before the error check: a failed build stops the threads it
+    // started, and dropping `workers` waits for them.
+    let mut workers = Workers {
+        pool: None,
+        threads,
+    };
+    workers.pool = Some(built.map_err(|e| Error::Io(io::Error::other(e)))?);
+    Ok(workers)
+}
+
+/// The pool that runs the shards, and its threads.
+#[derive(Default)]
+struct Workers {
+    pool: Option<rayon::ThreadPool>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Workers {
+    /// Waits for every thread to exit, its thread-local destructors
+    /// included: rayon's pool only tells its threads to stop, and whatever
+    /// they free or allocate on the way out would otherwise land after the
+    /// reservation that pays for them is gone. Runs before that
+    /// reservation drops, since `run` declares it first.
+    fn drop(&mut self) {
+        drop(self.pool.take());
+        for t in self.threads.drain(..) {
+            // A worker's panic already reached the caller through `install`.
+            let _ = t.join();
+        }
+    }
 }
 
 /// Runs `op` on `workers`, or on this thread without them.
