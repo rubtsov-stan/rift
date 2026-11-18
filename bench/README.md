@@ -1,6 +1,25 @@
 # Benchmarks
 
-`run.sh`, `data.sh` and `ci-mem.sh` are the macOS and CI tools. `linux-safe.sh` is the one to run on a Linux machine you care about.
+`run.sh`, `data.sh`, `compare.sh` and `ci-mem.sh` are the macOS and CI tools. `linux-safe.sh` is the one to run on a Linux machine you care about.
+
+## compare.sh
+
+```sh
+bench/compare.sh v0.3.4 origin/main /path/to/scratch           # two refs
+bench/compare.sh /path/a/rift /path/b/rift /path/to/scratch    # or two binaries
+```
+
+Runs two rift builds against each other on the reference pairs and prints a markdown table. A ref is built from `git archive` into the scratch directory (its own target directory); a path to an executable is used as it is. `rift-gen` comes from the second build, so both sides read the same pairs. `RUNS=N` changes the number of timed runs per side (default 10).
+
+Reference pairs, `rift-gen --seed 7 --change-ratio 0.001`, written to the scratch directory and never committed: `sql` and `csv` at 256 MiB and 1 GiB, shuffled CSV at 256 MiB (run with `--key csv:id`), `periodic` with period 1000 at 256 MiB and 1 GiB (#46), `nokey` at 4 MiB. Every run is `rift --stats --mem 256M a b` with stdout to a file.
+
+Per pair: one untimed warm-up per side, then the runs alternate base, head, base, head. The page cache is warm and nothing is dropped. The load average (1 min) is read before and after every run and the table shows its range per pair; the report ends with the top CPU users at start and end, so the load can be read.
+
+The table has, per pair, the median and min-max wall time of each side, the head's difference to the base median, the threshold, the peak heap of each side (the exact count `--stats` prints) and the verdict. A row is `SLOWER` only if the head median exceeds the base median by more than the larger of 3% and the combined spread, here the mean of the two max-min ranges over the base median. `HEAP HIGHER` is added when the head's peak heap is above the base's.
+
+Outputs are compared with `cmp`, never a hash: the stdout of every run against the base's warm-up output, and the stderr without its `time` and `peak heap` lines. The first difference stops the script with exit 1 and a message.
+
+The script holds a lock directory, `gate.lock` in the repository's git directory, for the whole run, builds and data generation included, and waits in 30 s steps while another holds it. Anything else that must not run during a measurement takes the same directory with `mkdir`. The lock is released on exit, error and interrupt. `PAIRS` replaces the pair list (lines of `name|rift-gen args|rift args`) to try the script on small data.
 
 ## linux-safe.sh
 
