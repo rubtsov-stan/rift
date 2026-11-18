@@ -869,7 +869,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             k += 1;
         }
         // Only `COPY` names tables; the lock's first use allocates on some
-        // systems, outside the budget.
+        // systems, from the bytes `run` holds for it.
         if matches!(self.kind, Kind::Copy { .. }) {
             tables
                 .lock()

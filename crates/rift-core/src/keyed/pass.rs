@@ -60,6 +60,10 @@ const MAX_SHARDS: usize = 8;
 /// shards: its queues and thread record, about 8 KiB per thread on macOS,
 /// held twice over.
 const POOL_PER_THREAD: u64 = 16 << 10;
+/// Refine-half bytes for the table list's lock, which allocates a
+/// 64-byte pthread mutex on its first use on macOS. Only `COPY` names and
+/// field-mode headers take the lock.
+const LOCK_BYTES: u64 = 64;
 
 /// What the comparison cost.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -192,6 +196,8 @@ where
     } else {
         Tables::new(budget)?
     });
+    let locks = X::HEADS || matches!(spec, super::KeySpec::Copy(_));
+    let _lock = budget.try_reserve(Half::Refine, Bytes(if locks { LOCK_BYTES } else { 0 }))?;
     let keys = ra.estimate_lines()? + rb.estimate_lines()?;
     let (mut shards, _list) = Pass::<X>::shards(budget, keys, sizes.chunks)?;
     let mut pending = Pending::new(budget)?;
