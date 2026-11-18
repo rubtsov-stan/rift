@@ -55,6 +55,14 @@
    gh attestation verify <archive> --bundle <archive>.sigstore.json --repo rubtsov-stan/rift
    ```
 
+   `sha256.sum` lists only what dist builds. Each `.deb`, `.vsix` and `.mcpb`
+   carries its own `<file>.sha256` in the same format (not attested, like the
+   archives' checksums). Check that all seven exist, and verify one:
+
+   ```sh
+   gh release download vX.Y.Z -p 'rift-mcp-X.Y.Z.mcpb*' && sha256sum -c rift-mcp-X.Y.Z.mcpb.sha256
+   ```
+
    The MCP Registry workflow attaches `rift-mcp-X.Y.Z.mcpb` with its
    `.sigstore.json` and `.intoto.jsonl`, then publishes
    `io.github.rubtsov-stan/rift-mcp` X.Y.Z to the MCP Registry. Check the

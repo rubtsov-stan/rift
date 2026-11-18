@@ -101,7 +101,10 @@ jobs:
         run: |
           set -eu
           .github/scripts/provenance-assets.sh out "$GITHUB_REPOSITORY" '*.mcpb'
-          gh release upload "$TAG" out/*.mcpb out/*.mcpb.sigstore.json out/*.mcpb.intoto.jsonl --repo "$GITHUB_REPOSITORY" --clobber
+          # Same format as dist's archive checksums; sha256.sum is dist's and stays untouched.
+          # Not attested, like the archives' own checksums.
+          (cd out && for f in *.mcpb; do sha256sum -b "$f" > "$f.sha256"; done)
+          gh release upload "$TAG" out/*.mcpb out/*.mcpb.sha256 out/*.mcpb.sigstore.json out/*.mcpb.intoto.jsonl --repo "$GITHUB_REPOSITORY" --clobber
       - name: Install mcp-publisher
         run: |
           set -eu
