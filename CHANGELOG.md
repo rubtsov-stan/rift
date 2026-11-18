@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A directory given with a file is refused with `give two files or two
   directories` (exit 2) instead of `not a regular file`.
+- `rift serve` waits up to 5 seconds for room, at most four calls at a
+  time, before it answers busy, but only for a client that declares
+  `capabilities.retry_after` in `initialize`. Other clients keep the
+  immediate busy answer. `initialize` ignores a capability it does not
+  know and refuses a known one of the wrong type.
 
 ## [0.3.4] - 2026-11-18
 

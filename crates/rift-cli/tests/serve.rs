@@ -1020,6 +1020,99 @@ fn a_full_server_answers_busy_at_once_with_a_retry_time() {
     clean_exit(c);
 }
 
+/// Four scanning sessions, held, fill every slot; none can be dropped.
+fn fill(c: &mut Client, dir: &Path, a: &str) {
+    for n in 0..4 {
+        let b = write(dir, &format!("b{n}"), b"x\n");
+        c.ok("open", json!({"a": a, "b": b, "mem": "16M"}));
+    }
+}
+
+#[test]
+fn a_client_that_says_it_honours_retry_after_waits_for_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "held", b"a\n");
+    let hold = ScanHold::new(&a);
+    let mut c = Client::start(&[]);
+    c.initialize_patient();
+    fill(&mut c, dir.path(), &a);
+    let b = write(dir.path(), "b4", b"x\n");
+    let id = c.request("open", &json!({"a": a, "b": b, "mem": "16M"}));
+    // Every scan is held, so no room can free and the call must still wait;
+    // a refusal would have come at once.
+    c.pump(Duration::from_millis(500));
+    assert!(!c.answered(id), "{:?}", c.answer(id));
+    // The scans end, a ready session is dropped for room, the open succeeds.
+    drop(hold);
+    let msg = c.answer(id);
+    assert!(msg.get("result").is_some(), "{msg}");
+    clean_exit(c);
+}
+
+#[test]
+fn a_client_that_waited_is_busy_with_a_retry_time_when_no_room_frees() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "held", b"a\n");
+    let hold = ScanHold::new(&a);
+    let mut c = Client::start(&[]);
+    c.initialize_patient();
+    fill(&mut c, dir.path(), &a);
+    let b = write(dir.path(), "b4", b"x\n");
+    let began = Instant::now();
+    let e = c.err("open", json!({"a": a, "b": b, "mem": "16M"}), BUSY);
+    // The wait is 5 s; the scans stay held for all of it.
+    assert!(
+        began.elapsed() >= Duration::from_secs(5),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(e["data"]["what"], "sessions");
+    assert!(e["data"]["retry_after_ms"].as_u64().unwrap() > 0, "{e}");
+    drop(hold);
+    clean_exit(c);
+}
+
+#[test]
+fn a_client_that_declines_retry_after_gets_busy_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "held", b"a\n");
+    let hold = ScanHold::new(&a);
+    let mut c = Client::start(&[]);
+    c.ok(
+        "initialize",
+        json!({"protocol": 1, "capabilities": {"retry_after": false}}),
+    );
+    fill(&mut c, dir.path(), &a);
+    let b = write(dir.path(), "b4", b"x\n");
+    let began = Instant::now();
+    c.err("open", json!({"a": a, "b": b, "mem": "16M"}), BUSY);
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    drop(hold);
+    clean_exit(c);
+}
+
+#[test]
+fn initialize_ignores_a_capability_it_does_not_know_and_checks_the_known_one() {
+    let mut c = Client::start(&[]);
+    c.ok(
+        "initialize",
+        json!({"protocol": 1, "capabilities": {"teleport": true, "retry_after": false}}),
+    );
+    for caps in [json!({"retry_after": "yes"}), json!(true)] {
+        let e = c.err_bad(
+            "initialize",
+            json!({"protocol": 1, "capabilities": caps}),
+            INVALID_PARAMS,
+        );
+        assert_eq!(e["data"]["param"], "capabilities", "{e}");
+    }
+    clean_exit(c);
+}
+
 #[test]
 fn closing_input_during_a_scan_exits_at_once() {
     let dir = tempfile::tempdir().unwrap();

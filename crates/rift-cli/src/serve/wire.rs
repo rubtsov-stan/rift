@@ -180,6 +180,32 @@ impl Params {
         }
     }
 
+    /// A boolean, if present.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_params` for anything else.
+    pub fn flag(&self, name: &str) -> Result<Option<bool>, RpcError> {
+        match self.0.get(name) {
+            None => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            Some(_) => Err(invalid(name)),
+        }
+    }
+
+    /// An object, if present, whatever names it holds.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_params` for anything else.
+    pub fn open_object(&self, name: &str) -> Result<Option<Self>, RpcError> {
+        match self.0.get(name) {
+            None => Ok(None),
+            Some(Value::Object(m)) => Ok(Some(Self(m.clone()))),
+            Some(_) => Err(invalid(name)),
+        }
+    }
+
     /// An object holding only `names`, if present.
     ///
     /// # Errors

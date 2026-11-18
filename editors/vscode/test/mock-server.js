@@ -204,6 +204,11 @@ const METHODS = {
     if (process.env.MOCK_FAIL_INIT || (process.env.MOCK_FAIL_INIT_FILE && fs.existsSync(process.env.MOCK_FAIL_INIT_FILE))) throw new RpcError(-32603, 'initialize failed on purpose');
     if (process.env.MOCK_OLD_SERVER && p.capabilities !== undefined) throw invalid('capabilities');
     if (p.protocol !== 1) throw invalid('protocol', { supported: [1] });
+    // As the server checks it: names it does not know are ignored, retry_after must be a boolean.
+    const caps = p.capabilities ?? {};
+    if (typeof caps !== 'object' || caps === null || Array.isArray(caps) || (caps.retry_after !== undefined && typeof caps.retry_after !== 'boolean')) {
+      throw invalid('capabilities');
+    }
     initialized = true;
     return fixture.initialize;
   },

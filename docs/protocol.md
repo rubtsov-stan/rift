@@ -67,8 +67,24 @@ The first request. Until it is answered, every other request gets
 `not_initialized`.
 
 ```json
-{"protocol": 1, "client": {"name": "rift-vscode", "version": "0.3.0"}}
+{"protocol": 1, "client": {"name": "rift-vscode", "version": "0.3.0"}, "capabilities": {"retry_after": true}}
 ```
+
+`capabilities` is optional and says what the client does; an absent one
+or a name set to `false` means it does not. The server ignores a name it
+does not know, so a client may declare capabilities a later server
+understands. A known name with a value of the wrong type, or a
+`capabilities` that is not an object, is `invalid_params`. The one name
+so far:
+
+- `retry_after`: when `busy` carries `retry_after_ms`, the client waits that
+  long before its next attempt. A `rift serve` that gets it waits for room
+  before it answers `busy` (see `open`); without it, `busy` comes at once.
+
+`rift serve` before 0.4 refuses the `capabilities` param, like any name it
+does not know: `invalid_params` with `data.param` `capabilities`. A client
+that gets that sends `initialize` again without `capabilities`. Those
+servers also put `retry_after_ms` in `busy`, but never wait for room.
 
 Result:
 
@@ -163,8 +179,13 @@ recently used ready ones that no request is using; a session it drops
 answers later requests with `unknown_session`. A scanning session is
 never dropped for room. When that is not enough, the answer is `busy`
 at once, with `retry_after_ms`. `rift-mcp` waits up to 5 seconds for
-room instead; `rift serve` will wait the same way once its client honours
-`retry_after_ms` (#64).
+room instead, and so does `rift serve` for a client that declared
+`capabilities.retry_after` in `initialize`: at most 4 calls wait at once,
+and a call past that, or one still without room after 5 seconds, gets
+`busy`. A client that did not declare it keeps the immediate `busy`,
+since its own retries on top of a server wait would stretch the time a
+failed compare takes (about 2 seconds to about 27, as #64 reports). The wait also covers a `hunk` that
+finds its session's response pool held.
 
 #### Session states
 

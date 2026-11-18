@@ -90,12 +90,18 @@ impl Default for Limits {
     }
 }
 
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// The calls of a set waiting for room, for a session or in a response
 /// pool, and how long and how many may wait.
 #[derive(Debug, Clone)]
 pub(crate) struct Queue {
     waiting: Arc<AtomicUsize>,
-    wait: Duration,
+    /// Milliseconds, shared with the sessions' copies of the queue so that
+    /// [`Sessions::set_wait`] reaches the response pools too.
+    wait_ms: Arc<AtomicU64>,
     cap: usize,
 }
 
@@ -103,9 +109,15 @@ impl Queue {
     fn new(limits: &Limits) -> Self {
         Self {
             waiting: Arc::default(),
-            wait: limits.wait,
+            wait_ms: Arc::new(AtomicU64::new(millis(limits.wait))),
             cap: limits.waiters,
         }
+    }
+
+    fn wait(&self) -> Duration {
+        // Relaxed: a setting read when a call starts to wait; no other
+        // memory depends on it.
+        Duration::from_millis(self.wait_ms.load(Ordering::Relaxed))
     }
 
     /// Counts a call in for the wait, or `least` if longer, from now,
@@ -113,7 +125,7 @@ impl Queue {
     pub(crate) fn join(&self, least: Duration) -> Option<Waiter<'_>> {
         let waiter = Waiter {
             queue: self,
-            end: Instant::now() + self.wait.max(least),
+            end: Instant::now() + self.wait().max(least),
         };
         // Relaxed: a counter that only bounds admission. A refused call
         // counts itself out when `waiter` drops.
@@ -124,7 +136,7 @@ impl Queue {
     /// within the wait, so another as long. Never under [`ROOM_TICK`],
     /// below which a waiting call would not have seen it either.
     pub(crate) fn retry_after(&self) -> Duration {
-        self.wait.max(ROOM_TICK)
+        self.wait().max(ROOM_TICK)
     }
 }
 
@@ -491,7 +503,14 @@ impl Sessions {
         }
     }
 
-    /// The limits the set was made with.
+    /// Sets how long a call waits for room from now on, as
+    /// [`Limits::wait`] does at the start. `rift serve` raises it for a
+    /// client that says it waits the time to retry after.
+    pub fn set_wait(&self, wait: Duration) {
+        self.queue.wait_ms.store(millis(wait), Ordering::Relaxed);
+    }
+
+    /// The limits the set was made with. `wait` is the one it started with.
     #[must_use]
     pub fn limits(&self) -> &Limits {
         &self.limits
