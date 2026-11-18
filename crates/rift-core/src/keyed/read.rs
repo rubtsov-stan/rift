@@ -298,15 +298,16 @@ struct Rec {
 
 const _: () = assert!(size_of::<Rec>() == 32);
 
-/// What the reader knows about the file's layout.
+/// What the reader knows about the file's layout. Names are borrowed from
+/// the key spec: a copy would be heap outside the budget.
 #[derive(Debug)]
-enum Kind {
+enum Kind<'s> {
     /// CSV, keyed by the column the header names, or by position.
-    Csv { name: Option<Box<str>> },
+    Csv { name: Option<&'s str> },
     /// NDJSON with a field path.
-    Ndjson(Box<[Box<str>]>),
+    Ndjson(&'s [String]),
     /// `pg_dump` text, keyed by a `COPY` column.
-    Copy { name: Box<str> },
+    Copy { name: &'s str },
 }
 
 /// Where a `pg_dump` reader is.
@@ -499,7 +500,7 @@ type Found = Option<(Range<usize>, u32, u64)>;
 
 /// What every chunk of a window shares while it is parsed.
 struct Ctx<'c> {
-    kind: &'c Kind,
+    kind: &'c Kind<'c>,
     side: Side,
     tables: &'c Mutex<Tables>,
     filter: &'c Filter<'c>,
@@ -530,7 +531,7 @@ impl Ctx<'_> {
                 if state.col.is_some() {
                     return csv_key.map(|k| Some((k, 0, 0))).ok_or(Miss::NoKey);
                 }
-                let name = name.as_deref().unwrap_or_default();
+                let name = name.unwrap_or_default();
                 let found = (0..u32::MAX)
                     .map_while(|i| csv_field(rec, i).map(|r| (i, r)))
                     .find(|(_, r)| unquoted_eq(&rec[r.clone()], name.as_bytes()));
@@ -603,7 +604,7 @@ impl Ctx<'_> {
 pub struct Reader<'s, S: ?Sized> {
     src: &'s S,
     side: Side,
-    kind: Kind,
+    kind: Kind<'s>,
     /// At `buf[start]`.
     state: State,
     buf: Vec<u8>,
@@ -651,7 +652,7 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
     pub fn new(
         src: &'s S,
         side: Side,
-        spec: &KeySpec,
+        spec: &'s KeySpec,
         budget: &Budget,
         buf: usize,
         chunks: usize,
@@ -662,17 +663,14 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
             KeySpec::Csv(CsvColumn::Index(i)) => (Kind::Csv { name: None }, Some(*i)),
             KeySpec::Csv(CsvColumn::Header(name)) => (
                 Kind::Csv {
-                    name: Some(name.as_str().into()),
+                    name: Some(name.as_str()),
                 },
                 None,
             ),
-            KeySpec::Ndjson(path) => (
-                Kind::Ndjson(path.iter().map(|s| s.as_str().into()).collect()),
-                None,
-            ),
+            KeySpec::Ndjson(path) => (Kind::Ndjson(path), None),
             KeySpec::Copy(name) => (
                 Kind::Copy {
-                    name: name.as_str().into(),
+                    name: name.as_str(),
                 },
                 None,
             ),
@@ -1297,7 +1295,7 @@ fn copy_column(cols: &[u8], name: &[u8]) -> Option<u32> {
 }
 
 /// The value of the field at `path` in a JSON object, raw.
-fn json_key(line: &[u8], path: &[Box<str>]) -> Option<Range<usize>> {
+fn json_key(line: &[u8], path: &[String]) -> Option<Range<usize>> {
     let mut at = skip_ws(line, 0);
     let mut found = None;
     for name in path {
@@ -1474,7 +1472,7 @@ mod tests {
 
     #[test]
     fn json_paths_find_raw_values() {
-        let path = |p: &str| p.split('.').map(Into::into).collect::<Vec<Box<str>>>();
+        let path = |p: &str| p.split('.').map(Into::into).collect::<Vec<String>>();
         let line = br#"{"a":{"x":[1,{"id":0}],"id":"7\"q"}, "id" : 12 ,"z":"}"}"#;
         let get = |p: &str| json_key(line, &path(p)).map(|r| &line[r]);
         assert_eq!(get("id"), Some(&b"12"[..]));
