@@ -68,4 +68,7 @@ jobs:
           set -eu
           set -- deb/*.deb
           [ "$#" -eq 2 ]
+          # Same format as dist's archive checksums; sha256.sum is dist's and stays untouched.
+          (cd deb && for f in *.deb; do sha256sum -b "$f" > "$f.sha256"; done)
+          set -- "$@" deb/*.deb.sha256
           gh release upload "$TAG" "$@" --repo "$GITHUB_REPOSITORY" --clobber

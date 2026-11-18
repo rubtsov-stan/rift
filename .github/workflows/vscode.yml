@@ -113,4 +113,7 @@ jobs:
           set -eu
           set -- vsix/*.vsix
           [ "$#" -eq 4 ]
+          # Same format as dist's archive checksums; sha256.sum is dist's and stays untouched.
+          (cd vsix && for f in *.vsix; do sha256sum -b "$f" > "$f.sha256"; done)
+          set -- "$@" vsix/*.vsix.sha256
           gh release upload "$TAG" "$@" --repo "$GITHUB_REPOSITORY" --clobber
