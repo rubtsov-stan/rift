@@ -137,6 +137,11 @@ or \fB\-\fR when it is absent:
 .fi
 .RE
 .IP
+With \fBcopy:\fR, \fIKEY\fR is the table name from the \fBCOPY\fR header, a colon and the
+key: \fB~public.item:1\fR. Tabs, line breaks and backslashes in either are escaped as
+\fB\\t\fR, \fB\\n\fR, \fB\\r\fR and \fB\\\\\fR, and a colon in the table name as \fB\\:\fR; read from the left, the first colon that is not
+part of an escape ends the table name.
+.IP
 \fISPEC\fR is one of:
 .RS
 .TP

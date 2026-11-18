@@ -493,10 +493,11 @@ counts the pairs it could not keep in `dropped`.
 field path, or a column of a `pg_dump` COPY block by name. `--key` parses
 `csv:N` (counted from 1), `csv:NAME`, `json:a.b` and `copy:NAME`. A
 `KeyedChange` holds the key's bytes as the file has them, `Added`,
-`Removed` or `Changed`, and the record's first line in A and in B; a side
-is absent only when the kind says so. `KeyError` reaches callers as
-`Error::Keyed`, and its first variant is duplicate keys. `rift --key`
-prints the changes described under "Key mode".
+`Removed` or `Changed`, the record's first line in A and in B, and for a
+`COPY` row its table's name; a side is absent only when the kind says
+so. `KeyError` reaches callers as `Error::Keyed`, and its first variant
+is duplicate keys, each with its table. `rift --key` prints the changes
+described under "Key mode".
 
 **`MovedBlock`** (`moves`). Two line ranges of the same length, one in A
 and one in B, holding the same bytes. `DiffView::moved_blocks` returns
@@ -596,7 +597,9 @@ long record grows before the round, A then B. Each file pays for a
 credit, and a later chunk sees only the names its file gave in earlier
 rounds, so a chunk stops at the same header whatever the other reader,
 or its own first chunk, has named meanwhile. Whether a list runs out
-then depends on its own records only.
+then depends on its own records only. A name is kept once, with its
+reference counts in the price; a change shares it rather than copying
+it, so naming a change's table takes no memory.
 
 Each pass prints its changes sorted by line, so the output holds the
 same set of lines at any budget, in an order that depends on how the
@@ -634,10 +637,11 @@ matched key's bytes are gone; the next pass, or one more read when
 there is none, counts the suspects in their file, so a duplicate can
 surface after the changes of its pass were printed. A pass that piles
 up too many suspects stops and counts them at once. The error lists the
-first few duplicates. Storing A's records whole, as a plain partition
-by key hash would, costs about 28 times more memory per record on
-`shuffled` CSV (138 bytes against 5 for an 81-byte row) and as many
-more passes. A record counts as unchanged only after its bytes compare
+first few duplicates, each with its `COPY` table, which `rift --key`
+also prints before every `COPY` key. Storing A's records whole, as a
+plain partition by key hash would, costs about 28 times more memory per
+record on `shuffled` CSV (138 bytes against 5 for an 81-byte row) and as
+many more passes. A record counts as unchanged only after its bytes compare
 equal. `shuffled` is the test bed: its manifest names every
 change, and a pair that is only reordered reports none.
 
