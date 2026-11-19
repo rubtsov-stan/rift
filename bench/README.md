@@ -23,6 +23,14 @@ Outputs are compared with `cmp`, never a hash: the head's warm-up output against
 
 The script holds a lock directory, `gate.lock` in the repository's git directory, for the whole run, builds and data generation included, and waits in 30 s steps while another holds it. Anything else that must not run during a measurement takes the same directory with `mkdir`. The lock is released on exit, error and interrupt. `PAIRS` replaces the pair list (lines of `name|rift-gen args|rift args`) to try the script on small data.
 
+## serve-replay.py
+
+```sh
+bench/serve-replay.py BASE_RIFT HEAD_RIFT DIR [RUNS]    # DIR holds a and b from rift-gen
+```
+
+Replays what the VS Code extension sends to `rift serve` (initialize, open, summary, the first page of segments, `set_visible` on its span, then a `hunk` with context 3 and a `set_visible` per segment) and times the hunk requests only, 10 runs per side interleaved after one untimed run of each. The hash of every hunk answer must be the same on both sides and in every run. It takes no lock: hold `gate.lock` around it by hand. Reads are counted by `crates/rift-session/tests/serve_reads.rs`, not here.
+
 ## linux-safe.sh
 
 ```sh
