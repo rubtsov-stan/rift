@@ -5,7 +5,9 @@
 #   bench/compare.sh BASE HEAD SCRATCH
 #
 # BASE and HEAD are each a git ref (built from `git archive` into SCRATCH) or
-# an executable rift binary. rift-gen comes from HEAD's build, or from the
+# an executable rift binary. The report names a ref by its commit and never
+# prints a binary's path: set BASE_COMMIT and HEAD_COMMIT to the commits the
+# binaries were built from, or it says "unknown commit". rift-gen comes from HEAD's build, or from the
 # directory of HEAD's binary. SCRATCH holds the pairs, builds and outputs; it
 # is never inside the repository and nothing in it is committed.
 #
@@ -73,6 +75,15 @@ build() {
 }
 rbase=$(build "$base" base)
 rhead=$(build "$head" head)
+# label ARG BIN COMMIT: the commit a ref resolves to, or for a binary the
+# given commit, its --version and the start of its sha256; never a path.
+label() {
+  if [ "$1" != "$2" ]; then echo "$(git -C "$root" rev-parse --short "$1^{commit}") ($1)"; return; fi
+  sum=$( { shasum -a 256 "$2" 2>/dev/null || sha256sum "$2"; } | cut -c1-12)
+  echo "${3:-unknown commit}, binary $("$2" --version), sha256 $sum"
+}
+lbase=$(label "$base" "$rbase" "${BASE_COMMIT:-}")
+lhead=$(label "$head" "$rhead" "${HEAD_COMMIT:-}")
 gen=$(dirname "$rhead")/rift-gen
 [ -x "$gen" ] || { echo "no rift-gen beside $rhead" >&2; exit 2; }
 
@@ -181,15 +192,15 @@ cat <<OUT
 ### Machine
 
 - CPU: $cpu, RAM $(human "$ram"), $(uname -sr)
-- base: $base
-- head: $head
+- base: $lbase
+- head: $lhead
 - Warm cache: nothing is dropped; each pair is read once before its timed runs.
 - Started $start_date, ended $(date -u +'%F %T UTC')
 - Load average (1 min) sampled before and after every run; the load column is the range for that pair.
 
 ### Command
 
-\`bench/compare.sh $base $head SCRATCH\` with RUNS=$runs: per pair one warm-up per side, then $runs runs per side interleaved base, head, base, head, ...; \`rift --stats --mem 256M [--key csv:id] a b\`, stdout to a file; rift-gen seed 7, --change-ratio 0.001. Outputs are compared with cmp (stdout, and stderr without the time and peak heap lines): head's warm-up against base's$( [ "$sorted" = 1 ] && echo ' as sorted lines (SORTED=1)'), every run against its own side's warm-up.
+\`bench/compare.sh BASE HEAD SCRATCH\` with RUNS=$runs: per pair one warm-up per side, then $runs runs per side interleaved base, head, base, head, ...; \`rift --stats --mem 256M [--key csv:id] a b\`, stdout to a file; rift-gen seed 7, --change-ratio 0.001. Outputs are compared with cmp (stdout, and stderr without the time and peak heap lines): head's warm-up against base's$( [ "$sorted" = 1 ] && echo ' as sorted lines (SORTED=1)'), every run against its own side's warm-up.
 
 ### Result
 

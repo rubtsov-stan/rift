@@ -9,7 +9,7 @@ bench/compare.sh v0.3.4 origin/main /path/to/scratch           # two refs
 bench/compare.sh /path/a/rift /path/b/rift /path/to/scratch    # or two binaries
 ```
 
-Runs two rift builds against each other on the reference pairs and prints a markdown table. A ref is built from `git archive` into the scratch directory (its own target directory); a path to an executable is used as it is. `rift-gen` comes from the second build, so both sides read the same pairs. `RUNS=N` changes the number of timed runs per side (default 10).
+Runs two rift builds against each other on the reference pairs and prints a markdown table. A ref is built from `git archive` into the scratch directory (its own target directory); a path to an executable is used as it is. The report names a ref by its commit and never prints a binary's path, so it can be pasted as it is: give the commits prebuilt binaries came from in `BASE_COMMIT` and `HEAD_COMMIT` (otherwise it says "unknown commit"), and it adds each binary's `--version` and the start of its sha256. `rift-gen` comes from the second build, so both sides read the same pairs. `RUNS=N` changes the number of timed runs per side (default 10).
 
 Reference pairs, `rift-gen --seed 7 --change-ratio 0.001`, written to the scratch directory and never committed: `sql` and `csv` at 256 MiB and 1 GiB, shuffled CSV at 256 MiB (run with `--key csv:id`), `periodic` with period 1000 at 256 MiB and 1 GiB (#46), `nokey` at 4 MiB. Every run is `rift --stats --mem 256M a b` with stdout to a file.
 
