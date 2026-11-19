@@ -30,9 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bytes and showed no change when the values differed after them.
 - The `--mem` advice for a full diff is never below `10475K`, the least
   a full diff runs under, so a run refused at a tiny `--mem` no longer
-  climbs through several refusals first. The docs now call `10475K` the
-  least a full diff runs under, not a limit that always works: a pair with
-  many changed regions is refused there and needs more.
+  doubles its way up to it. The advice is the larger of twice the refused
+  `--mem` and what the refused step asked for; it covers that step, and a
+  later step can ask for more. The docs now call `10475K` the least a full
+  diff runs under, not a limit that always works: a pair with many changed
+  regions is refused there and needs more.
 
 ## [0.4.0] - 2026-11-19
 
