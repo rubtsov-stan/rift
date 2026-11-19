@@ -286,6 +286,36 @@ describe('Compares', () => {
     server.dispose();
   });
 
+  it('opens the pair again when a file changed after the open', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/changes.sql', '/x/b.sql', '256M');
+    const stale = w.shown!;
+    await until(() => stale.state === 'ready' && stale.segments.length > 0);
+    assert.strictEqual(await stale.hunk({ segment: 1 }, 3), undefined);
+    await until(() => w.shown !== stale && w.shown?.state === 'ready');
+    assert.notStrictEqual(w.shown!.session, stale.session);
+    assert.ok(await w.shown!.hunk({ segment: 1 }, 3));
+    await until(() => closes(log()).includes(stale.session));
+    assert.strictEqual(log().filter((r) => r.method === 'open').length, 2);
+    server.dispose();
+  });
+
+  it('leaves a newer compare alone when the shown pair changed', async () => {
+    const { server, w } = window();
+    await w.compare('/x/changes.sql', '/x/b.sql', '256M');
+    const stale = w.shown!;
+    await until(() => stale.state === 'ready' && stale.segments.length > 0);
+    // Its open is answered 100 ms late, so it is still pending when the hunk fails.
+    const newer = w.compare('/x/lag-n.sql', '/x/b.sql', '256M');
+    await sleep(10);
+    assert.strictEqual(await stale.hunk({ segment: 1 }, 3), undefined);
+    await newer;
+    await sleep(50);
+    assert.strictEqual(w.shown?.a, '/x/lag-n.sql');
+    assert.strictEqual(w.pending, undefined);
+    server.dispose();
+  });
+
   it('keeps the session of a pair that a compare is opening', async () => {
     const { server, w, log } = window();
     await w.compare('/x/a.sql', '/x/b.sql', '256M');

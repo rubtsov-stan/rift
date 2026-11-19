@@ -132,4 +132,5 @@ export const Code = {
   busy: -32005,
   unknownSession: -32006,
   notReady: -32008,
+  changed: -32009,
 } as const;

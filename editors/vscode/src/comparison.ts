@@ -17,6 +17,9 @@ export interface Events {
   opening?(): Promise<unknown>;
   // The server answered `open` with `session`, whether or not this comparison is still current.
   opened?(): void;
+  // A file changed after the open: the session answers nothing more, and the pair is to be
+  // opened again. Called once per comparison.
+  changed?(): void;
 }
 
 // One open of a pair of files and the session the server gave it. A comparison
@@ -47,6 +50,7 @@ export class Comparison {
   private early = new Map<string, { n: Notification; epoch?: number }>();
   private loadingSegments?: Promise<void>;
   private loadingMoves?: Promise<void>;
+  private reopening = false;
 
   constructor(
     readonly server: Server,
@@ -136,7 +140,9 @@ export class Comparison {
         }
         break;
       case 'session_state':
-        if (n.params.state === 'failed') {
+        if (n.params.error?.code === Code.changed) {
+          this.changed();
+        } else if (n.params.state === 'failed') {
           this.state = 'failed';
           this.error = n.params.error;
           if (n.params.error) this.events.failed(n.params.error);
@@ -249,9 +255,19 @@ export class Comparison {
         this.dropped(e);
         return undefined;
       }
+      if (e.code === Code.changed && session === this.session) {
+        this.changed();
+        return undefined;
+      }
       if (e.code === Code.notReady || e.code === Code.unknownSession) return undefined;
       throw e;
     }
+  }
+
+  private changed(): void {
+    if (this.reopening) return;
+    this.reopening = true;
+    this.events.changed?.();
   }
 
   // The server forgot this session while it was shown, as a full server does for the one
@@ -332,6 +348,11 @@ export class Compares {
         for (let c; c !== this.closing; ) await (c = this.closing);
         if (this.gated === next) this.gated = undefined;
         if (next === this.pending) this.wire = next;
+      },
+      // The compare that replaces it closes the stale session, as for any replaced one. A
+      // newer compare of the user's, pending, replaces it anyway and is left alone.
+      changed: () => {
+        if (next === this.pending || (next === this.shown && !this.pending)) void this.compare(next.a, next.b, next.mem, next);
       },
       opened: () => {
         if (this.wire === next) this.wire = undefined;
