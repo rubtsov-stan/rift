@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When a refinement worker thread cannot be started, the workers already
+  started stop and free their share of the memory budget. They used to
+  stay alive, idle, which in `rift serve` and the MCP server kept them and
+  their memory past the failed request.
 - A directory run names the side that failed when a file cannot be
   opened or read, or a symbolic link cannot be read, where it always
   named the path in the first directory.

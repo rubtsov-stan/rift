@@ -1,6 +1,6 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use super::cache::hunk_bytes;
@@ -8,6 +8,13 @@ use super::*;
 use crate::edit::ApproxReason;
 
 const LINES: u64 = 10;
+
+thread_local! {
+    /// Worker spawns on this thread that succeed before one fails, so a
+    /// test can reach the error path of `Scheduler::new`.
+    pub(super) static SPAWNS_LEFT: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
+}
 
 /// `n` segments of `LINES` lines each; segment `i` is `Equal` iff `equal(i)`.
 fn segments(n: usize, equal: impl Fn(usize) -> bool) -> Vec<Segment> {
@@ -880,4 +887,28 @@ fn without_background_only_the_window_and_requests_are_refined() {
             .recv_timeout(std::time::Duration::from_millis(200))
             .is_err()
     );
+}
+
+#[test]
+fn a_failed_spawn_stops_the_started_workers_and_frees_the_budget() {
+    let n = 4;
+    let b = budget(n, 4);
+    // The job lives in the state every worker holds; its sender hangs up
+    // only when the last worker has let go of that state.
+    let (alive, hangup) = channel();
+    let job = Fake {
+        started: Some(alive),
+        ..Fake::new()
+    };
+    SPAWNS_LEFT.set(1);
+    let started = Scheduler::new(job, segments(n, |_| true), &b, 3);
+    SPAWNS_LEFT.set(usize::MAX);
+    let err = started.err().expect("the second spawn was set to fail");
+    assert!(err.to_string().contains("injected spawn failure"), "{err}");
+    assert_eq!(
+        hangup.recv_timeout(std::time::Duration::from_secs(5)),
+        Err(RecvTimeoutError::Disconnected),
+        "a started worker still holds the scheduler state"
+    );
+    assert_eq!(b.used(Half::Refine), Bytes(0));
 }
