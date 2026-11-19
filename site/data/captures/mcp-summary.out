@@ -10,5 +10,6 @@
     ...
   ],
   "mem_budget_bytes": 67108864,
-  "more_differences": 415
+  "more_differences": 415,
+  "refined_segments": 0
 }

@@ -2,5 +2,5 @@
   a 25037..25048  b 24724..24725
   ... and 425 more
 moved    not searched, --no-moves
-peak heap 78.6 MiB of 256.0 MiB (82397510 bytes)
-time 0.17 s
+peak heap 74.4 MiB of 256.0 MiB (78022744 bytes)
+time 0.08 s

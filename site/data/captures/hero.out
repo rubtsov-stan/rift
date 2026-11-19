@@ -7,5 +7,5 @@ first differing ranges (0-based, end exclusive):
   a 1005..1011  b 1004..1010
 moved    62 blocks, 2737 lines
   a 21557..21560  b 22434..22437
-peak heap 78.6 MiB of 256.0 MiB (82397510 bytes)
-time 0.13 s
+peak heap 74.4 MiB of 256.0 MiB (78022744 bytes)
+time 0.14 s

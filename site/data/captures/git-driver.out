@@ -7,3 +7,4 @@ diff --git a/dump.sql b/dump.sql
  INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (382, 679322, 'c
 -383	668107	shipped	5325.74	zu
  INSERT INTO public.orders (id, customer_id, status, amount, note) VALUES (384, 442363, 'n
+ 385	359182	cancelled	475.15	ztbyhdlmxk

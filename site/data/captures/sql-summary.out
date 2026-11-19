@@ -27,5 +27,5 @@ moved    62 blocks, 2737 lines
   a 99590..99595  b 99830..99835
   a 110203..110209  b 111213..111219
   ... and 52 more
-peak heap 78.6 MiB of 256.0 MiB (82397510 bytes)
-time 0.13 s
+peak heap 74.4 MiB of 256.0 MiB (78022744 bytes)
+time 0.14 s
