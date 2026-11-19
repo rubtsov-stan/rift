@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-19
+
+- Bundles `rift` 0.4.0.
 - A `busy` answer that carries `retry_after_ms` is waited as it says, at least 50 ms
   and at most 5 s, instead of the fixed backoff, and retries stop once the waits
   would pass 10 s in all. The error shown when they run out says when to try again.
