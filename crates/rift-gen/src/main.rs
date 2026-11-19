@@ -32,6 +32,9 @@ struct Args {
     /// Lines in one period of a `periodic` file.
     #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(1..))]
     period: u64,
+    /// Length of every line of the `ndjson` profile, newline not counted, from 256 bytes.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(256..=(1 << 20)))]
+    line_bytes: Option<u64>,
     /// Probability that a mutation starts at a given line.
     #[arg(long, default_value_t = 0.001)]
     change_ratio: f64,
@@ -50,6 +53,10 @@ fn main() -> anyhow::Result<()> {
     config.distinct = args.distinct;
     config.period = args.period;
     config.change_ratio = args.change_ratio;
+    if args.line_bytes.is_some() && args.profile != Profile::Ndjson {
+        anyhow::bail!("--line-bytes applies to --profile ndjson only");
+    }
+    config.line_bytes = args.line_bytes;
     if let Some(kinds) = args.kinds {
         config.kinds = kinds;
     }

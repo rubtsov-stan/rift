@@ -89,6 +89,8 @@ pub struct Lines {
     pool_ends: Vec<usize>,
     /// `--distinct` or `--period`, whichever the profile reads.
     count: u64,
+    /// `--line-bytes`: the length an `ndjson` row is padded to.
+    line_bytes: Option<usize>,
     /// The low-entropy line produced last, and the lines left in the
     /// current run of a `runs` file.
     last: u64,
@@ -124,6 +126,9 @@ impl Lines {
             },
             last: 0,
             run_left: 0,
+            line_bytes: config
+                .line_bytes
+                .map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
         };
         if profile == Profile::Nokey {
             let mut pool = Vec::new();
@@ -289,6 +294,7 @@ impl Lines {
     }
 
     fn ndjson_row(&self, id: u64, rng: &mut Rng, out: &mut Vec<u8>) {
+        let start = out.len();
         let _ = write!(
             out,
             "{{\"id\":\"{}\",\"type\":\"{}\",\"actor\":{{\"id\":{},\"login\":\"{}\"}},\"repo\":{{\"id\":{},\"name\":\"{}/{}\"}},\"created_at\":\"2024-01-{:02}T{:02}:{:02}:{:02}Z\"}}",
@@ -304,6 +310,29 @@ impl Lines {
             rng.below(60),
             rng.below(60),
         );
+        if let Some(total) = self.line_bytes {
+            self.pad(total.saturating_sub(out.len() - start), rng, out);
+        }
+    }
+
+    /// Replaces the closing brace of the row at the end of `out` with a
+    /// `pad` field of random words, so the row grows by `extra` bytes.
+    fn pad(&self, extra: usize, rng: &mut Rng, out: &mut Vec<u8>) {
+        const OPEN: &[u8] = b",\"pad\":\"";
+        // Net growth is OPEN + text + the closing quote and brace - the old brace.
+        let Some(text) = extra.checked_sub(OPEN.len() + 1) else {
+            return;
+        };
+        let brace = out.pop();
+        debug_assert_eq!(brace, Some(b'}'), "pad expects a finished object");
+        out.extend_from_slice(OPEN);
+        let end = out.len() + text;
+        while out.len() < end {
+            out.extend_from_slice(self.word(rng).as_bytes());
+            out.push(b' ');
+        }
+        out.truncate(end);
+        out.extend_from_slice(b"\"}");
     }
 
     fn word(&self, rng: &mut Rng) -> &str {

@@ -1745,6 +1745,7 @@ dependencies = [
  "anyhow",
  "clap",
  "rift-core",
+ "serde_json",
 ]
 
 [[package]]
