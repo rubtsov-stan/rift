@@ -64,6 +64,8 @@ The bundle is not signed yet. Its provenance can be checked with the file next t
 gh attestation verify rift-mcp-<version>.mcpb --bundle rift-mcp-<version>.mcpb.sigstore.json --repo rubtsov-stan/rift
 ```
 
+Its checksum is in `rift-mcp-<version>.mcpb.sha256`, from 0.4.0 on: `shasum -a 256 -c rift-mcp-<version>.mcpb.sha256`, or `sha256sum -c` on Linux.
+
 #### Or edit the config
 
 Open Settings, then Developer, then Edit Config. The file is `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and `%APPDATA%\Claude\claude_desktop_config.json` on Windows.

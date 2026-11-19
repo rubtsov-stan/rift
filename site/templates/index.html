@@ -76,17 +76,21 @@
 {%- set hunks = load_data(path="data/captures/sql-hunks.txt", format="plain") | trim -%}
 {%- set nsum = load_data(path="data/captures/sql-summary.out", format="plain") | trim | split(pat="\n") | length -%}
 <section id="what-it-does"><h2 class="cap-h">What it does</h2>
-<p class="prose-lite">Five ways to run Rift. Every output on this page ran on files made by <code>rift-gen --seed 7</code>, and each box says where it shows selected lines of a longer output.</p>
+<p class="prose-lite">Six ways to run Rift. Every output on this page ran on files made by <code>rift-gen --seed 7</code>, and each box says where it shows selected lines of a longer output.</p>
 <h3 class="cap">Plain diff and --summary <span>unified diff, then the counts</span></h3>
 <p class="prose-lite"><code>rift a b</code> writes a unified diff that <code>patch</code> applies to the first file to get the second. <code>--summary</code> counts first, so you know how much differs before you write a diff.</p>
 {{ m::term(name="land-diff", kind="diff", title="the first hunk of " ~ hunks, caption="One hunk of the full diff. Timestamps dropped, lines cut at 70 columns.") }}
 {{ m::term(name="land-summary", kind="summary", title="the counts of --summary", caption="Six of the summary's " ~ nsum ~ " lines.") }}
 <p class="note">Guide: <a href="{{ get_url(path='guide/plain-diff/') | safe }}">plain diff</a>, <a href="{{ get_url(path='guide/summary/') | safe }}">--summary</a>.</p></section>
+<section><h3 class="cap">Directories <span>two trees, as diff -r prints them</span></h3>
+<p class="prose-lite"><code>rift old/ new/</code> compares two trees under the same <code>--mem</code>: files only in one tree, a unified diff for each changed file, and <code>Renamed:</code> for a file that moved with its content unchanged. <code>--summary</code> prints one status per path.</p>
+<p class="note">Guide: <a href="{{ get_url(path='guide/directories/') | safe }}">directory diff</a>.</p></section>
 <section><h3 class="cap">Key mode <span>rows compared by key, not by position</span></h3>
 <p class="prose-lite">An export written in a different row order diffs by content, not by position. <code>--key</code> takes a CSV column, an NDJSON field or a <code>pg_dump</code> COPY column, and lists the keys that were added (<code>+</code>), removed (<code>-</code>) or changed (<code>~</code>), with the line of the record in each file.</p>
 {{ m::term(name="land-key", kind="keys", title="rift --key csv:id", caption="Two lines of each kind, then the number of keys of each kind in all. A 32 MiB CSV pair, same keys, shuffled rows.") }}
 <p class="prose-lite">With <code>--show-records</code>, each change line is followed by the two records: the one from the first file behind <code>  - </code>, the one from the second behind <code>  + </code>.</p>
 {{ m::term(name="land-records", kind="keys", title="rift --key csv:id --show-records", caption="A 16 KiB CSV pair. The record of the changed key in each file.") }}
+<p class="prose-lite">With <code>--show-fields</code>, the change line is followed by the fields that differ instead, such as <code>price: 10 -&gt; 12</code>. <code>--fields</code> compares only the fields you name.</p>
 <p class="note">Guide: <a href="{{ get_url(path='guide/key-mode/') | safe }}">key mode</a>. Use case: <a href="{{ get_url(path='use-cases/compare-csv-by-key/') | safe }}">compare CSV files by key</a>.</p></section>
 <section><h3 class="cap">Git <span>rift as the diff driver</span></h3>
 <p class="prose-lite">Git calls any file over 512 MiB binary and prints no diff. Name the large files in <code>.gitattributes</code> and git runs <code>rift git-diff</code> for them, with git's own headers. It ships in 0.3.0.</p>
