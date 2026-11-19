@@ -334,9 +334,9 @@ impl Print<'_, '_> {
     }
 
     fn links(&mut self, at: &At<'_>) -> anyhow::Result<()> {
-        let targets = fs::read_link(os(at.a)).and_then(|a| Ok((a, fs::read_link(os(at.b))?)));
-        match targets {
-            Err(e) => self.complain(at.a, &e),
+        let target = |side| fs::read_link(os(at.on(side))).map_err(|e| (side, e));
+        match target(Side::A).and_then(|a| Ok((a, target(Side::B)?))) {
+            Err((side, e)) => self.complain(at.on(side), &e),
             Ok((x, y)) if x == y => self.tally.same += 1,
             Ok(_) => {
                 self.tally.changed += 1;

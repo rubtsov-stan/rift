@@ -334,6 +334,24 @@ fn an_unreadable_file_is_named_on_the_side_that_failed() {
     }
 }
 
+#[test]
+fn a_link_that_cannot_be_read_is_named_on_the_side_that_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    build(&dir.path().join("A"), &[("d", Dir), ("d/l", Link("t1"))]);
+    build(&dir.path().join("B"), &[("d", Dir), ("d/l", Link("t2"))]);
+    // Readable but not searchable: the entry is listed, its target is not.
+    let locked = dir.path().join("B/d");
+    fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    let root = fs::read_link(locked.join("l")).is_ok();
+    let out = rift_in(dir.path(), &["A", "B"]);
+    fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    if !root {
+        let stderr = text(&out.stderr);
+        assert!(stderr.contains("rift: B/d/l: "), "{stderr}");
+        assert!(!stderr.contains("A/d/l"), "{stderr}");
+    }
+}
+
 /// Many renamed files at a small `--mem`: the rename table fills, the
 /// first line says so, and every file is still accounted for, renamed or
 /// only in one tree.
