@@ -305,6 +305,73 @@ fn a_difference_past_byte_64_shows_on_both_sides() {
 }
 
 #[test]
+fn a_cell_quoted_on_one_side_shows_its_change_past_byte_64() {
+    let fill = "x".repeat(100);
+    let (a, b) = (
+        format!("id,v\n1,\"{fill}abc\"\n"),
+        format!("id,v\n1,{fill}abd\n"),
+    );
+    let (left, right) = shown_pair(&a, &b, "csv:id");
+    assert!(left.starts_with("...") && left.ends_with("abc\""), "{left}");
+    assert!(
+        right.starts_with("...") && right.ends_with("abd"),
+        "{right}"
+    );
+    assert!(
+        left.len() <= 64 + 3 && right.len() <= 64 + 3,
+        "{left} {right}"
+    );
+}
+
+#[test]
+fn doubled_quotes_before_the_change_move_only_their_own_side() {
+    // A reads 40 `"` as 80 bytes; B has them as 40 bytes, unquoted.
+    let plain = "\"".repeat(40);
+    let esc = "\"\"".repeat(40);
+    let (a, b) = (
+        format!("id,v\n1,\"{esc}{}abc\"\n", "x".repeat(60)),
+        format!("id,v\n1,{plain}{}abd\n", "x".repeat(60)),
+    );
+    let (left, right) = shown_pair(&a, &b, "csv:id");
+    assert!(
+        left.contains("abc") && right.contains("abd"),
+        "{left} {right}"
+    );
+    assert!(
+        left.len() <= 64 + 6 && right.len() <= 64 + 6,
+        "{left} {right}"
+    );
+}
+
+#[test]
+fn a_cell_quoted_on_both_sides_still_shares_one_window() {
+    let fill = "x".repeat(100);
+    let (a, b) = (
+        format!("id,v\n1,\"{fill}abc\"\n"),
+        format!("id,v\n1,\"{fill}abd\"\n"),
+    );
+    let (left, right) = shown_pair(&a, &b, "csv:id");
+    assert_eq!(left.replace("abc", "abd"), right);
+    assert!(left.contains("abc"), "{left}");
+}
+
+#[test]
+fn a_quoted_cell_window_near_a_character_keeps_its_characters() {
+    // A is quoted, B is not; the change is the second byte of an é/ê.
+    let a = format!("id,v\n1,\"{}é{}\"\n", "é".repeat(60), "é".repeat(30));
+    let b = format!("id,v\n1,{}ê{}\n", "é".repeat(60), "é".repeat(30));
+    let (left, right) = shown_pair(&a, &b, "csv:id");
+    assert!(left.starts_with("...é"), "{left}");
+    assert!(right.contains('ê'), "{right}");
+    assert!(
+        left.trim_matches(|c| c == '.' || c == '"')
+            .chars()
+            .all(|c| c == 'é'),
+        "{left}"
+    );
+}
+
+#[test]
 fn a_window_around_a_difference_never_cuts_a_character() {
     // Two-byte characters all the way, so every offset but the even ones
     // is inside a character; the difference sits in a second byte.

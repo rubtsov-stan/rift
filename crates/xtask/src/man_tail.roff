@@ -130,8 +130,9 @@ top-level member of an NDJSON object, or a column of a \fBCOPY\fR row.
 Values print as the file has them, with tabs, line breaks and
 backslashes escaped. A value over 64 bytes prints as a window of at most
 64 bytes around its first difference from the other side, which starts at
-the value's start while that difference is in the first 48 bytes, and
-never begins or ends inside a UTF-8 character; a cut end shows
+the value's start while that difference is in the first 48 bytes. For CSV
+the difference is found between the unquoted cells and each side's window
+is placed in its own bytes. A window never begins or ends inside a UTF-8 character; a cut end shows
 \fB...\fR.
 \fB(none)\fR stands for a field the record lacks, and
 \fB(no field differs)\fR marks records that differ only in layout. CSV

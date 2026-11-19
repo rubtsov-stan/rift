@@ -36,7 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named the path in the first directory.
 - `--show-fields` prints a window of at most 64 bytes around the first
   difference of a long value, where it cut both sides at the same 64
-  bytes and showed no change when the values differed after them.
+  bytes and showed no change when the values differed after them. For a
+  CSV cell that one side quotes and the other does not, or that escapes
+  `"` differently, each side's window is centred on the first difference
+  of the cells without their quotes, so a change after byte 64 shows on
+  both sides.
 - The `--mem` advice for a full diff is never below `10475K`, the least
   a full diff runs under, so a run refused at a tiny `--mem` no longer
   doubles its way up to it. The advice is the larger of twice the refused

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use rift_core::keyed::{
     ChangeKind, FieldChange, FieldName, KeyError, KeySpec, KeyedChange, RangedChange, RecordReader,
-    Side, compare, compare_fields, compare_with_ranges,
+    Side, compare, compare_fields, compare_with_ranges, csv_first_difference,
 };
 use rift_core::{Bytes, Error, LineNo, Source};
 
@@ -56,11 +56,12 @@ pub fn run(
     });
     let mut printed = 0u64;
     let budget = crate::budget(mem, false);
+    let csv = matches!(spec, KeySpec::Csv(_));
     let result = if show.fields {
         compare_fields(a, b, spec, show.only, &budget, |c| {
             printed += 1;
             write_change(&mut out, &c.change.change)?;
-            write_fields(&mut out, c)?;
+            write_fields(&mut out, c, csv)?;
             if show.records {
                 write_record_pair(&mut out, c)?;
             }
@@ -206,8 +207,12 @@ fn write_escaped(out: &mut impl Write, mut rest: &[u8]) -> io::Result<()> {
 /// four spaces in, so a field line never looks like a change line or a
 /// record line. A value longer than 64 bytes prints as a window of at
 /// most 64 bytes around its first difference from the other side, with
-/// `...` on a cut end; `(none)` stands for a missing field.
-fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
+/// `...` on a cut end; `(none)` stands for a missing field. For CSV the
+/// difference is found between the unquoted cells and each side's window
+/// centres on it in that side's own bytes, so a cell quoted on one side
+/// only still shows its change. NDJSON and `COPY` values compare as
+/// their bytes, and both sides share one window start.
+fn write_fields(out: &mut impl Write, c: &FieldChange<'_>, csv: bool) -> io::Result<()> {
     if c.change.change.kind != ChangeKind::Changed {
         return Ok(());
     }
@@ -223,7 +228,7 @@ fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
             FieldName::Bytes(name) => write_escaped(out, name)?,
         }
         out.write_all(b": ")?;
-        write_values(out, f.a, f.b)?;
+        write_values(out, f.a, f.b, csv)?;
         out.write_all(b"\n")?;
     }
     if !any {
@@ -232,31 +237,43 @@ fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
     Ok(())
 }
 
-/// Prints the two values of a field. When either is cut, both print the
-/// 64-byte window that holds their first differing byte, so the cut never
-/// hides the change.
-fn write_values(out: &mut impl Write, a: Option<&[u8]>, b: Option<&[u8]>) -> io::Result<()> {
-    let start = match (a, b) {
-        (Some(a), Some(b)) if a.len() > VALUE_CUT || b.len() > VALUE_CUT => window_start(a, b),
-        _ => 0,
+/// Prints the two values of a field. When either is cut, each prints the
+/// 64-byte window that holds its first difference from the other, so the
+/// cut never hides the change.
+fn write_values(
+    out: &mut impl Write,
+    a: Option<&[u8]>,
+    b: Option<&[u8]>,
+    csv: bool,
+) -> io::Result<()> {
+    let starts = match (a, b) {
+        (Some(a), Some(b)) if a.len() > VALUE_CUT || b.len() > VALUE_CUT => {
+            let (i, j) = if csv {
+                csv_first_difference(a, b)
+            } else {
+                let d = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+                (d, d)
+            };
+            (window_start(a, i), window_start(b, j))
+        }
+        _ => (0, 0),
     };
-    write_value(out, a, start)?;
+    write_value(out, a, starts.0)?;
     out.write_all(b" -> ")?;
-    write_value(out, b, start)
+    write_value(out, b, starts.1)
 }
 
-/// Where the window of a pair of values starts: 0 while the first
-/// difference is in the first 48 bytes, else 16 bytes of context after it.
-/// Moved to a character boundary of the shared prefix, so neither side
-/// starts or shows the difference inside a character.
-fn window_start(a: &[u8], b: &[u8]) -> usize {
-    let continuation = |v: &[u8], i: usize| v.get(i).is_some_and(|c| c & 0xC0 == 0x80);
-    let mut diff = a.iter().zip(b).take_while(|(x, y)| x == y).count();
-    while diff > 0 && (continuation(a, diff) || continuation(b, diff)) {
+/// Where the window of `v` starts, given the offset of its first
+/// difference: 0 while that is in the first 48 bytes, else 16 bytes of
+/// context after it. Moved to a character boundary, so the window neither
+/// starts nor shows the difference inside a character.
+fn window_start(v: &[u8], mut diff: usize) -> usize {
+    let continuation = |i: usize| v.get(i).is_some_and(|c| c & 0xC0 == 0x80);
+    while diff > 0 && continuation(diff) {
         diff -= 1;
     }
     let mut start = (diff + 16).saturating_sub(VALUE_CUT);
-    while start < diff && continuation(a, start) {
+    while start < diff && continuation(start) {
         start += 1;
     }
     start

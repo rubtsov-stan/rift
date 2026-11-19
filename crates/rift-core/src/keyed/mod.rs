@@ -8,7 +8,7 @@ mod fields;
 mod pass;
 mod read;
 
-pub use fields::{FieldChange, FieldDiff, FieldName, compare_fields};
+pub use fields::{FieldChange, FieldDiff, FieldName, compare_fields, csv_first_difference};
 pub use pass::{Report, compare, compare_with_ranges};
 
 /// Internals the fuzz targets drive directly; only in builds with
