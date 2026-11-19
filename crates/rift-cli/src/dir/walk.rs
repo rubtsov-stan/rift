@@ -86,6 +86,16 @@ pub struct At<'w> {
     pub name_len: usize,
 }
 
+impl At<'_> {
+    /// The full path on `side`.
+    pub fn on(&self, side: Side) -> &[u8] {
+        match side {
+            Side::A => self.a,
+            Side::B => self.b,
+        }
+    }
+}
+
 /// What the walk calls for each entry, in walk order.
 pub trait Visit {
     /// An entry with its kind on each side; `under` names the side of a
