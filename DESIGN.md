@@ -770,7 +770,10 @@ server's accounted heap. A new pair evicts idle diffs first, then the
 least recently used one that no call holds. When every diff is in use
 it waits up to five seconds for one to free, at most four calls at a
 time, then fails with "busy" and a time to retry after. `rift serve`
-answers busy at once with that time (#64). A diff idle for five minutes is dropped. The server
+waits the same way only for a client that declares
+`capabilities.retry_after` in `initialize`, and answers other clients
+busy at once with that time (#64). A diff idle for five minutes is
+dropped. The server
 opens regular files only, read-only, and refuses symbolic links in the
 last path component. Every answer has a size bound: 20 ranges in a
 summary, and at most 500 lines, 64 KiB and 256 bytes per line of diff

@@ -68,7 +68,12 @@ its dependencies:
 sudo apt install ./rift-diff_VERSION-1_amd64.deb
 ```
 
-It installs `rift` and its man page. There is no apt repository.
+It installs `rift` and its man page. There is no apt repository. Each
+`.deb` has a checksum file next to it on the release page:
+
+```sh
+sha256sum -c rift-diff_VERSION-1_amd64.deb.sha256
+```
 
 From source, with Rust 1.97 or later:
 
@@ -96,8 +101,9 @@ patch a.sql changes.patch            # a.sql is now b.sql
 ```
 
 Exit codes follow `diff`: 0 when the files are identical, 1 when they
-differ, 2 on an error. Both operands must be regular files (symbolic links
-are followed): Rift reads at offsets, so a pipe, a FIFO or `<(command)` is
+differ, 2 on an error. Both operands must be regular files, or both
+directories (see below); symbolic links given as operands are followed.
+Rift reads at offsets, so a pipe, a FIFO or `<(command)` is
 refused with exit 2. Write the input to a file first. `-` is a file name, not
 standard input.
 
