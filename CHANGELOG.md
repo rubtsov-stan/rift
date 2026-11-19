@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refinement hashes a segment's lines where it read them, in reads of up
+  to 64 KiB, instead of copying them 64 lines at a time. The output and
+  peak heap are the same. Files of a few repeated lines, where every line
+  is refined, diff faster: 9 to 13% on the 256 MiB and 1 GiB
+  `periodic --period 1000` pairs on an Apple M1 at `--mem 256M` and `1G`.
+  Other reference pairs are unchanged.
+
 ## [0.4.0] - 2026-11-19
 
 ### Added
