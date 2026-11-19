@@ -252,6 +252,7 @@ pub fn session_error(e: &Error, session: Option<&Session>) -> RpcError {
         // serve opens every session with `Sessions::open`, which has a pool.
         Error::NoResponsePool => base,
         Error::UnknownSession(id) => base.with(json!({"session": id.0})),
+        Error::Changed { side } => base.with(json!({"side": side.to_string()})),
         Error::NotReady { session: id, state } => {
             let mut data = json!({"session": id.0, "state": state.name()});
             match (state, session) {

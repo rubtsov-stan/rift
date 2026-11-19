@@ -158,6 +158,11 @@ fn look(
         }
         f.ended = true;
     }
+    // Refinement may have read a file written over since the last request;
+    // what it found is not sent. The next request answers `changed`.
+    if s.check_files().is_err() {
+        return;
+    }
     let Ok(diff) = s.diff() else {
         return;
     };

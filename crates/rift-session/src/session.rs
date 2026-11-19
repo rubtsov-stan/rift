@@ -373,7 +373,8 @@ impl Session {
     /// for a position past the end, [`Error::ResponsesBusy`] when other excerpts
     /// hold the pool through the set's wait, or [`Limits::waiters`] calls
     /// already wait, [`Error::Segment`] when a read or the segment's
-    /// refinement failed.
+    /// refinement failed, [`Error::Changed`] when a file changed since the
+    /// open, which it checks after its reads.
     pub fn excerpt(&self, req: &ExcerptRequest) -> Result<Excerpt, Error> {
         let built = self.built()?;
         let pool = built.pool.as_ref().ok_or(Error::NoResponsePool)?;
@@ -457,13 +458,18 @@ impl Session {
         drop(waiter);
 
         let mut buf = LineBuf::new();
-        let mut room = (grant - scratch) / 2;
+        let room = (grant - scratch) / 2;
         let opts = (max_lines, line_bytes);
-        let mut a = column(diff.lines_a(), window_a, opts, room, &mut buf).map_err(fail)?;
-        room = room * 2 - a.1;
-        let mut b = column(diff.lines_b(), window_b, opts, room, &mut buf).map_err(fail)?;
-        let used = a.1 + b.1 + scratch;
+        let read = column(diff.lines_a(), window_a, opts, room, &mut buf).and_then(|a| {
+            let room = room * 2 - a.1;
+            Ok((a, column(diff.lines_b(), window_b, opts, room, &mut buf)?))
+        });
         drop(buf);
+        // After the reads, so a change while they ran is caught; ahead of
+        // their error, which a file cut short causes.
+        self.check_files()?;
+        let (mut a, mut b) = read.map_err(fail)?;
+        let used = a.1 + b.1 + scratch;
         held.shrink(Bytes(grant - used.min(grant)));
 
         for block in diff.moved_blocks() {

@@ -401,6 +401,39 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    {
+      "description": "changed",
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": -32009
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "side": {
+              "enum": [
+                "a",
+                "b"
+              ]
+            }
+          },
+          "required": [
+            "side"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "additionalProperties": false
     }
   ]
 }

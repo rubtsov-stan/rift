@@ -41,6 +41,8 @@ pub mod code {
     pub const IO: i32 = -32007;
     /// The session is scanning or its scan failed.
     pub const NOT_READY: i32 = -32008;
+    /// A file of the session changed since it was opened.
+    pub const CHANGED: i32 = -32009;
 }
 
 /// Which input a file error is about.
@@ -127,6 +129,13 @@ pub enum Error {
         /// Lines in A.
         count: u64,
     },
+    /// A file is no longer the one the session opened. The session is
+    /// failed: every later check and excerpt on it gets this error too.
+    #[error("{side}: file changed since it was opened; open the files again")]
+    Changed {
+        /// The first input found changed.
+        side: Side,
+    },
     /// Scanning or building the map failed.
     #[error("cannot diff within {mem}: {error}")]
     Build {
@@ -158,6 +167,7 @@ impl Error {
             Self::NoResponsePool => code::INTERNAL_ERROR,
             Self::UnknownSession(_) => code::UNKNOWN_SESSION,
             Self::NotReady { .. } => code::NOT_READY,
+            Self::Changed { .. } => code::CHANGED,
             Self::SegmentOutOfRange { .. } | Self::LineOutOfRange { .. } => code::INVALID_PARAMS,
             Self::Build { error, .. } | Self::Segment { error, .. } => match error {
                 rift_core::Error::Budget(_) => code::BUDGET_EXCEEDED,

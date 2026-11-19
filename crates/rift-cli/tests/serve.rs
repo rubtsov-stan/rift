@@ -27,6 +27,7 @@ const TOO_LARGE: i64 = -32004;
 const BUSY: i64 = -32005;
 const UNKNOWN_SESSION: i64 = -32006;
 const NOT_READY: i64 = -32008;
+const CHANGED: i64 = -32009;
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> String {
     let path = dir.join(name);
@@ -992,6 +993,73 @@ fn a_cancelled_request_is_answered_once() {
     eprintln!("{cancelled} of 20 requests cancelled");
     // finish() checks that every id was answered exactly once.
     clean_exit(c);
+}
+
+/// Writes `bytes` over the file at `path` in place, keeping its inode, and
+/// sets its modification time a minute later than it was, so the change
+/// never hides below the clock's granularity.
+fn rewrite(path: &str, bytes: &[u8]) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .unwrap();
+    let mtime = f.metadata().unwrap().modified().unwrap();
+    f.write_all(bytes).unwrap();
+    f.set_modified(mtime + Duration::from_secs(60)).unwrap();
+}
+
+fn hunk_texts(hunk: &Value, side: &str) -> Vec<String> {
+    hunk[side]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Rewrites A between two `hunk` requests with line 10 replaced by
+/// `line10`: the session answers `changed` from then on, and an `open`
+/// of the pair gets a new session that shows the new line.
+fn a_rewrite_between_hunks_answers_changed(line10: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(dir.path(), "a", &numbered("line", 1..41));
+    let b = write(dir.path(), "b", &numbered("other", 1..41));
+    let mut c = Client::start(&[]);
+    c.initialize();
+    let s = open_ready(&mut c, &a, &b, "16M");
+    let at = json!({"session": s, "line_a": 10});
+    let h = c.ok("hunk", at.clone());
+    assert!(hunk_texts(&h, "a").contains(&"line 10".to_owned()), "{h}");
+    let new_a = String::from_utf8(numbered("line", 1..41))
+        .unwrap()
+        .replace("line 10\n", &format!("{line10}\n"));
+    rewrite(&a, new_a.as_bytes());
+
+    let e = c.err("hunk", at, CHANGED);
+    assert_eq!(e["data"], json!({"side": "a"}), "{e}");
+    c.err("summary", json!({"session": s}), CHANGED);
+    c.err("segments", json!({"session": s}), CHANGED);
+
+    let opened = c.ok("open", json!({"a": a, "b": b, "mem": "16M"}));
+    assert_eq!(opened["reused"], false, "{opened}");
+    let fresh = session(&opened);
+    assert_ne!(fresh, s);
+    assert_eq!(c.state_of(fresh)["state"], "ready");
+    let h = c.ok("hunk", json!({"session": fresh, "line_a": 10}));
+    assert!(hunk_texts(&h, "a").contains(&line10.to_owned()), "{h}");
+    clean_exit(c);
+}
+
+#[test]
+fn a_rewrite_of_the_same_length_between_hunks_answers_changed() {
+    a_rewrite_between_hunks_answers_changed("LINE 10");
+}
+
+#[test]
+fn a_rewrite_of_another_length_between_hunks_answers_changed() {
+    a_rewrite_between_hunks_answers_changed("a longer line 10");
 }
 
 #[test]

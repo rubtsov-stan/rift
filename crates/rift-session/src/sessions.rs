@@ -7,7 +7,8 @@
 //!   budgets of every session that still holds memory (live, being built,
 //!   or closed while its scan winds down) sum to at most
 //!   [`Limits::total_mem`], so the server's accounted heap stays below that
-//!   figure plus its responses; a failed session holds no budget;
+//!   figure plus its responses; a session whose scan failed holds no
+//!   budget, one failed by a changed file holds its own until dropped;
 //! - a new session first evicts idle ones, then, while it does not fit,
 //!   failed ones, then the least recently used ready ones that no call is
 //!   using; a scanning session is never evicted. When that is not enough
@@ -183,7 +184,9 @@ pub enum SessionState {
     Scanning,
     /// The map is built; every method answers.
     Ready,
-    /// The scan failed; the session holds no budget.
+    /// The scan failed, and the session holds no budget; or a file changed
+    /// after the open, and the session holds its budget until it is closed
+    /// or dropped.
     Failed,
 }
 
@@ -218,6 +221,8 @@ pub(crate) struct Built {
     pub(crate) diff: Diff<FileSource, FileSource>,
     pub(crate) budget: Budget,
     pub(crate) pool: Option<Pool>,
+    /// The diff's own files, for [`Session::check_files`].
+    files: [Arc<FileSource>; 2],
 }
 
 /// A session's share of [`Limits::total_mem`], given back once: when the
@@ -259,6 +264,8 @@ pub struct Session {
     /// only.
     ended: Arc<OnceLock<()>>,
     held: Held,
+    /// [`Error::Changed`], once a check has found a file changed.
+    changed: OnceLock<Error>,
     /// The [`Observed`] handles on the session. Each holds an `Arc` that
     /// eviction does not count as a use. Changed under the set's lock only.
     observers: AtomicUsize,
@@ -268,6 +275,9 @@ impl Session {
     /// Where the session is in its life.
     #[must_use]
     pub fn state(&self) -> SessionState {
+        if self.changed.get().is_some() {
+            return SessionState::Failed;
+        }
         match self.result() {
             None => SessionState::Scanning,
             Some(Ok(_)) => SessionState::Ready,
@@ -281,10 +291,55 @@ impl Session {
         self.state()
     }
 
-    /// The error the scan failed with, once it has.
+    /// The error the session failed with, once it has: a changed file, or
+    /// the scan's error.
     #[must_use]
     pub fn error(&self) -> Option<&Error> {
-        self.result().and_then(|b| b.as_ref().err())
+        self.changed
+            .get()
+            .or_else(|| self.result().and_then(|b| b.as_ref().err()))
+    }
+
+    /// The side a check found changed, once one has.
+    fn changed_side(&self) -> Option<Side> {
+        match self.changed.get() {
+            Some(&Error::Changed { side }) => Some(side),
+            _ => None,
+        }
+    }
+
+    /// Checks that both files are still the ones the session opened, with
+    /// one `fstat` each, and fails the session for good if not: every later
+    /// check, and every excerpt, fails too. A request answering from the
+    /// session checks first, and a call that reads the files checks after
+    /// its reads, so a change during them is caught. A session that is
+    /// scanning or whose scan failed passes; its first check once ready
+    /// covers the scan.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Changed`] naming the first side found changed, now or by
+    /// an earlier check.
+    pub fn check_files(&self) -> Result<(), Error> {
+        if let Some(side) = self.changed_side() {
+            return Err(Error::Changed { side });
+        }
+        let Some(Ok(built)) = self.result() else {
+            return Ok(());
+        };
+        let [a, b] = &built.files;
+        let side = if a.changed() {
+            Side::A
+        } else if b.changed() {
+            Side::B
+        } else {
+            return Ok(());
+        };
+        // A check on another thread may have set it first.
+        let _ = self.changed.set(Error::Changed { side });
+        Err(Error::Changed {
+            side: self.changed_side().unwrap_or(side),
+        })
     }
 
     /// Bytes the scan has covered, and of how many: twice the size of both
@@ -316,7 +371,9 @@ impl Session {
         self.ended.get().and(self.built.get())
     }
 
-    /// The finished diff.
+    /// The finished diff. A changed file does not hide it: every request
+    /// checks the files itself, and an answer whose check passed may still
+    /// read the map, which holds no file bytes.
     pub(crate) fn built(&self) -> Result<&Built, Error> {
         match self.result() {
             Some(Ok(b)) => Ok(b),
@@ -351,9 +408,11 @@ impl Session {
         };
         #[cfg(feature = "test-hooks")]
         let held_a = a.path().to_owned();
+        let (a, b) = (Arc::new(a), Arc::new(b));
+        let files = [Arc::clone(&a), Arc::clone(&b)];
         let diff = Diff::with_watch(
-            Arc::new(a),
-            Arc::new(b),
+            a,
+            b,
             &budget,
             rift_core::budget::cores().min(SESSION_WORKERS),
             Config {
@@ -365,7 +424,12 @@ impl Session {
         .map_err(build)?;
         #[cfg(feature = "test-hooks")]
         crate::test_hooks::wait(&held_a);
-        Ok(Built { diff, budget, pool })
+        Ok(Built {
+            diff,
+            budget,
+            pool,
+            files,
+        })
     }
 }
 
@@ -837,10 +901,13 @@ impl Sessions {
             {
                 return Ok(());
             }
-            let failed = s
-                .live
-                .iter()
-                .position(|e| e.session.state() == SessionState::Failed);
+            // A session failed by a changed file keeps its memory while a
+            // call holds it, so evicting it then would free nothing.
+            let failed = s.live.iter().position(|e| {
+                e.session.state() == SessionState::Failed
+                    && (Arc::strong_count(&e.session) == 1
+                        || e.session.held.mem.load(Ordering::Relaxed) == 0)
+            });
             let ready = |e: &Entry| e.session.state() == SessionState::Ready;
             let lru = || {
                 s.live
@@ -921,6 +988,7 @@ impl Sessions {
                 total: Arc::clone(&self.held),
                 mem: AtomicU64::new(mem.0),
             },
+            changed: OnceLock::new(),
             observers: AtomicUsize::new(0),
         })
     }

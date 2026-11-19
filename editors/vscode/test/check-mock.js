@@ -267,6 +267,20 @@ async function main() {
   await new Promise((r) => setTimeout(r, 1200));
   assert(!notes.slice(heard).some((n) => n.params.session === slow.session), 'nothing after close');
 
+  // File A written over after the open: the session answers changed from then on, and an
+  // open of the pair gets a new session.
+  const stale = await ok('open', { a: '/x/changes.sql', b: '/x/b.sql' });
+  assert.strictEqual((await stateOf(stale.session)).state, 'ready');
+  const changed = await err('hunk', { session: stale.session, segment: 1 }, -32009);
+  assert.deepStrictEqual(changed.data, { side: 'a' });
+  await err('summary', { session: stale.session }, -32009);
+  const fresh = await ok('open', { a: '/x/changes.sql', b: '/x/b.sql' });
+  assert(fresh.session !== stale.session && !fresh.reused, 'a changed session is not reused');
+  assert.strictEqual((await stateOf(fresh.session)).state, 'ready');
+  await ok('hunk', { session: fresh.session, segment: 1 });
+  assert.deepStrictEqual(await ok('close', { session: stale.session }), { closed: true });
+  assert.deepStrictEqual(await ok('close', { session: fresh.session }), { closed: true });
+
   // A cancel that comes after the answer does nothing.
   write(JSON.stringify({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id: 1 } }));
 

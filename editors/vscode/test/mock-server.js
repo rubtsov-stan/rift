@@ -44,6 +44,9 @@
 //   open, a path containing "openjunk" -> the answer and a frame whose body is not JSON go out in one write
 //   segments, on a session of a path containing "segjunk" -> the answer and a frame whose body is not JSON
 //                                          go out in one write
+//   hunk, on the first session of a path containing "changes" -> changed (side a), as if file A was written
+//                                          over after the open; the session answers changed to everything but
+//                                          close from then on, and an open of the pair gets a new session
 // With MOCK_LOG set to a file name, every request is appended to it as one JSON line {method, params}.
 // With MOCK_FAIL_INIT=1 in the environment, or while the file named by MOCK_FAIL_INIT_FILE exists,
 // initialize fails (internal error).
@@ -72,6 +75,7 @@ const CODE = {
   busy: -32005,
   unknown_session: -32006,
   not_ready: -32008,
+  changed: -32009,
 };
 
 class RpcError extends Error {
@@ -123,6 +127,8 @@ let lastId = 0;
 // refined maps a segment index to its status once segment_ready was sent.
 const sessions = new Map();
 const busyTries = new Map();
+// Pairs whose first session has answered changed.
+const changedPairs = new Set();
 const movesState = (s) => (s.key.includes('movespartial') ? 'partial' : s.key.includes('movesfuture') ? 'from-the-future' : fixture.summary.moves);
 const scanTotal = 2 * (fixture.summary.a.bytes + fixture.summary.b.bytes);
 const refineTotal = fixture.summary.progress.total;
@@ -246,7 +252,8 @@ const METHODS = {
       throw new RpcError(CODE.busy, 'no room for another session; close one and retry', { what: 'memory', retry_after_ms: 150 });
     }
     for (const [id, s] of sessions) {
-      if (s.key !== key) continue;
+      // A changed file no longer matches the session, which stays until closed.
+      if (s.key !== key || s.changed) continue;
       if (s.state !== 'failed') return { session: id, reused: true, mem_bytes: s.mem, state: s.state };
       sessions.delete(id);
     }
@@ -324,6 +331,11 @@ const METHODS = {
 
   hunk(p) {
     const [id, s] = readySession(p);
+    if (s.key.includes('changes') && !changedPairs.has(s.key)) {
+      changedPairs.add(s.key);
+      s.changed = true;
+      throw changedError();
+    }
     const hasSeg = p.segment !== undefined;
     if (hasSeg === (p.line_a !== undefined)) throw invalid('segment', {});
     const count = Object.keys(fixture.hunks).length;
@@ -425,7 +437,12 @@ function session(p) {
       session: id,
     });
   }
+  if (s.changed) throw changedError();
   return s;
+}
+
+function changedError() {
+  return new RpcError(CODE.changed, 'a: file changed since it was opened; open the files again', { side: 'a' });
 }
 
 // The session, which must have its map: [id, session].
