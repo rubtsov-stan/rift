@@ -70,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against no reservation, and under `rift serve` or the MCP server
   against the next comparison. It now waits for them. With `--key copy:`
   the first table name could also take 80 bytes more than reserved.
+- On a file with duplicate keys, `rift --key` could stop with a
+  `rerun with --mem` refusal instead of the duplicate-key error, when a
+  pass that met the duplicates ended with its share of `--mem` full.
 
 ## [0.3.4] - 2026-11-18
 
