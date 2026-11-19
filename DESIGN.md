@@ -613,6 +613,25 @@ machine and any number of threads. Up to 0.3.2 the shard count followed
 the thread count and the shards grew from the shared half at the same
 time, so the order could differ between machines and between runs.
 
+With `csv:` and `json:` keys, the first pass takes the whole hash range
+only if the tables hold as many keys as the larger file has lines, the
+count extrapolated from its first window that also sizes the tables. A
+key takes one slot whichever file holds it, so that is what files
+sharing their keys put in the tables. Otherwise the pass takes the share
+the tables should hold at 90% by the end, as after an overflow, so it
+does not read part of both files only to start over. A count that runs
+high, from a first window of shorter lines than the rest, leaves the
+tables under-filled; the next pass then widens to 90% at once, without
+the twofold cap, so the misjudgment costs about one pass, or more if the
+wider pass's waiting records fill the refine half and it starts over. Files with keys of their
+own can still overflow. A `pg_dump` has lines outside the keyed table,
+so with `copy:` the first pass keeps the whole range. Up to 0.4.0 every
+first pass took the whole range: on the 1 GiB shuffled CSV pair
+(`rift-gen --seed 7 --profile shuffled --rows csv --size 1G`,
+`rift --key csv:id --mem 64M`) it read 46% of both files before its
+waiting records filled the refine half, four reads of both files for
+three passes, now three.
+
 A fingerprint cannot tell which keys lie above a new top of the range,
 so when a shard's table or waiting records fill up the pass starts over
 on a narrower range. The tables fill as the files are read, so when
@@ -629,8 +648,9 @@ larger than half its credit cannot be helped by a narrower range; from
 then on the shards take their turns, in order, each from the whole
 refine half, which is as deterministic and only slower. A pass that
 ends with its tables under
-90% full widens the next one toward 90%, at most twofold and never
-above the ceiling. On the 10 GiB `shuffled` CSV pair (seed 7,
+90% full widens the next one toward 90%, at most twofold (except after
+a first pass sized from the line count, above) and never above the
+ceiling. On the 10 GiB `shuffled` CSV pair (seed 7,
 `--mem 256M`, Apple M1, files larger than the page cache) this takes
 6 passes and about 41 s, against 13 passes and 157 to 231 s before;
 each pass now runs at the speed of the disk, about 3.2 GB/s.

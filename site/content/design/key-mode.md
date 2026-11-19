@@ -52,14 +52,16 @@ Sources: `crates/rift-core/src/keyed/pass.rs`, `compare`, `read_pass`, `Pass::ne
 
 ## Running out of room
 
+With a CSV or NDJSON key, the first pass takes the whole range of key hashes only if the tables hold as many keys as the larger file has lines, as extrapolated from its first window. Otherwise it takes the share they should hold at 90% by the end, so it does not read part of both files only to start over. If the count ran high and the tables come out under-filled, the next pass widens to 90% at once, so the misjudgment costs about one pass. A `pg_dump` has lines outside the keyed table, so with `copy:` the first pass takes the whole range.
+
 A fingerprint cannot say which keys lie above a new top of the range, so a full table cannot be thinned in place, the way the scan thins a sample. When a table or the waiting records outgrow the budget, the pass starts over on a narrower range, sized from how far it had read:
 
 - A full table means the range held too many keys. Tables fill as the files are read, so the new range is the share the table should hold to the end, with a 10% margin.
 - Full waiting records mean the files are far out of order. The range is at least halved, and later passes may not widen past 90% of it.
 
-A pass that ends with its tables under 90% full widens the next one toward 90%, at most twofold. Each pass rereads both files. Nothing goes to a temporary file, so key mode needs no disk space and no cleanup, and its cost is time: one read of both files per pass.
+A pass that ends with its tables under 90% full widens the next one toward 90%, at most twofold, except right after a first pass sized from the line count. Each pass rereads both files. Nothing goes to a temporary file, so key mode needs no disk space and no cleanup, and its cost is time: one read of both files per pass.
 
-Sources: `pass.rs`, `compare` (the `Outcome::Overflow` and `Outcome::Done` arms), `narrowed`, `fill`, `scale`.
+Sources: `pass.rs`, `compare` (the `Outcome::Overflow` and `Outcome::Done` arms), `first`, `narrowed`, `fill`, `scale`.
 
 ## More memory, fewer passes
 
