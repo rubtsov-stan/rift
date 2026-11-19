@@ -571,20 +571,46 @@ fn csv_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// A CSV cell without its quotes, `""` read as `"`.
 fn unquote(cell: &[u8]) -> impl Iterator<Item = u8> + Clone + '_ {
+    unquote_at(cell).map(|(_, c)| c)
+}
+
+/// [`unquote`] with each byte's offset in `cell`.
+fn unquote_at(cell: &[u8]) -> impl Iterator<Item = (usize, u8)> + Clone + '_ {
     let (inner, quoted) = match cell {
         [b'"', inner @ .., b'"'] => (inner, true),
         _ => (cell, false),
     };
     let mut second = false;
-    inner.iter().copied().filter(move |&c| {
-        if quoted && c == b'"' {
-            second = !second;
-            second
-        } else {
-            second = false;
-            true
+    inner
+        .iter()
+        .enumerate()
+        .map(move |(i, &c)| (i + usize::from(quoted), c))
+        .filter(move |&(_, c)| {
+            if quoted && c == b'"' {
+                second = !second;
+                second
+            } else {
+                second = false;
+                true
+            }
+        })
+}
+
+/// Where two CSV cells first differ once unquoted, as an offset in each
+/// cell's own bytes. A cell that ends first, being the other's prefix,
+/// reports its length. Allocates nothing.
+#[must_use]
+pub fn csv_first_difference(a: &[u8], b: &[u8]) -> (usize, usize) {
+    let (mut left, mut right) = (unquote_at(a), unquote_at(b));
+    loop {
+        match (left.next(), right.next()) {
+            (Some((_, x)), Some((_, y))) if x == y => {}
+            (Some((at_a, _)), Some((at_b, _))) => return (at_a, at_b),
+            (Some((at_a, _)), None) => return (at_a, b.len()),
+            (None, Some((at_b, _))) => return (a.len(), at_b),
+            (None, None) => return (a.len(), b.len()),
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -656,6 +682,13 @@ mod tests {
                 "Removed 4:",
             ]
         );
+    }
+
+    #[test]
+    fn csv_difference_is_found_in_each_cells_own_bytes() {
+        assert_eq!(csv_first_difference(b"\"ab\"\"c\"", b"ab\"d"), (5, 3));
+        assert_eq!(csv_first_difference(b"abc", b"ab"), (2, 2));
+        assert_eq!(csv_first_difference(b"\"ab\"", b"ab"), (4, 2));
     }
 
     #[test]
