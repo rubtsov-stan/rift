@@ -26,6 +26,11 @@ pub trait Source: Sync {
     /// Returns the underlying I/O error.
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize>;
 
+    /// Tells the source that `len` bytes from `offset` will be read soon, so
+    /// it can fetch them ahead. Never changes what a read returns and may be
+    /// ignored, which the default does.
+    fn advise(&self, _offset: ByteOffset, _len: Bytes) {}
+
     /// Whether the source holds no bytes.
     fn is_empty(&self) -> bool {
         self.len() == Bytes(0)
@@ -84,6 +89,10 @@ impl<S: Source + ?Sized> Source for &S {
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
         (**self).read_at(buf, offset)
     }
+
+    fn advise(&self, offset: ByteOffset, len: Bytes) {
+        (**self).advise(offset, len);
+    }
 }
 
 impl<S: Source + ?Sized + Send> Source for Arc<S> {
@@ -93,6 +102,10 @@ impl<S: Source + ?Sized + Send> Source for Arc<S> {
 
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
         (**self).read_at(buf, offset)
+    }
+
+    fn advise(&self, offset: ByteOffset, len: Bytes) {
+        (**self).advise(offset, len);
     }
 }
 

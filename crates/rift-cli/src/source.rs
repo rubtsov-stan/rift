@@ -78,6 +78,10 @@ impl Source for FileSource {
         }
         Ok(got)
     }
+
+    fn advise(&self, offset: ByteOffset, len: Bytes) {
+        hints::will_need(&self.file, offset.0, len.0);
+    }
 }
 
 /// A path for an error message: all of it up to 256 bytes, else its first
@@ -138,6 +142,40 @@ mod hints {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub(super) fn sequential(_file: &File) {}
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn will_need(file: &File, offset: u64, len: u64) {
+        let (Ok(offset), Ok(len)) = (libc::off_t::try_from(offset), libc::off_t::try_from(len))
+        else {
+            return;
+        };
+        // SAFETY: as for `sequential`; the range is only a hint to the page
+        // cache and may reach past the end of the file.
+        unsafe {
+            libc::posix_fadvise(file.as_raw_fd(), offset, len, libc::POSIX_FADV_WILLNEED);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn will_need(file: &File, offset: u64, len: u64) {
+        let (Ok(ra_offset), Ok(ra_count)) =
+            (libc::off_t::try_from(offset), libc::c_int::try_from(len))
+        else {
+            return;
+        };
+        let advice = libc::radvisory {
+            ra_offset,
+            ra_count,
+        };
+        // SAFETY: as for `sequential`; F_RDADVISE reads the struct for the
+        // duration of the call, which outlives it on this stack frame.
+        unsafe {
+            libc::fcntl(file.as_raw_fd(), libc::F_RDADVISE, &advice);
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub(super) fn will_need(_file: &File, _offset: u64, _len: u64) {}
 }
 
 #[cfg(test)]
@@ -155,6 +193,19 @@ mod tests {
         assert_eq!(src.read_at(&mut buf, ByteOffset(9)).unwrap(), 8);
         assert_eq!(&buf, b"line two");
         assert_eq!(src.read_at(&mut buf, ByteOffset(18)).unwrap(), 0);
+    }
+
+    #[test]
+    fn advice_for_any_range_leaves_reads_alone() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"abcdef").unwrap();
+        let src = FileSource::open(tmp.path()).unwrap();
+        for (at, len) in [(0, 6), (3, 1 << 40), (u64::MAX, u64::MAX), (100, 5)] {
+            src.advise(ByteOffset(at), Bytes(len));
+        }
+        let mut buf = [0u8; 6];
+        assert_eq!(src.read_at(&mut buf, ByteOffset(0)).unwrap(), 6);
+        assert_eq!(&buf, b"abcdef");
     }
 
     #[test]
