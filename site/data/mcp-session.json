@@ -9,7 +9,7 @@
    "b_bytes": 1074747414,
    "server": {
     "name": "rift-mcp",
-    "version": "0.3.4"
+    "version": "0.4.0"
    },
    "steps": [
     {
@@ -37,7 +37,7 @@
        },
        "serverInfo": {
         "name": "rift-mcp",
-        "version": "0.3.4"
+        "version": "0.4.0"
        }
       }
      },
@@ -945,7 +945,7 @@
        "content": [
         {
          "type": "text",
-         "text": "{\"a_bytes\":1073741876,\"a_lines\":13327101,\"approx\":{\"a_lines\":0,\"b_lines\":0,\"segments\":0},\"b_bytes\":1074747414,\"b_lines\":13337797,\"differs\":{\"a_lines\":969786,\"b_lines\":980482,\"segments\":6753},\"equal\":{\"a_lines\":12357315,\"b_lines\":12357315,\"segments\":6512},\"first_differences\":[{\"a\":{\"count\":131,\"start\":279},\"b\":{\"count\":130,\"start\":279},\"status\":\"differs\"},{\"a\":{\"count\":139,\"start\":905},\"b\":{\"count\":139,\"start\":904},\"status\":\"differs\"},{\"a\":{\"count\":55,\"start\":1232},\"b\":{\"count\":56,\"start\":1231},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":8096},\"b\":{\"count\":31,\"start\":8096},\"status\":\"differs\"},{\"a\":{\"count\":13,\"start\":9609},\"b\":{\"count\":21,\"start\":9600},\"status\":\"differs\"},{\"a\":{\"count\":49,\"start\":11781},\"b\":{\"count\":57,\"start\":11780},\"status\":\"differs\"},{\"a\":{\"count\":430,\"start\":17446},\"b\":{\"count\":110,\"start\":17453},\"status\":\"differs\"},{\"a\":{\"count\":19,\"start\":21544},\"b\":{\"count\":16,\"start\":21231},\"status\":\"differs\"},{\"a\":{\"count\":316,\"start\":22520},\"b\":{\"count\":319,\"start\":22204},\"status\":\"differs\"},{\"a\":{\"count\":75,\"start\":24979},\"b\":{\"count\":65,\"start\":24666},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":26662},\"b\":{\"count\":77,\"start\":26339},\"status\":\"differs\"},{\"a\":{\"count\":138,\"start\":26923},\"b\":{\"count\":141,\"start\":26610},\"status\":\"differs\"},{\"a\":{\"count\":352,\"start\":27606},\"b\":{\"count\":27,\"start\":27296},\"status\":\"differs\"},{\"a\":{\"count\":190,\"start\":28686},\"b\":{\"count\":520,\"start\":28051},\"status\":\"differs\"},{\"a\":{\"count\":203,\"start\":30592},\"b\":{\"count\":203,\"start\":30287},\"status\":\"differs\"},{\"a\":{\"count\":182,\"start\":31085},\"b\":{\"count\":172,\"start\":30780},\"status\":\"differs\"},{\"a\":{\"count\":197,\"start\":36787},\"b\":{\"count\":187,\"start\":36472},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":36984},\"b\":{\"count\":59,\"start\":36659},\"status\":\"differs\"},{\"a\":{\"count\":142,\"start\":37727},\"b\":{\"count\":133,\"start\":37421},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":38498},\"b\":{\"count\":57,\"start\":38183},\"status\":\"differs\"}],\"identical\":false,\"mem_budget_bytes\":67108864,\"mem_reserved_bytes\":25222542,\"more_differences\":6733,\"refined_segments\":0}"
+         "text": "{\"a_bytes\":1073741876,\"a_lines\":13327101,\"approx\":{\"a_lines\":0,\"b_lines\":0,\"segments\":0},\"b_bytes\":1074747414,\"b_lines\":13337797,\"differs\":{\"a_lines\":969786,\"b_lines\":980482,\"segments\":6753},\"equal\":{\"a_lines\":12357315,\"b_lines\":12357315,\"segments\":6512},\"first_differences\":[{\"a\":{\"count\":131,\"start\":279},\"b\":{\"count\":130,\"start\":279},\"status\":\"differs\"},{\"a\":{\"count\":139,\"start\":905},\"b\":{\"count\":139,\"start\":904},\"status\":\"differs\"},{\"a\":{\"count\":55,\"start\":1232},\"b\":{\"count\":56,\"start\":1231},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":8096},\"b\":{\"count\":31,\"start\":8096},\"status\":\"differs\"},{\"a\":{\"count\":13,\"start\":9609},\"b\":{\"count\":21,\"start\":9600},\"status\":\"differs\"},{\"a\":{\"count\":49,\"start\":11781},\"b\":{\"count\":57,\"start\":11780},\"status\":\"differs\"},{\"a\":{\"count\":430,\"start\":17446},\"b\":{\"count\":110,\"start\":17453},\"status\":\"differs\"},{\"a\":{\"count\":19,\"start\":21544},\"b\":{\"count\":16,\"start\":21231},\"status\":\"differs\"},{\"a\":{\"count\":316,\"start\":22520},\"b\":{\"count\":319,\"start\":22204},\"status\":\"differs\"},{\"a\":{\"count\":75,\"start\":24979},\"b\":{\"count\":65,\"start\":24666},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":26662},\"b\":{\"count\":77,\"start\":26339},\"status\":\"differs\"},{\"a\":{\"count\":138,\"start\":26923},\"b\":{\"count\":141,\"start\":26610},\"status\":\"differs\"},{\"a\":{\"count\":352,\"start\":27606},\"b\":{\"count\":27,\"start\":27296},\"status\":\"differs\"},{\"a\":{\"count\":190,\"start\":28686},\"b\":{\"count\":520,\"start\":28051},\"status\":\"differs\"},{\"a\":{\"count\":203,\"start\":30592},\"b\":{\"count\":203,\"start\":30287},\"status\":\"differs\"},{\"a\":{\"count\":182,\"start\":31085},\"b\":{\"count\":172,\"start\":30780},\"status\":\"differs\"},{\"a\":{\"count\":197,\"start\":36787},\"b\":{\"count\":187,\"start\":36472},\"status\":\"differs\"},{\"a\":{\"count\":40,\"start\":36984},\"b\":{\"count\":59,\"start\":36659},\"status\":\"differs\"},{\"a\":{\"count\":142,\"start\":37727},\"b\":{\"count\":133,\"start\":37421},\"status\":\"differs\"},{\"a\":{\"count\":67,\"start\":38498},\"b\":{\"count\":57,\"start\":38183},\"status\":\"differs\"}],\"identical\":false,\"mem_budget_bytes\":67108864,\"mem_reserved_bytes\":25180068,\"more_differences\":6733,\"refined_segments\":0}"
         }
        ],
        "structuredContent": {
@@ -1192,7 +1192,7 @@
         ],
         "identical": false,
         "mem_budget_bytes": 67108864,
-        "mem_reserved_bytes": 25222542,
+        "mem_reserved_bytes": 25180068,
         "more_differences": 6733,
         "refined_segments": 0
        },
@@ -1426,7 +1426,7 @@
    "b_bytes": 33752031,
    "server": {
     "name": "rift-mcp",
-    "version": "0.3.4"
+    "version": "0.4.0"
    },
    "steps": [
     {
@@ -1454,7 +1454,7 @@
        },
        "serverInfo": {
         "name": "rift-mcp",
-        "version": "0.3.4"
+        "version": "0.4.0"
        }
       }
      },
@@ -2619,7 +2619,7 @@
        "content": [
         {
          "type": "text",
-         "text": "{\"added\":6535,\"changed\":5047,\"changes\":[{\"a_line\":null,\"a_record\":null,\"b_line\":140,\"b_record\":\"191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4\",\"fields\":null,\"fields_more\":0,\"key\":\"191\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":141,\"b_record\":\"192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3\",\"fields\":null,\"fields_more\":0,\"key\":\"192\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":145,\"a_record\":\"144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"144\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":146,\"a_record\":\"145,2024-04-28 07:54:46,3,40.267342,-73.946462,40.750486,-73.241186,17.54,4\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"145\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":147,\"a_record\":\"146,2024-05-13 02:26:00,3,40.013963,-73.809069,40.880483,-73.519581,135.73,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"146\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r10000000000000005c4425dca36b170a081f3a03891511939\",\"removed\":4024,\"total\":15606}"
+         "text": "{\"added\":6535,\"changed\":5047,\"changes\":[{\"a_line\":null,\"a_record\":null,\"b_line\":140,\"b_record\":\"191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4\",\"fields\":null,\"fields_more\":0,\"key\":\"191\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":141,\"b_record\":\"192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3\",\"fields\":null,\"fields_more\":0,\"key\":\"192\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":145,\"a_record\":\"144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"144\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":146,\"a_record\":\"145,2024-04-28 07:54:46,3,40.267342,-73.946462,40.750486,-73.241186,17.54,4\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"145\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":147,\"a_record\":\"146,2024-05-13 02:26:00,3,40.013963,-73.809069,40.880483,-73.519581,135.73,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"146\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r1000000000000000583cb20fc3c65e4cc77c4e1926be61cf4\",\"removed\":4024,\"total\":15606}"
         }
        ],
        "structuredContent": {
@@ -2693,7 +2693,7 @@
          }
         ],
         "mem_budget_bytes": 67108864,
-        "next": "r10000000000000005c4425dca36b170a081f3a03891511939",
+        "next": "r1000000000000000583cb20fc3c65e4cc77c4e1926be61cf4",
         "removed": 4024,
         "total": 15606
        },
@@ -2714,7 +2714,7 @@
         "a": "a.csv",
         "b": "b.csv",
         "key": "csv:id",
-        "cursor": "r10000000000000005c4425dca36b170a081f3a03891511939",
+        "cursor": "r1000000000000000583cb20fc3c65e4cc77c4e1926be61cf4",
         "limit": 5
        }
       }
@@ -2726,7 +2726,7 @@
        "content": [
         {
          "type": "text",
-         "text": "{\"added\":6535,\"changed\":5047,\"changes\":[{\"a_line\":148,\"a_record\":\"147,2024-09-08 00:39:51,4,40.207368,-73.915545,40.465025,-73.433635,106.63,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"147\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":149,\"a_record\":\"148,2024-01-17 07:01:47,4,40.938484,-73.611234,40.854302,-73.369168,37.37,3\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"148\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":150,\"a_record\":\"149,2024-07-15 14:59:20,3,40.235429,-73.781100,40.081443,-73.459107,106.30,4\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"149\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":151,\"a_record\":\"150,2024-05-25 21:57:10,6,40.306799,-73.901825,40.457387,-73.643065,81.60,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"150\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":1310,\"b_record\":\"1332,2024-09-21 01:08:38,4,40.563462,-73.362729,40.367389,-73.870327,104.48,4\",\"fields\":null,\"fields_more\":0,\"key\":\"1332\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r1000000000000000ac4425dca36b170a080e26fa93cc0e38e\",\"removed\":4024,\"total\":15606}"
+         "text": "{\"added\":6535,\"changed\":5047,\"changes\":[{\"a_line\":148,\"a_record\":\"147,2024-09-08 00:39:51,4,40.207368,-73.915545,40.465025,-73.433635,106.63,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"147\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":149,\"a_record\":\"148,2024-01-17 07:01:47,4,40.938484,-73.611234,40.854302,-73.369168,37.37,3\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"148\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":150,\"a_record\":\"149,2024-07-15 14:59:20,3,40.235429,-73.781100,40.081443,-73.459107,106.30,4\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"149\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":151,\"a_record\":\"150,2024-05-25 21:57:10,6,40.306799,-73.901825,40.457387,-73.643065,81.60,1\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"150\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":1310,\"b_record\":\"1332,2024-09-21 01:08:38,4,40.563462,-73.362729,40.367389,-73.870327,104.48,4\",\"fields\":null,\"fields_more\":0,\"key\":\"1332\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r1000000000000000a83cb20fc3c65e4ccb10580eb9a87c818\",\"removed\":4024,\"total\":15606}"
         }
        ],
        "structuredContent": {
@@ -2800,7 +2800,7 @@
          }
         ],
         "mem_budget_bytes": 67108864,
-        "next": "r1000000000000000ac4425dca36b170a080e26fa93cc0e38e",
+        "next": "r1000000000000000a83cb20fc3c65e4ccb10580eb9a87c818",
         "removed": 4024,
         "total": 15606
        },
@@ -2835,7 +2835,7 @@
        "content": [
         {
          "type": "text",
-         "text": "{\"added\":6535,\"changed\":5046,\"changes\":[{\"a_line\":null,\"a_record\":null,\"b_line\":140,\"b_record\":\"191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4\",\"fields\":null,\"fields_more\":0,\"key\":\"191\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":141,\"b_record\":\"192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3\",\"fields\":null,\"fields_more\":0,\"key\":\"192\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":145,\"a_record\":\"144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"144\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r10000000000000003c3fd96531f303d3940f57258a58ff32c\",\"removed\":4024,\"total\":15605}"
+         "text": "{\"added\":6535,\"changed\":5046,\"changes\":[{\"a_line\":null,\"a_record\":null,\"b_line\":140,\"b_record\":\"191,2024-12-23 08:44:41,3,40.729886,-73.064906,40.760568,-73.257353,92.56,4\",\"fields\":null,\"fields_more\":0,\"key\":\"191\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":null,\"a_record\":null,\"b_line\":141,\"b_record\":\"192,2024-06-21 06:23:36,5,40.428589,-73.768699,40.112032,-73.545604,62.26,3\",\"fields\":null,\"fields_more\":0,\"key\":\"192\",\"key_truncated\":false,\"kind\":\"added\",\"records_truncated\":false,\"table\":null},{\"a_line\":145,\"a_record\":\"144,2024-01-26 18:18:34,5,40.797386,-73.476402,40.292421,-73.025035,121.72,2\",\"b_line\":null,\"b_record\":null,\"fields\":null,\"fields_more\":0,\"key\":\"144\",\"key_truncated\":false,\"kind\":\"removed\",\"records_truncated\":false,\"table\":null}],\"mem_budget_bytes\":67108864,\"next\":\"r10000000000000003789abf201544c8e50bbb7ff7e4203c37\",\"removed\":4024,\"total\":15605}"
         }
        ],
        "structuredContent": {
@@ -2883,7 +2883,7 @@
          }
         ],
         "mem_budget_bytes": 67108864,
-        "next": "r10000000000000003c3fd96531f303d3940f57258a58ff32c",
+        "next": "r10000000000000003789abf201544c8e50bbb7ff7e4203c37",
         "removed": 4024,
         "total": 15605
        },

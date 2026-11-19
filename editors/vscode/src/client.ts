@@ -214,7 +214,7 @@ export class Server {
         if (restarting) this.connect().then(() => this.opts.onRestarted?.(), (e) => this.opts.onRestartFailed?.(e));
       };
       const c = this.opts.link?.(onNotification, onClose) ?? new Connection(this.opts.command(), this.opts.args, onNotification, onClose);
-      const hello = { protocol: 1, client: { name: 'rift-vscode', version: '0.3.4' } };
+      const hello = { protocol: 1, client: { name: 'rift-vscode', version: '0.4.0' } };
       c.request<InitializeResult>('initialize', { ...hello, capabilities: { retry_after: true } }).catch((e) => {
         // A rift before 0.4 refuses any param it does not know. Ask again without it: such a
         // server still sends retry_after_ms with busy, it only does not wait for room.

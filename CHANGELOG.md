@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-19
+
 ### Added
 
 - `rift A B` on two directories compares the trees, as `diff -r` prints
@@ -39,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one of its four slots, but is not kept between calls: each page reruns
   the whole comparison, and a `mem` under about 260K to 400K, depending on
   the pair, is refused (caching is #89).
+- Each `.deb`, `.vsix` and `.mcpb` in a release has a `<file>.sha256`
+  next to it, in the format of the archives' checksums: `sha256.sum`
+  lists only the files `dist` builds (#69).
+- `bench/compare.sh BASE HEAD SCRATCH` builds two refs, runs them
+  interleaved on fixed generated pairs, checks that their outputs match
+  and prints the medians, spreads, peak heap and load as a table.
 
 ### Changed
 
@@ -553,7 +561,8 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rubtsov-stan/rift/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/rubtsov-stan/rift/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/rubtsov-stan/rift/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/rubtsov-stan/rift/compare/v0.3.1...v0.3.2
