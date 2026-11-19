@@ -204,8 +204,9 @@ fn write_escaped(out: &mut impl Write, mut rest: &[u8]) -> io::Result<()> {
 
 /// For a changed key, `    NAME: OLD -> NEW` per field that differs,
 /// four spaces in, so a field line never looks like a change line or a
-/// record line. A value is cut at 64 bytes, on a character boundary when
-/// it is UTF-8, and ends in `...`; `(none)` stands for a missing field.
+/// record line. A value longer than 64 bytes prints as a window of at
+/// most 64 bytes around its first difference from the other side, with
+/// `...` on a cut end; `(none)` stands for a missing field.
 fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
     if c.change.change.kind != ChangeKind::Changed {
         return Ok(());
@@ -222,9 +223,7 @@ fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
             FieldName::Bytes(name) => write_escaped(out, name)?,
         }
         out.write_all(b": ")?;
-        write_value(out, f.a)?;
-        out.write_all(b" -> ")?;
-        write_value(out, f.b)?;
+        write_values(out, f.a, f.b)?;
         out.write_all(b"\n")?;
     }
     if !any {
@@ -233,20 +232,61 @@ fn write_fields(out: &mut impl Write, c: &FieldChange<'_>) -> io::Result<()> {
     Ok(())
 }
 
-fn write_value(out: &mut impl Write, value: Option<&[u8]>) -> io::Result<()> {
+/// Prints the two values of a field. When either is cut, both print the
+/// 64-byte window that holds their first differing byte, so the cut never
+/// hides the change.
+fn write_values(out: &mut impl Write, a: Option<&[u8]>, b: Option<&[u8]>) -> io::Result<()> {
+    let start = match (a, b) {
+        (Some(a), Some(b)) if a.len() > VALUE_CUT || b.len() > VALUE_CUT => window_start(a, b),
+        _ => 0,
+    };
+    write_value(out, a, start)?;
+    out.write_all(b" -> ")?;
+    write_value(out, b, start)
+}
+
+/// Where the window of a pair of values starts: 0 while the first
+/// difference is in the first 48 bytes, else 16 bytes of context after it.
+/// Moved to a character boundary of the shared prefix, so neither side
+/// starts or shows the difference inside a character.
+fn window_start(a: &[u8], b: &[u8]) -> usize {
+    let continuation = |v: &[u8], i: usize| v.get(i).is_some_and(|c| c & 0xC0 == 0x80);
+    let mut diff = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    while diff > 0 && (continuation(a, diff) || continuation(b, diff)) {
+        diff -= 1;
+    }
+    let mut start = (diff + 16).saturating_sub(VALUE_CUT);
+    while start < diff && continuation(a, start) {
+        start += 1;
+    }
+    start
+}
+
+/// `value` from byte `start`, at most [`VALUE_CUT`] bytes, with `...` on
+/// each end that was cut; the end stays on a character boundary when the
+/// bytes are UTF-8. `(none)` stands for a missing field.
+fn write_value(out: &mut impl Write, value: Option<&[u8]>, start: usize) -> io::Result<()> {
     let Some(v) = value else {
         return out.write_all(b"(none)");
     };
-    if v.len() <= VALUE_CUT {
-        return write_escaped(out, v);
-    }
-    let end = match std::str::from_utf8(&v[..VALUE_CUT]) {
+    let start = start.min(v.len());
+    let mut end = v.len().min(start + VALUE_CUT);
+    if end < v.len() {
         // A character cut in two at the end: stop before it.
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        _ => VALUE_CUT,
-    };
-    write_escaped(out, &v[..end])?;
-    out.write_all(b"...")
+        if let Err(e) = std::str::from_utf8(&v[start..end])
+            && e.error_len().is_none()
+        {
+            end = start + e.valid_up_to();
+        }
+    }
+    if start > 0 {
+        out.write_all(b"...")?;
+    }
+    write_escaped(out, &v[start..end])?;
+    if end < v.len() {
+        out.write_all(b"...")?;
+    }
+    Ok(())
 }
 
 /// The records of a field change, as [`write_records`] prints them.

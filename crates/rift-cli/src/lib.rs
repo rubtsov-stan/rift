@@ -102,8 +102,9 @@ pub struct Args {
     pub show_records: bool,
     /// With --key, print under each changed key the fields that differ,
     /// one per line: "    NAME: OLD -> NEW". Values print as the file
-    /// has them, cut at 64 bytes with "..."; "(none)" stands for a field
-    /// the record lacks.
+    /// has them. A value over 64 bytes prints as a window of at most 64
+    /// bytes around its first difference from the other side, with "..."
+    /// on a cut end; "(none)" stands for a field the record lacks.
     #[arg(long, requires = "key")]
     pub show_fields: bool,
     /// With --key, compare only these fields, comma-separated: header

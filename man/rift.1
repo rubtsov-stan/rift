@@ -36,7 +36,7 @@ diff prints it in the \fB\-\fR and \fB+\fR lines. There is no
 Print line counts, the segment map and resource use instead of a diff. For two directories, one status per path (A, D, M, R, T) and the counts
 .TP
 \fB\-\-mem\fR \fI<MEM>\fR [default: 256M]
-Heap limit, in bytes or with a K, M, G or T unit (powers of 1024), at least 64K. The output is identical on any machine for the same \-\-mem and input. A full diff needs about 10.3 MiB (10475K), whatever the files hold, for the buffers that compare the lines of a region; \-\-summary and \-\-key go lower. A refused run names a \-\-mem to rerun with, at least twice the one refused
+Heap limit, in bytes or with a K, M, G or T unit (powers of 1024), at least 64K. The output is identical on any machine for the same \-\-mem and input. A full diff is refused below 10.3 MiB (10475K), whatever the files hold, for the buffers that compare the lines of a region, and a pair with many changed regions needs more; \-\-summary and \-\-key go lower. A refused run names a \-\-mem to rerun with, at least twice the one refused and, for a full diff, at least 10475K. It covers what the refused step needed; a later step can ask for more
 .TP
 \fB\-i\fR, \fB\-\-interactive\fR
 Browse the diff in the terminal instead of printing it
@@ -54,7 +54,7 @@ Compare records by key instead of lines, regardless of row order: csv:N (column,
 With \-\-key, print the records under each change: the one from A behind "  \- ", the one from B behind "  + ", each of their lines behind the same prefix
 .TP
 \fB\-\-show\-fields\fR
-With \-\-key, print under each changed key the fields that differ, one per line: "    NAME: OLD \-> NEW". Values print as the file has them, cut at 64 bytes with "..."; "(none)" stands for a field the record lacks
+With \-\-key, print under each changed key the fields that differ, one per line: "    NAME: OLD \-> NEW". Values print as the file has them. A value over 64 bytes prints as a window of at most 64 bytes around its first difference from the other side, with "..." on a cut end; "(none)" stands for a field the record lacks
 .TP
 \fB\-\-fields\fR \fI<NAMES>\fR
 With \-\-key, compare only these fields, comma\-separated: header names, column numbers for csv:N, top\-level names for json:, column names for copy:. A key whose other fields changed is not reported. Implies \-\-show\-fields
@@ -200,7 +200,11 @@ A field is a CSV column, named by the file's header row for
 \fBcsv:\fR\fINAME\fR and numbered from 1 for \fBcsv:\fR\fIN\fR, a
 top-level member of an NDJSON object, or a column of a \fBCOPY\fR row.
 Values print as the file has them, with tabs, line breaks and
-backslashes escaped, and are cut at 64 bytes with \fB...\fR.
+backslashes escaped. A value over 64 bytes prints as a window of at most
+64 bytes around its first difference from the other side, which starts at
+the value's start while that difference is in the first 48 bytes, and
+never begins or ends inside a UTF-8 character; a cut end shows
+\fB...\fR.
 \fB(none)\fR stands for a field the record lacks, and
 \fB(no field differs)\fR marks records that differ only in layout. CSV
 cells compare without their quotes; NDJSON values and \fBCOPY\fR cells
