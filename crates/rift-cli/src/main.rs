@@ -170,7 +170,8 @@ fn broken_pipe(err: &anyhow::Error) -> bool {
 /// For a budget refusal, a `--mem` to rerun with: what
 /// [`BudgetExceeded::mem_advice`] asks of the budget, plus the reserve.
 /// A `full_diff` is advised at least [`FULL_DIFF_MEM`], which it needs
-/// whatever the refusal asks for, so one rerun is enough.
+/// whatever the refusal asks for. The advice covers what the refused
+/// step needed; a later step can ask for more.
 fn mem_advice(
     err: &anyhow::Error,
     mem: Bytes,
