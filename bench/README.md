@@ -17,7 +17,9 @@ Per pair: one untimed warm-up per side, then the runs alternate base, head, base
 
 The table has, per pair, the median and min-max wall time of each side, the head's difference to the base median, the threshold, the peak heap of each side (the exact count `--stats` prints) and the verdict. A row is `SLOWER` only if the head median exceeds the base median by more than the larger of 3% and the combined spread, here the mean of the two max-min ranges over the base median. `HEAP HIGHER` is added when the head's peak heap is above the base's.
 
-Outputs are compared with `cmp`, never a hash: the stdout of every run against the base's warm-up output, and the stderr without its `time` and `peak heap` lines. The first difference stops the script with exit 1 and a message.
+Outputs are compared with `cmp`, never a hash: the head's warm-up output against the base's, and every timed run against its own side's warm-up; stdout, and stderr without its `time` and `peak heap` lines. The first difference stops the script with exit 1 and a message.
+
+`SORTED=1` is for a change that may print the same lines in another order, such as key mode runs that take several passes: the two warm-ups are compared as sorted lines (`LC_ALL=C sort`), while every run must still match its own side's warm-up byte for byte, so each build stays deterministic. `bench/compare-test.sh` checks this with stand-in binaries; CI runs it.
 
 The script holds a lock directory, `gate.lock` in the repository's git directory, for the whole run, builds and data generation included, and waits in 30 s steps while another holds it. Anything else that must not run during a measurement takes the same directory with `mkdir`. The lock is released on exit, error and interrupt. `PAIRS` replaces the pair list (lines of `name|rift-gen args|rift args`) to try the script on small data.
 
