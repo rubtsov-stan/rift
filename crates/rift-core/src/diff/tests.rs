@@ -446,3 +446,85 @@ fn the_move_search_does_not_change_the_diff() {
     };
     assert_eq!(xxh3_64(&run(true)), xxh3_64(&run(false)));
 }
+
+/// An in-memory source that counts its reads.
+struct Counted {
+    data: Vec<u8>,
+    reads: std::sync::atomic::AtomicU64,
+}
+
+impl Source for Counted {
+    fn len(&self) -> Bytes {
+        Source::len(&self.data[..])
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> std::io::Result<usize> {
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.data[..].read_at(buf, offset)
+    }
+}
+
+/// Hashing a segment reads it in blocks larger than the worker's read
+/// buffer when the job's reservation has room for one; verification
+/// still reads through the reader. Before, both passes read 4 KiB at a
+/// time, about twice the reads this allows.
+#[test]
+fn refining_a_segment_hashes_it_in_large_blocks() {
+    let a = rows(8_000, |i| format!("row {i} of the segment, padded\n"));
+    let b = rows(8_000, |i| match i % 500 {
+        7 => format!("changed {i}\n"),
+        _ => format!("row {i} of the segment, padded\n"),
+    });
+    let bytes = (a.len() + b.len()) as u64;
+    let budget = Budget::new(Bytes::mib(64));
+    let reader = |d: &[u8]| {
+        let cfg = ScanConfig::for_pair(Bytes(d.len() as u64), Bytes(0), &budget).0;
+        let index = Arc::new(scan(d, &budget, &cfg).unwrap().into_index().0);
+        let src = Arc::new(Counted {
+            data: d.to_vec(),
+            reads: 0.into(),
+        });
+        let lines = IndexedLines::new(
+            Arc::clone(&src),
+            index,
+            &budget,
+            Half::Refine,
+            WORKER_SCRATCH,
+        )
+        .unwrap();
+        (src, lines)
+    };
+    let ((sa, ra), (sb, rb)) = (reader(&a), reader(&b));
+    let mut w = Worker {
+        refiner: Refiner::new(CUTOFF),
+        a: ra,
+        b: rb,
+        buf: LineBuf::new(),
+        buf2: LineBuf::new(),
+    };
+    let reads = || {
+        sa.reads.load(std::sync::atomic::Ordering::Relaxed)
+            + sb.reads.load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let before = reads();
+    let mut res = budget
+        .try_reserve(Half::Refine, estimate(8_000, 8_000))
+        .unwrap();
+    let hunk = refine(
+        &mut w,
+        LineNo(0)..LineNo(8_000),
+        LineNo(0)..LineNo(8_000),
+        None,
+        &mut res,
+        &Cancel::default(),
+    )
+    .unwrap();
+    assert!(hunk.approx.is_none());
+    let reads = reads() - before;
+    let per_pass = bytes / WORKER_SCRATCH.0;
+    assert!(
+        reads <= per_pass * 3 / 2,
+        "{reads} reads for {bytes} bytes, {per_pass} per pass of 4 KiB reads"
+    );
+}

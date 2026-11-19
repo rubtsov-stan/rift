@@ -17,7 +17,9 @@
 //! then two line readers and four line buffers for each worker the budget
 //! allows, whether it starts or not, then, while the blocks are found, two
 //! comparison buffers (see [`Moves`]), then the scheduler, which takes what
-//! is left for its row table, its hunk cache and the jobs' working sets. Line
+//! is left for its row table, its hunk cache and the jobs' working sets. A
+//! job hashes its segment through a read block of up to 64 KiB taken from
+//! its own working set, before the refiner's workspace exists. Line
 //! buffers are bounded because a reader returns a line whole only when it
 //! fits its buffer; longer lines travel in pieces of 64 KiB.
 
@@ -38,10 +40,10 @@ use crate::error::{Error, Result};
 use crate::index::{IndexedLines, LineIndex};
 use crate::lines::{LineAccess, LineBuf};
 use crate::moves::{MovedBlock, Moves};
-use crate::refine::{Refiner, VERIFY_LINES, work_estimate};
+use crate::refine::{Refiner, VERIFY_LINES, filled, work_estimate};
 use crate::scan::Watch;
 use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler, least_bytes};
-use crate::script::{LINES_PER_READ, PIECE, for_each_piece};
+use crate::script::{LINES_PER_READ, PIECE};
 use crate::segment::{Segment, SegmentStatus};
 use crate::skeleton::{OffChain, build_pair_watched};
 use crate::source::Source;
@@ -54,6 +56,8 @@ use crate::view::{ApproxTally, DiffView, HunkState, Progress};
 const WORKER_SCRATCH: Bytes = Bytes(4 << 10);
 /// Read buffer of the front end's line readers.
 const FRONT_SCRATCH: Bytes = Bytes(16 << 10);
+/// Most bytes a job reads at once while it hashes a segment.
+const HASH_BLOCK: Bytes = Bytes(64 << 10);
 /// Output buffer of the unified writer.
 const WRITER_BUF: Bytes = Bytes(1 << 20);
 /// Myers cost cutoff per gap, the floor `git` uses.
@@ -708,8 +712,21 @@ fn refine<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     if let Some((seg, at)) = start {
         seek(w, seg, at);
     }
-    let ha = hashes(&w.a, ra.clone(), &mut w.buf)?;
-    let hb = hashes(&w.b, rb.clone(), &mut w.buf)?;
+    let (ha, hb) = {
+        // Refine half, inside the reservation: the refiner's workspace,
+        // which the estimate covers, is not allocated until the block is
+        // dropped.
+        let room = work_estimate(ra.end - ra.start, rb.end - rb.start).min(HASH_BLOCK);
+        let mut block = if room > WORKER_SCRATCH {
+            filled(room.as_usize(), 0)?
+        } else {
+            Vec::new()
+        };
+        (
+            hashes(&w.a, ra.clone(), &mut block)?,
+            hashes(&w.b, rb.clone(), &mut block)?,
+        )
+    };
     if cancel.is_set() {
         return Ok(Hunk::default());
     }
@@ -724,29 +741,30 @@ fn refine<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
     w.refiner.refine(&seg, &ha, &hb, &w.a, &w.b, reservation)
 }
 
-/// Hashes of the lines `range`, exactly sized.
-fn hashes(
-    lines: &impl LineAccess,
+/// Hashes of the lines `range`, exactly sized, read through `block` when
+/// it is larger than the reader's buffer.
+fn hashes<S: Source + Send + ?Sized>(
+    lines: &Reader<S>,
     range: Range<LineNo>,
-    buf: &mut LineBuf,
+    block: &mut [u8],
 ) -> Result<Vec<LineHash>> {
     let mut out = Vec::new();
     let n = usize::try_from(range.end - range.start).unwrap_or(usize::MAX);
     out.try_reserve_exact(n).map_err(|_| oom())?;
-    each_hash(lines, range, buf, |h| out.push(h))?;
+    each_hash(lines, range, block, |h| out.push(h))?;
     Ok(out)
 }
 
 /// Calls `f` with the hash of every line of `range`, in order: xxh3 of the
 /// whole line, terminator included, streamed for a line read in pieces.
-fn each_hash(
-    lines: &impl LineAccess,
+fn each_hash<S: Source + Send + ?Sized>(
+    lines: &Reader<S>,
     range: Range<LineNo>,
-    buf: &mut LineBuf,
+    block: &mut [u8],
     mut f: impl FnMut(LineHash),
 ) -> Result<()> {
     let mut long = Xxh3::new();
-    for_each_piece(lines, range, buf, |piece, first, last| {
+    lines.for_each_line(range, block, |piece, first, last| {
         if first && last {
             f(xxh3_64(piece));
         } else {

@@ -223,7 +223,7 @@ impl Workspace {
 }
 
 /// A vector of exactly `len` copies of `v`, without panicking on OOM.
-fn filled<T: Clone>(len: usize, v: T) -> Result<Vec<T>> {
+pub(crate) fn filled<T: Clone>(len: usize, v: T) -> Result<Vec<T>> {
     let mut out = empty(len)?;
     out.resize(len, v);
     Ok(out)
