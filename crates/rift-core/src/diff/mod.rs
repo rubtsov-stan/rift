@@ -603,6 +603,14 @@ struct Worker<A: ?Sized, B: ?Sized> {
     buf2: LineBuf,
 }
 
+/// Most bytes of one segment a worker asks the sources to fetch ahead; a
+/// segment beyond it is read sequentially, which the kernel already
+/// follows, and a larger ask could push out pages it is about to read.
+const ADVISE_CAP: u64 = 4 << 20;
+/// Bytes advised on each side of a segment: the unified writer reads its
+/// context lines there, right before and after the change.
+const ADVISE_PAD: u64 = 16 << 10;
+
 /// Refines segments with one [`Worker`] per scheduler thread.
 #[derive(Debug)]
 struct RefineJob<A: ?Sized, B: ?Sized> {
@@ -661,6 +669,14 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> J
     ) -> Result<Hunk> {
         let mut lease = self.lease();
         let w = lease.worker.as_mut().expect("leased");
+        if !segment.a.is_empty() {
+            let (at, len) = advice(&self.starts, index, 0);
+            w.a.advise(at, len);
+        }
+        if !segment.b.is_empty() {
+            let (at, len) = advice(&self.starts, index, 1);
+            w.b.advise(at, len);
+        }
         let start = Some((segment, self.starts[index]));
         refine(
             w,
@@ -684,6 +700,20 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> J
         seek(w, segment, self.starts[index]);
         resample::refine_large(w, segment, reservation.bytes(), cancel)
     }
+}
+
+/// The range to ask a source to fetch ahead for segment `index` of file
+/// `side`: the segment and the bytes around it. Reads stay `pread` into the
+/// worker's buffers; this only lets a cold disk start early.
+fn advice(starts: &[[ByteOffset; 2]], index: usize, side: usize) -> (ByteOffset, Bytes) {
+    let from = starts[index][side].0;
+    let end = starts
+        .get(index + 1)
+        .map_or(u64::MAX, |next| next[side].0)
+        .min(from.saturating_add(ADVISE_CAP))
+        .saturating_add(ADVISE_PAD);
+    let at = from.saturating_sub(ADVISE_PAD);
+    (ByteOffset(at), Bytes(end - at))
 }
 
 /// Points both readers of `w` at the start of `segment`.
