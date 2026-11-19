@@ -44,7 +44,9 @@ csv-1G|--profile csv --size 1G|
 shuffled-csv-key-256M|--profile shuffled --rows csv --size 256M|--key csv:id
 periodic1000-256M|--profile periodic --period 1000 --size 256M|
 periodic1000-1G|--profile periodic --period 1000 --size 1G|
-nokey-4M|--profile nokey --size 4M|'
+nokey-4M|--profile nokey --size 4M|
+ndjson-500B-256M|--profile ndjson --size 256M --line-bytes 500|
+ndjson-2K-256M|--profile ndjson --size 256M --line-bytes 2048|'
 
 # PAIRS replaces the list above, for a quick check of the script itself.
 pairs=${PAIRS:-$pairs}
