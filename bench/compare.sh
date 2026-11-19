@@ -12,6 +12,10 @@
 # RUNS=N changes the 10 timed runs per side. Each side gets one untimed
 # warm-up first, then runs alternate base, head, base, head, ...
 #
+# SORTED=1 accepts a head that prints the base's lines in another order: the
+# warm-ups are compared as sorted lines, and every timed run byte for byte
+# against its own side's warm-up, so each side must still be deterministic.
+#
 # Takes the lock directory gate.lock in the repository's git directory for
 # the whole run (builds, data generation, measurement), so no build or test
 # that takes the same lock runs during a measurement; waits while it is held.
@@ -26,6 +30,7 @@ set -eu
 [ $# -eq 3 ] || { sed -n '2,/^set/p' "$0" >&2; exit 2; }
 base=$1 head=$2 scratch=$3
 runs=${RUNS:-10}
+sorted=${SORTED:-0}
 root=$(cd "$(dirname "$0")/.." && pwd)
 lock=$(cd "$(git -C "$root" rev-parse --git-common-dir)" && pwd)/gate.lock
 
@@ -101,6 +106,18 @@ same() { # A B WHAT: fails loudly when the outputs differ byte for byte.
   cmp "$1" "$2" >&2 || true; cmp "$1.err" "$2.err" >&2 || true
   exit 1
 }
+same_lines() { # A B WHAT: the same lines in any order; stderr byte for byte.
+  LC_ALL=C sort "$1" > "$1.sorted"; LC_ALL=C sort "$2" > "$2.sorted"
+  cmp -s "$1.sorted" "$2.sorted" && cmp -s "$1.err" "$2.err" && return 0
+  echo "OUTPUT DIFFERS ($3): base and head must print the same lines" >&2
+  cmp "$1.sorted" "$2.sorted" >&2 || true; cmp "$1.err" "$2.err" >&2 || true
+  exit 1
+}
+if [ "$sorted" = 1 ]; then
+  check=same_lines outputs="the same lines as base's (sorted), and each run the same bytes as its own side's warm-up"
+else
+  check=same outputs="byte-identical"
+fi
 
 cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo)
 ram=$(sysctl -n hw.memsize 2>/dev/null || echo $(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) * 1024 )))
@@ -124,7 +141,7 @@ while IFS='|' read -r name gargs rargs; do
   : > "$w/base.t"; : > "$w/head.t"; : > "$w/load"
   one "$rbase" "$rargs" "$d/a" "$d/b" "$w/base.out"
   one "$rhead" "$rargs" "$d/a" "$d/b" "$w/head.out"
-  same "$w/base.out" "$w/head.out" "$name, warm-up"
+  "$check" "$w/base.out" "$w/head.out" "$name, warm-up"
   i=0
   while [ "$i" -lt "$runs" ]; do
     i=$((i + 1))
@@ -134,7 +151,7 @@ while IFS='|' read -r name gargs rargs; do
       one "$bin" "$rargs" "$d/a" "$d/b" "$w/$side.out.$i"
       load >> "$w/load"
       cat "$scratch/wall" >> "$w/$side.t"
-      same "$w/base.out" "$w/$side.out.$i" "$name, run $i, $side"
+      same "$w/$side.out" "$w/$side.out.$i" "$name, run $i, $side"
       hb=$(cat "$w/$side.out.$i.heap"); echo "$hb" >> "$w/$side.h"
       rm -f "$w/$side.out.$i" "$w/$side.out.$i".*
     done
@@ -172,13 +189,13 @@ cat <<OUT
 
 ### Command
 
-\`bench/compare.sh $base $head SCRATCH\` with RUNS=$runs: per pair one warm-up per side, then $runs runs per side interleaved base, head, base, head, ...; \`rift --stats --mem 256M [--key csv:id] a b\`, stdout to a file; rift-gen seed 7, --change-ratio 0.001. Outputs of every run are compared with cmp against base's warm-up output (stdout and stderr without the time and peak heap lines).
+\`bench/compare.sh $base $head SCRATCH\` with RUNS=$runs: per pair one warm-up per side, then $runs runs per side interleaved base, head, base, head, ...; \`rift --stats --mem 256M [--key csv:id] a b\`, stdout to a file; rift-gen seed 7, --change-ratio 0.001. Outputs are compared with cmp (stdout, and stderr without the time and peak heap lines): head's warm-up against base's$( [ "$sorted" = 1 ] && echo ' as sorted lines (SORTED=1)'), every run against its own side's warm-up.
 
 ### Result
 
 $table
 
-Verdict: "SLOWER" if the head median exceeds the base median by more than the larger of 3% and the combined spread (mean of the two max-min ranges over base's median); "HEAP HIGHER" if the head's peak heap exceeds base's. All outputs were byte-identical.
+Verdict: "SLOWER" if the head median exceeds the base median by more than the larger of 3% and the combined spread (mean of the two max-min ranges over base's median); "HEAP HIGHER" if the head's peak heap exceeds base's. All outputs were $outputs.
 
 ### Top CPU users
 
