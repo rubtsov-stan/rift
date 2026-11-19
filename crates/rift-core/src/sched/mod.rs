@@ -236,6 +236,7 @@ impl<J: Job> Scheduler<J> {
         threads: usize,
         background: bool,
     ) -> Result<Self> {
+        let threads = threads.max(1);
         let free = budget.available(Half::Refine);
         let table = Cache::table_bytes(segments.len());
         let share = free.0.saturating_sub(table.0) / 2;
@@ -278,15 +279,17 @@ impl<J: Job> Scheduler<J> {
             work: Condvar::new(),
             ready: Condvar::new(),
         });
-        let workers = (0..threads.max(1))
-            .map(|_| {
-                let shared = Arc::clone(&shared);
-                std::thread::Builder::new()
-                    .name("rift-sched".into())
-                    .spawn(move || worker(&shared))
-            })
-            .collect::<io::Result<_>>()?;
-        Ok(Scheduler { shared, workers })
+        let mut scheduler = Scheduler {
+            shared,
+            workers: Vec::with_capacity(threads),
+        };
+        for _ in 0..threads {
+            // On error `scheduler` drops here, which stops and joins the
+            // workers already started and releases the reservation.
+            let worker = spawn_worker(Arc::clone(&scheduler.shared))?;
+            scheduler.workers.push(worker);
+        }
+        Ok(scheduler)
     }
 
     /// The most one job may reserve; estimates above it go to
@@ -569,6 +572,20 @@ impl Queue {
 
 fn wait<'a>(cv: &Condvar, q: MutexGuard<'a, Queue>) -> MutexGuard<'a, Queue> {
     cv.wait(q).unwrap_or_else(PoisonError::into_inner)
+}
+
+fn spawn_worker<J: Job>(shared: Arc<Shared<J>>) -> io::Result<JoinHandle<()>> {
+    #[cfg(test)]
+    if tests::SPAWNS_LEFT.with(|n| {
+        let left = n.get();
+        n.set(left.saturating_sub(1));
+        left == 0
+    }) {
+        return Err(io::Error::other("injected spawn failure"));
+    }
+    std::thread::Builder::new()
+        .name("rift-sched".into())
+        .spawn(move || worker(&shared))
 }
 
 fn worker<J: Job>(shared: &Shared<J>) {
