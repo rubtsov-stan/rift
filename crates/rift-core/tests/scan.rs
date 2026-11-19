@@ -16,9 +16,10 @@ fn config(level: u32, chunk: u64, threads: usize) -> ScanConfig {
     ScanConfig {
         level,
         sample_cap: 1 << 12,
-        checkpoint_interval: 4,
+        checkpoint_interval: Bytes(4),
         checkpoint_cap: 1 << 12,
         chunk: Bytes(chunk),
+        buffer: Bytes(64 << 10),
         threads,
     }
 }
@@ -85,11 +86,15 @@ fn terminator_is_part_of_the_hash() {
 }
 
 #[test]
-fn chunk_boundaries_do_not_change_the_result() {
+fn chunk_and_buffer_boundaries_do_not_change_the_result() {
     let data = lines(500);
     for chunk in [1, 2, 3, 7, 16, 64, 1000, 1 << 20] {
-        for threads in [1, 2] {
-            check(&data, &config(0, chunk, threads));
+        for buffer in [1, 2, 3, 64, 1 << 16] {
+            for threads in [1, 2] {
+                let mut cfg = config(0, chunk, threads);
+                cfg.buffer = Bytes(buffer);
+                check(&data, &cfg);
+            }
         }
     }
 }
@@ -105,16 +110,9 @@ fn chunk_size_does_not_change_the_index_size() {
             for threads in [1, 3] {
                 let mut cfg = config(0, chunk, threads);
                 cfg.checkpoint_cap = cap;
+                cfg.buffer = Bytes(chunk.min(5000));
                 let got = check(&data, &cfg);
                 let index = got.index();
-                let gaps = index
-                    .checkpoints()
-                    .windows(2)
-                    .map(|w| w[1].line - w[0].line);
-                assert!(
-                    gaps.clone().all(|g| g < 2 * index.interval()),
-                    "cap {cap} chunk {chunk}"
-                );
                 seen.push((index.checkpoints().len(), index.interval(), got.held()));
             }
         }
@@ -144,20 +142,14 @@ fn overflow_raises_the_stratum_in_place() {
 }
 
 #[test]
-fn overflow_doubles_the_interval_in_place() {
+fn a_small_cap_widens_the_interval_to_fit() {
     let data = lines(4000);
     let mut cfg = config(0, 8192, 2);
     cfg.checkpoint_cap = 64;
     let got = check(&data, &cfg);
-    assert!(got.index().interval() > 4);
-    assert!(got.index().checkpoints().len() <= 64);
-    let gaps = got
-        .index()
-        .checkpoints()
-        .windows(2)
-        .map(|w| w[1].line - w[0].line);
-    assert!(gaps.clone().all(|g| g < 2 * got.index().interval()));
-    assert!(gaps.clone().any(|g| g == got.index().interval()));
+    let interval = (data.len() as u64).div_ceil(64);
+    assert_eq!(got.index().interval(), Bytes(interval));
+    assert_eq!(got.index().checkpoints().len(), 64);
 }
 
 #[test]
@@ -173,12 +165,13 @@ fn line_longer_than_the_buffer_hashes_like_memory() {
 
 #[test]
 fn unterminated_last_line_of_exactly_the_buffer_length_counts() {
-    // chunk 4096 plus the 64 KiB tail is the worker buffer.
     let buffer = 4096 + (64 << 10);
     for prefix in [&b""[..], b"a\n"] {
         let mut data = prefix.to_vec();
         data.extend(vec![b'q'; buffer]);
-        let got = check(&data, &config(0, 4096, 2));
+        let mut cfg = config(0, 4096, 2);
+        cfg.buffer = Bytes(buffer as u64);
+        let got = check(&data, &cfg);
         assert_eq!(got.index().line_count(), 1 + u64::from(!prefix.is_empty()));
         assert_eq!(
             got.samples().last().unwrap().hash,
@@ -245,9 +238,10 @@ fn vectors_grow_within_the_budget_when_lines_are_shorter_than_assumed() {
     let cfg = ScanConfig {
         level: 0,
         sample_cap: 1 << 20,
-        checkpoint_interval: 4,
+        checkpoint_interval: Bytes(4),
         checkpoint_cap: 1 << 20,
         chunk: Bytes(4096),
+        buffer: Bytes(4096),
         threads: 2,
     };
     let got = scan(&data[..], &budget, &cfg).unwrap();
@@ -256,11 +250,7 @@ fn vectors_grow_within_the_budget_when_lines_are_shorter_than_assumed() {
         0,
         "growth, not thinning, absorbs the extra samples"
     );
-    assert_eq!(
-        got.index().interval(),
-        4,
-        "growth, not doubling, absorbs the checkpoints"
-    );
+    assert_eq!(got.index().interval(), Bytes(4));
     assert_eq!(got.samples(), expected(&data, 0));
     assert_eq!(budget.used(Half::Skeleton), got.held());
     drop(got);
@@ -268,8 +258,12 @@ fn vectors_grow_within_the_budget_when_lines_are_shorter_than_assumed() {
 
     // A half too small to grow into falls back to thinning, still exact.
     let small = Budget::new(Bytes(1200 << 10));
+    let cfg = ScanConfig {
+        checkpoint_interval: Bytes(64),
+        ..cfg
+    };
     let got = scan(&data[..], &small, &cfg).unwrap();
-    assert!(got.level() > 0 || got.index().interval() > 4);
+    assert!(got.level() > 0);
     assert_eq!(got.samples(), expected(&data, got.level()));
     assert!(small.used(Half::Skeleton) <= small.capacity(Half::Skeleton));
 }
@@ -310,6 +304,68 @@ fn read_errors_stop_every_worker() {
         Err(Error::Io(_))
     ));
     assert_eq!(budget.used(Half::Skeleton), Bytes(0));
+}
+
+/// Line starts of `data` that come first in their `interval`-byte block.
+fn first_per_block(data: &[u8], interval: u64) -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    let mut start = 0u64;
+    for (i, line) in data.split_inclusive(|&b| b == b'\n').enumerate() {
+        if out
+            .last()
+            .is_none_or(|&(_, o)| o / interval != start / interval)
+        {
+            out.push((i as u64, start));
+        }
+        start += line.len() as u64;
+    }
+    out
+}
+
+/// The index holds the first line start of every `interval`-byte block,
+/// so reaching a line reads fewer than `interval` bytes before it,
+/// however long the lines, and the chunks and threads change nothing.
+#[test]
+fn checkpoints_are_the_first_line_start_of_each_block() {
+    let data: Vec<u8> = (0..300usize)
+        .flat_map(|i| {
+            let mut l = vec![b'x'; i * 37 % 290];
+            l.push(b'\n');
+            l
+        })
+        .collect();
+    for interval in [1, 7, 64, 256] {
+        for chunk in [1, 5, 64, 1000, 1 << 20] {
+            for (buffer, threads) in [(1, 1), (3, 3), (100, 1), (1 << 16, 3)] {
+                let mut cfg = config(0, chunk, threads);
+                cfg.checkpoint_interval = Bytes(interval);
+                cfg.checkpoint_cap = 1 << 20;
+                cfg.buffer = Bytes(buffer);
+                let got = check(&data, &cfg);
+                assert_eq!(got.index().interval(), Bytes(interval));
+                let have: Vec<_> = got
+                    .index()
+                    .checkpoints()
+                    .iter()
+                    .map(|c| (c.line.0, c.offset.0))
+                    .collect();
+                assert_eq!(have, first_per_block(&data, interval), "{interval} {chunk}");
+            }
+        }
+    }
+}
+
+/// The scan's read buffers are cut so every worker gets one, down to the
+/// smallest budget a full diff runs under: a single worker hashes at a
+/// fraction of the disk's speed.
+#[test]
+fn for_pair_starts_every_worker_at_small_budgets() {
+    for mem in ["10M", "16M", "64M", "256M"] {
+        let budget = Budget::new(mem.parse().unwrap());
+        let (a, b) = ScanConfig::for_pair(Bytes(1 << 30), Bytes(1 << 30), &budget);
+        assert_eq!(a, b);
+        assert_eq!(a.threads, rift_core::budget::MAX_THREADS, "--mem {mem}");
+    }
 }
 
 proptest! {

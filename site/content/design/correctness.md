@@ -65,7 +65,7 @@ The fuzz crate under `fuzz/` has 11 cargo-fuzz targets. Each one checks a proper
 
 | Target | Property |
 |---|---|
-| `scan` | line count, checkpoints and samples match a plain split, for any chunk size and thread count |
+| `scan` | line count, checkpoints and samples match a plain split, for any chunk size, buffer size and thread count |
 | `keyed_csv`, `keyed_ndjson`, `keyed_copy` | a small and a large budget report the same changes; a file against itself reports nothing; peak heap within the small budget |
 | `keyed_reader` | 1, 4 and 16 chunks read the same records |
 | `pipeline` | the unified diff applied to A gives B; the verdict matches A == B; peak heap within `--mem` |

@@ -21,7 +21,7 @@ fn a_tiny_pair_under_a_huge_budget_peaks_in_kibibytes() {
     let peak = alloc::peak().0 - before;
     eprintln!("peak heap {peak} bytes");
     assert_eq!(sa.index().line_count() + sb.index().line_count(), 2);
-    // Per-worker staging vectors dominate: about 112 KiB, sized by
+    // Per-worker staging vectors dominate: about 52 KiB, sized by
     // constants, never by the budget.
     assert!(
         peak < 256 << 10,

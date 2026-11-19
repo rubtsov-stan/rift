@@ -35,9 +35,10 @@ fn config(threads: usize, level: u32) -> ScanConfig {
     ScanConfig {
         level,
         sample_cap: 1 << 21,
-        checkpoint_interval: 2048,
+        checkpoint_interval: Bytes(64 << 10),
         checkpoint_cap: 1 << 16,
         chunk: Bytes::mib(4),
+        buffer: Bytes(512 << 10),
         threads,
     }
 }

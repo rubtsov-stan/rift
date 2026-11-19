@@ -4,30 +4,31 @@
 //! of one stratum and a sparse [`LineIndex`]. The source is cut into chunks
 //! of `chunk` bytes; a chunk owns every line that starts inside it, however
 //! long. Workers take chunks in file order from a shared counter, so reads
-//! stay nearly sequential, and each worker keeps one fixed read buffer and
-//! two small staging vectors for the whole scan. Lines are numbered within
-//! their chunk until all counts are known; a prefix sum over chunks then
-//! makes the numbers absolute.
+//! stay nearly sequential, and each worker reads its chunks through one
+//! fixed buffer, which may be smaller than a chunk, and keeps two small
+//! staging vectors for the whole scan. Lines are numbered within their
+//! chunk until all counts are known; a prefix sum over chunks then makes
+//! the numbers absolute.
 //!
-//! The sample and checkpoint vectors start at what the file is expected to
-//! produce, never more than the configured caps, and grow toward the caps
-//! with a reservation taken first. When the caps are reached, or the budget
-//! refuses to grow, the stratum is raised, or the checkpoint interval
-//! doubled, and the vectors are thinned in place; nothing is reread.
+//! The sample vector starts at what the file is expected to produce, never
+//! more than the configured cap, and grows toward the cap with a
+//! reservation taken first. When the cap is reached, or the budget refuses
+//! to grow, the stratum is raised and the vector is thinned in place;
+//! nothing is reread.
 //!
-//! Checkpoints are first taken every `interval` lines of each chunk, from
-//! its first line, since a worker does not know where its chunk starts in
-//! lines. Once the scan ends, the index keeps the last of them at or
-//! before each multiple of `interval`, so its size depends only on the line
-//! count, never on the chunk size or the thread count, and consecutive
-//! checkpoints are fewer than `2 * interval` lines apart. While the scan
-//! runs, the cap has room for one more checkpoint per chunk.
+//! The index keeps the first line start of every `interval`-byte block of
+//! the file. The interval is the configured one, raised so the file's
+//! blocks fit the checkpoint cap, so the checkpoint vector is sized once,
+//! from the file's length. Chunks are rounded up to whole blocks, so the
+//! worker that owns a block's chunk sees every line start in the block.
+//! The index depends only on the file and the two settings, never on the
+//! chunk size, the buffers or the thread count.
 //!
 //! Memory, all from the skeleton half: the sample and checkpoint vectors for
 //! the lifetime of the result, and for the duration of the scan only, the
-//! per-worker buffers, at most one chunk plus a tail and never more than the
-//! file, one counter per chunk and room for one checkpoint per chunk. Nothing is sized from the budget alone:
-//! a small file costs little whatever `--mem` says.
+//! per-worker read buffers, never more than the file, and staging
+//! vectors, and one counter per chunk. Nothing is sized from the budget
+//! alone: a small file costs little whatever `--mem` says.
 //!
 //! A [`Watch`] follows the scan from another thread: before every read the
 //! workers check whether it was cancelled, and after every chunk they count
@@ -49,15 +50,29 @@ use crate::source::Source;
 use crate::strata;
 use crate::types::{ByteOffset, Bytes, LineNo};
 
-/// Extra bytes read past a chunk's nominal end, so the line that crosses
-/// the boundary usually arrives with the first read.
-const TAIL: usize = 64 << 10;
+/// Bytes a worker reads past its chunk's end before it knows the line
+/// that crosses the end is longer, so that line usually arrives with the
+/// read that reaches the end.
+const TAIL: u64 = 64 << 10;
+/// The unit of work: small enough to share a file of tens of MiB among
+/// the workers, large enough that a large file needs few counters.
+const CHUNK: u64 = 4 << 20;
+/// Read buffer per worker. The largest keeps a worker's buffer in its
+/// core's share of the cache, so hashing reads what the copy from the page
+/// cache just wrote; the smallest keeps one read per line on typical lines.
+const MIN_BUFFER: u64 = 64 << 10;
+const MAX_BUFFER: u64 = 256 << 10;
 /// Samples a worker holds before appending to the shared vector.
-const STAGING_SAMPLES: usize = 4 << 10;
-/// Checkpoints a worker holds before appending to the shared vector.
-const STAGING_CHECKPOINTS: usize = 1 << 10;
+const STAGING_SAMPLES: usize = 2 << 10;
+/// Checkpoints a worker holds before appending to the shared vector: with
+/// the blocks of at least 1 KiB that `for_pair` sets, a full buffer brings
+/// at most this many.
+const STAGING_CHECKPOINTS: usize = 256;
 const SAMPLE_BYTES: u64 = size_of::<Sample>() as u64;
 const CHECKPOINT_BYTES: u64 = size_of::<Checkpoint>() as u64;
+/// A worker's two staging vectors.
+const STAGING_BYTES: u64 =
+    STAGING_SAMPLES as u64 * SAMPLE_BYTES + STAGING_CHECKPOINTS as u64 * CHECKPOINT_BYTES;
 /// Bytes per line assumed before a file is read. Dumps and CSV exports run
 /// from about 80 bytes to a few kilobytes per line; guessing low errs on
 /// the side of memory, and in-place thinning covers the rest. The price is
@@ -71,10 +86,8 @@ const ANCHOR_TABLE_BYTES_PER_SAMPLE: u64 = 16;
 /// Capacity every file gets before the rest is split by length.
 const MIN_SAMPLES: u64 = 1 << 12;
 const MIN_CHECKPOINTS: u64 = 1 << 10;
-const MIN_INTERVAL: u64 = 16;
-/// Past this interval the checkpoints are one per chunk and thinning
-/// cannot help; the file is beyond what the index can describe.
-const MAX_INTERVAL: u64 = 1 << 40;
+/// Fewest bytes between checkpoints, about 16 lines of a dump.
+const MIN_INTERVAL: Bytes = Bytes(1 << 10);
 
 fn to_usize(n: u64) -> usize {
     usize::try_from(n).expect("count fits usize on 64-bit targets")
@@ -91,12 +104,15 @@ pub struct ScanConfig {
     pub level: u32,
     /// Most samples kept; reaching it raises the stratum.
     pub sample_cap: usize,
-    /// Lines between checkpoints, at least one; may be doubled.
-    pub checkpoint_interval: u64,
-    /// Most checkpoints kept; reaching it doubles the interval.
+    /// Least bytes between checkpoints, at least one; raised so the
+    /// file's blocks fit `checkpoint_cap`.
+    pub checkpoint_interval: Bytes,
+    /// Most checkpoints kept, at least one.
     pub checkpoint_cap: usize,
-    /// Bytes per chunk; each worker's buffer is this plus a small tail.
+    /// Bytes per chunk, rounded up to whole checkpoint blocks.
     pub chunk: Bytes,
+    /// Read buffer per worker, at least one byte.
+    pub buffer: Bytes,
     /// Workers whose buffers are reserved, at most one per chunk; at most
     /// one per core of them start.
     pub threads: usize,
@@ -111,9 +127,10 @@ impl ScanConfig {
     /// and the anchor table; every file gets a floor, then a share of the
     /// remainder proportional to its length. Read buffers take 1/4 of the
     /// half while a scan runs and are gone before the anchor table is
-    /// built. The pool is cut into [`MAX_THREADS`] chunks, at least 4 MiB
-    /// each when it holds that much, and `threads` is how many of those fit
-    /// it, so neither depends on the machine. [`scan`] reserves buffers for
+    /// built. The pool is cut into [`MAX_THREADS`] shares, each a read
+    /// buffer of 64 to 256 KiB and two staging vectors, and `threads` is
+    /// how many of those fit it, so neither depends on the machine.
+    /// [`scan`] reserves buffers for
     /// that many workers and starts at most one per core: one thread hashes
     /// short lines at about 1 GB/s, under a third of an SSD, so the scan is
     /// CPU-bound until several cores share it.
@@ -122,8 +139,10 @@ impl ScanConfig {
         let half = budget.capacity(Half::Skeleton).0;
         let pool = half / 4;
         let most = MAX_THREADS as u64;
-        let chunk = (pool / most).clamp(Bytes::mib(4).0.min(pool.max(1 << 16)), Bytes::mib(16).0);
-        let threads = (pool / chunk).clamp(1, most);
+        let buffer = (pool / most)
+            .saturating_sub(STAGING_BYTES)
+            .clamp(MIN_BUFFER, MAX_BUFFER);
+        let threads = (pool / (buffer + STAGING_BYTES)).clamp(1, most);
         let index_share = half / 16;
         let sample_share = half - index_share;
         let samples = sample_share / (SAMPLE_BYTES + ANCHOR_TABLE_BYTES_PER_SAMPLE);
@@ -137,13 +156,19 @@ impl ScanConfig {
                 u64::try_from(u128::from(n) * u128::from(len.0) / u128::from(total.max(1)))
                     .unwrap_or(n)
             };
-            let checkpoint_cap = MIN_CHECKPOINTS + share(spare_checkpoints);
+            // Blocks fill their cap whatever the lines, so they take half
+            // the share. On dumps and CSV (lines under 128 bytes) that is
+            // no more than a line index sized for 64-byte lines held, and
+            // the map keeps the room it was sized with.
+            let index = MIN_CHECKPOINTS + share(spare_checkpoints);
+            let checkpoint_cap = index / 2;
             Self {
                 level,
                 sample_cap: to_usize(MIN_SAMPLES + share(spare_samples)),
-                checkpoint_interval: (estimated_lines(len) / checkpoint_cap + 1).max(MIN_INTERVAL),
+                checkpoint_interval: MIN_INTERVAL,
                 checkpoint_cap: to_usize(checkpoint_cap),
-                chunk: Bytes(chunk),
+                chunk: Bytes(CHUNK),
+                buffer: Bytes(buffer),
                 threads: to_usize(threads),
             }
         };
@@ -158,8 +183,8 @@ impl ScanConfig {
 /// their two passes over the files have covered, of twice the size of both
 /// files, and check it before every read. Once it is cancelled, the scan
 /// returns [`Error::Cancelled`] when the reads already under way end: at
-/// most one chunk per scan thread in the first pass, one comparison buffer
-/// per lane in the second. Holds no heap.
+/// most one read buffer per scan thread in the first pass, one comparison
+/// buffer per lane in the second. Holds no heap.
 #[derive(Debug, Default)]
 pub struct Watch {
     cancelled: AtomicBool,
@@ -323,7 +348,8 @@ pub(crate) fn release_slack<T>(v: &mut Vec<T>, reservation: &mut Reservation) {
 ///
 /// # Panics
 ///
-/// Panics if `cfg.chunk` or `cfg.checkpoint_interval` is zero.
+/// Panics if `cfg.chunk`, `cfg.buffer`, `cfg.checkpoint_interval` or
+/// `cfg.checkpoint_cap` is zero.
 pub fn scan<S: Source + ?Sized>(source: &S, budget: &Budget, cfg: &ScanConfig) -> Result<Scanned> {
     scan_metered(source, budget, cfg, &Meter::new(&Watch::new(), 0))
 }
@@ -337,46 +363,43 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
     meter: &Meter<'_>,
 ) -> Result<Scanned> {
     assert!(cfg.chunk.0 > 0, "chunk size must be positive");
+    assert!(cfg.buffer.0 > 0, "buffer size must be positive");
     assert!(
-        cfg.checkpoint_interval > 0,
-        "checkpoint interval must be positive"
+        cfg.checkpoint_interval.0 > 0 && cfg.checkpoint_cap > 0,
+        "checkpoint interval and cap must be positive"
     );
     let len = source.len().0;
-    let chunk = cfg.chunk.0;
-    let chunks = len.div_ceil(chunk);
-    let threads = cfg.threads.clamp(1, to_usize(chunks.max(1)));
-    // A chunk is read from one byte before its start, so a buffer of
-    // `len + 1` holds any chunk of the file whole and never fills.
-    let buf_len = (chunk + TAIL as u64).min(len + 1);
-
-    // Start at what the file is expected to produce; grow toward the caps.
+    // Start at what the file is expected to produce; grow toward the cap.
     let lines = estimated_lines(Bytes(len));
     let sample_start = (lines >> cfg.level.min(63))
         .saturating_add(1)
         .min(cfg.sample_cap as u64);
-    let checkpoint_start = (lines / cfg.checkpoint_interval)
-        .saturating_add(chunks + 1)
-        .min(cfg.checkpoint_cap as u64);
+    let interval = cfg
+        .checkpoint_interval
+        .0
+        .max(len.div_ceil(cfg.checkpoint_cap as u64));
+    let blocks = len.div_ceil(interval);
+    let chunk = cfg.chunk.0.div_ceil(interval).saturating_mul(interval);
+    let chunks = len.div_ceil(chunk);
+    let threads = cfg.threads.clamp(1, to_usize(chunks.max(1)));
+    // A chunk is read from one byte before its start, so a buffer of
+    // `len + 1` holds any chunk of the file whole and never fills.
+    let buf_len = cfg.buffer.0.min(len + 1);
     let keep = budget.try_reserve(
         Half::Skeleton,
-        Bytes(sample_start * SAMPLE_BYTES + checkpoint_start * CHECKPOINT_BYTES),
+        Bytes(sample_start * SAMPLE_BYTES + blocks * CHECKPOINT_BYTES),
     )?;
-    let per_worker = buf_len
-        + STAGING_SAMPLES as u64 * SAMPLE_BYTES
-        + STAGING_CHECKPOINTS as u64 * CHECKPOINT_BYTES;
     let work = budget.try_reserve(
         Half::Skeleton,
-        Bytes(threads as u64 * per_worker + chunks * 8),
+        Bytes(threads as u64 * (buf_len + STAGING_BYTES) + chunks * 8),
     )?;
 
     let shared = Shared {
         samples: Mutex::new(Vec::with_capacity(to_usize(sample_start))),
         sample_cap: cfg.sample_cap,
         level: AtomicU32::new(cfg.level),
-        checkpoints: Mutex::new(Vec::with_capacity(to_usize(checkpoint_start))),
-        checkpoint_cap: cfg.checkpoint_cap,
-        chunk_starts: to_usize(chunks),
-        interval: AtomicU64::new(cfg.checkpoint_interval),
+        checkpoints: Mutex::new(Vec::with_capacity(to_usize(blocks))),
+        interval,
         keep: Mutex::new(keep),
         buf_len: to_usize(buf_len),
         counts: (0..chunks).map(|_| AtomicU64::new(0)).collect(),
@@ -424,21 +447,14 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
     // serial sort costs more than the parallel pass on small pairs.
     samples.par_sort_unstable_by_key(|s| s.line);
 
-    let interval = shared.interval.load(Ordering::Relaxed);
     let mut checkpoints = shared
         .checkpoints
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner);
-    debug_assert!(
-        checkpoints
-            .iter()
-            .all(|c| c.line.0.is_multiple_of(interval))
-    );
     for c in &mut checkpoints {
         c.line += base(c.offset);
     }
     checkpoints.sort_unstable_by_key(|c| c.line);
-    let interval = one_per_multiple(&mut checkpoints, total, interval, cfg.checkpoint_cap)?;
 
     release_slack(&mut samples, &mut keep);
     release_slack(&mut checkpoints, &mut keep);
@@ -446,44 +462,9 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
     Ok(Scanned {
         level,
         samples,
-        index: LineIndex::new(checkpoints, total, interval),
+        index: LineIndex::new(checkpoints, total, Bytes(interval)),
         reservation: keep,
     })
-}
-
-/// Thins `checkpoints`, sorted and absolute, of a file of `total` lines to
-/// one per multiple of the interval, doubling `interval` until that fits
-/// `cap`, and returns the interval.
-fn one_per_multiple(
-    checkpoints: &mut Vec<Checkpoint>,
-    total: u64,
-    mut interval: u64,
-    cap: usize,
-) -> Result<u64> {
-    // Unless the budget refused it room, the scan doubled the interval only
-    // while its checkpoints, at most `total / interval` plus one per chunk,
-    // overflowed the cap plus one per chunk, so `total / interval` alone
-    // overflowed the cap too: the interval reached here is the smallest
-    // that fits, whatever the chunks.
-    while total.div_ceil(interval) > cap as u64 {
-        if interval >= MAX_INTERVAL {
-            return Err(exceeded(to_usize(total.div_ceil(interval)), checkpoints));
-        }
-        interval *= 2;
-    }
-    // Keep the last checkpoint at or before each multiple of `interval`
-    // below the line count. No two multiples share one, since the scan left
-    // fewer than `interval` lines after each: exactly one per multiple.
-    let mut kept = 0;
-    for i in 0..checkpoints.len() {
-        let end = checkpoints.get(i + 1).map_or(total, |c| c.line.0);
-        if checkpoints[i].line.0.div_ceil(interval) * interval < end {
-            checkpoints[kept] = checkpoints[i];
-            kept += 1;
-        }
-    }
-    checkpoints.truncate(kept);
-    Ok(interval)
 }
 
 /// State the workers share. Lines in `samples` and `checkpoints` are
@@ -493,16 +474,12 @@ struct Shared<'m> {
     /// Most samples the vector may grow to before the stratum is raised.
     sample_cap: usize,
     level: AtomicU32,
+    /// Sized for one checkpoint per block, so it never grows.
     checkpoints: Mutex<Vec<Checkpoint>>,
-    /// Checkpoints the index may keep.
-    checkpoint_cap: usize,
-    /// Chunks: each starts with a checkpoint the index may drop later, so
-    /// the vector may hold this many past the cap before the interval is
-    /// doubled.
-    chunk_starts: usize,
-    interval: AtomicU64,
-    /// Bytes held for both vectors. Locked only while a vector's own lock is
-    /// held, always in that order, so the two cannot deadlock.
+    /// Bytes per checkpoint block; chunks hold whole blocks.
+    interval: u64,
+    /// Bytes held for both vectors. Locked only while the sample vector's
+    /// lock is held, always in that order, so the two cannot deadlock.
     keep: Mutex<Reservation>,
     /// Per-worker read buffer size.
     buf_len: usize,
@@ -538,41 +515,15 @@ impl Shared<'_> {
         Ok(level)
     }
 
-    /// The most checkpoints the vector may grow to while it needs room for
-    /// `need`: the cap, and past it one more per chunk. Growth stops at
-    /// the cap first, so a scan that fits the cap takes no more than it
-    /// did before the extra room existed.
-    fn checkpoint_room(&self, need: usize) -> usize {
-        if need <= self.checkpoint_cap {
-            self.checkpoint_cap
-        } else {
-            self.checkpoint_cap.saturating_add(self.chunk_starts)
-        }
-    }
-
-    /// Appends `staging`, doubling the interval as needed, and returns the
-    /// interval now in force.
-    fn push_checkpoints(&self, staging: &mut Vec<Checkpoint>) -> Result<u64> {
+    /// Appends `staging` to the checkpoints, which have room for every
+    /// block of the file.
+    fn push_checkpoints(&self, staging: &mut Vec<Checkpoint>) {
         let mut out = self
             .checkpoints
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let mut interval = self.interval.load(Ordering::Relaxed);
-        staging.retain(|c| c.line.0.is_multiple_of(interval));
-        while out.len() + staging.len() > out.capacity() && {
-            let room = self.checkpoint_room(out.len() + staging.len());
-            !self.grow(&mut out, staging.len(), room)
-        } {
-            if interval >= MAX_INTERVAL {
-                return Err(exceeded(out.len() + staging.len(), &out));
-            }
-            interval *= 2;
-            out.retain(|c| c.line.0.is_multiple_of(interval));
-            staging.retain(|c| c.line.0.is_multiple_of(interval));
-        }
-        self.interval.store(interval, Ordering::Relaxed);
+        debug_assert!(out.len() + staging.len() <= out.capacity());
         out.append(staging);
-        Ok(interval)
     }
 
     /// Grows `out` so `extra` more items fit, doubling toward `cap`, with
@@ -604,8 +555,8 @@ impl Shared<'_> {
     }
 }
 
-/// Even the coarsest stratum or interval needs more than the capacity
-/// the configuration allotted.
+/// Even the coarsest stratum needs more samples than the configuration
+/// allotted.
 #[cold]
 fn exceeded<T>(needed: usize, out: &[T]) -> Error {
     let bytes = |n: usize| Bytes((n * size_of::<T>()) as u64);
@@ -616,12 +567,12 @@ fn exceeded<T>(needed: usize, out: &[T]) -> Error {
     })
 }
 
-/// One thread's view of the scan: its buffers and its copy of the
-/// stratum and interval.
+/// One thread's view of the scan: its buffers, its copy of the stratum
+/// and where the checkpoint block after its last checkpoint starts.
 struct Worker<'a> {
     shared: &'a Shared<'a>,
     mask: u64,
-    interval: u64,
+    next_block: u64,
     samples: Vec<Sample>,
     checkpoints: Vec<Checkpoint>,
     /// Streaming hash of a line longer than the buffer, between reads.
@@ -633,7 +584,7 @@ impl<'a> Worker<'a> {
         Self {
             shared,
             mask: strata::mask(shared.level.load(Ordering::Relaxed)),
-            interval: shared.interval.load(Ordering::Relaxed),
+            next_block: 0,
             samples: Vec::with_capacity(STAGING_SAMPLES),
             checkpoints: Vec::with_capacity(STAGING_CHECKPOINTS),
             long: None,
@@ -671,9 +622,7 @@ impl<'a> Worker<'a> {
         if !self.samples.is_empty() {
             self.mask = strata::mask(self.shared.push_samples(&mut self.samples)?);
         }
-        if !self.checkpoints.is_empty() {
-            self.interval = self.shared.push_checkpoints(&mut self.checkpoints)?;
-        }
+        self.shared.push_checkpoints(&mut self.checkpoints);
         Ok(())
     }
 
@@ -698,13 +647,14 @@ impl<'a> Worker<'a> {
                 self.mask = strata::mask(self.shared.push_samples(&mut self.samples)?);
             }
         }
-        if local.is_multiple_of(self.interval) {
+        if offset >= self.next_block {
+            self.next_block = (offset + 1).next_multiple_of(self.shared.interval);
             self.checkpoints.push(Checkpoint {
                 line: LineNo(local),
                 offset: ByteOffset(offset),
             });
             if self.checkpoints.len() == STAGING_CHECKPOINTS {
-                self.interval = self.shared.push_checkpoints(&mut self.checkpoints)?;
+                self.shared.push_checkpoints(&mut self.checkpoints);
             }
         }
         Ok(())
@@ -715,7 +665,8 @@ impl<'a> Worker<'a> {
     /// Reading starts one byte before the chunk so that a `\n` right at
     /// the boundary is seen; bytes up to and including the first `\n`
     /// belong to the previous chunk and are skipped. If no `\n` lies in
-    /// `[start - 1, end - 1)`, no line starts in the chunk.
+    /// `[start - 1, end - 1)`, no line starts in the chunk. The chunk
+    /// starts a checkpoint block, so its first line is its block's first.
     fn scan_chunk<S: Source + ?Sized>(
         &mut self,
         source: &S,
@@ -725,6 +676,7 @@ impl<'a> Worker<'a> {
         let nominal_start = i * self.shared.chunk;
         let nominal_end = (nominal_start + self.shared.chunk).min(self.shared.len);
         let mut skipping = i > 0;
+        self.next_block = 0;
         // `pos` is the file offset of `buf[0]`; `line_start` that of the
         // current line, which may lie before `pos` while streaming.
         let mut pos = nominal_start.saturating_sub(1);
@@ -733,7 +685,16 @@ impl<'a> Worker<'a> {
         let mut lines = 0u64;
         loop {
             self.shared.meter.check()?;
-            let n = read_retrying(source, &mut buf[filled..], ByteOffset(pos + filled as u64))?;
+            let at = pos + filled as u64;
+            // Up to a tail past the chunk; beyond it only while the line
+            // that crosses the chunk's end is still open.
+            let room = match (nominal_end + TAIL).saturating_sub(at) {
+                0 => buf.len(),
+                want => buf
+                    .len()
+                    .min(filled.saturating_add(usize::try_from(want).unwrap_or(usize::MAX))),
+            };
+            let n = read_retrying(source, &mut buf[filled..room], ByteOffset(at))?;
             if n == 0 {
                 // A pending streaming hash is a line too, even with an
                 // empty tail: its length was a multiple of the buffer.
@@ -790,7 +751,7 @@ mod tests {
         let (a, b) = ScanConfig::for_pair(Bytes(10 << 30), Bytes(10 << 30), &budget);
         assert_eq!(a, b);
         assert_eq!(a.level, 7);
-        assert!(a.chunk >= Bytes::mib(4) && a.chunk <= Bytes::mib(16));
+        assert!(a.buffer >= Bytes(MIN_BUFFER) && a.buffer <= Bytes(MAX_BUFFER));
         assert!(a.threads >= 1);
         fits(&budget, &a, &b);
     }
@@ -816,7 +777,7 @@ mod tests {
             c.sample_cap as u64 * SAMPLE_BYTES + c.checkpoint_cap as u64 * CHECKPOINT_BYTES
         };
         let table = |c: &ScanConfig| c.sample_cap as u64 * ANCHOR_TABLE_BYTES_PER_SAMPLE;
-        let buffers = a.threads as u64 * (a.chunk.0 + TAIL as u64);
+        let buffers = a.threads as u64 * (a.buffer.0 + STAGING_BYTES);
         let floors = 2 * (MIN_SAMPLES * SAMPLE_BYTES + MIN_CHECKPOINTS * CHECKPOINT_BYTES);
         if half >= floors + buffers {
             assert!(kept(a) + kept(b) + buffers <= half, "{half} {a:?} {b:?}");

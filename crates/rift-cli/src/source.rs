@@ -229,9 +229,10 @@ mod tests {
         let cfg = ScanConfig {
             level: 2,
             sample_cap: 1 << 12,
-            checkpoint_interval: 64,
+            checkpoint_interval: Bytes(64),
             checkpoint_cap: 1 << 10,
             chunk: Bytes(4096),
+            buffer: Bytes(1000),
             threads: 3,
         };
         let from_file = scan(&src, &budget, &cfg).unwrap();

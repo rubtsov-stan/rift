@@ -590,7 +590,7 @@ fn lines_longer_than_the_reader_are_compared_in_pieces() {
                     at
                 })
                 .collect();
-            LineIndex::new(checkpoints, lines(data).len() as u64, 1)
+            LineIndex::new(checkpoints, lines(data).len() as u64, Bytes(1))
         } else {
             let cfg = ScanConfig::for_pair(Bytes(data.len() as u64), Bytes(0), &budget).0;
             scan(data, &budget, &cfg).unwrap().index().clone()

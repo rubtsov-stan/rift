@@ -84,7 +84,7 @@ so nothing that sizes memory may follow the machine. A run may use one
 thread per MiB of `--mem`, from 1 to `MAX_THREADS` = 8 (`budget::threads`
 in `rift-core`). That count sizes the reserve below and rayon's global
 pool. Every split of work and every memory share is logical and sized
-from `--mem`: the scan cuts its pool into `MAX_THREADS` chunks and
+from `--mem`: the scan cuts its pool into `MAX_THREADS` shares and
 reserves buffers for as many workers as fit, the skeleton's comparison
 lanes and the anchor table's parts number at most `MAX_THREADS`, and the
 refine workers' allowance is capped at it. The cores (`budget::cores`)
@@ -164,7 +164,7 @@ comes through a source trait; tests run on in-memory data.
 | Stage | Algorithm | Data | Cost |
 |---|---|---|---|
 | Scan | line ends via SIMD `memchr`, xxh3 per line, parallel over chunks, line numbers by prefix sum | sample records `(hash, line, offset)`, 24 bytes each | O(n) in bytes |
-| Position index | one checkpoint per `C` lines: the last line start the scan recorded at or before each multiple of `C`, so the chunk size and thread count do not change its size | sparse `(line, offset)` array | line access scans fewer than `2C` lines |
+| Position index | one checkpoint per block of `C` bytes: the first line start in the block; `C` is the least for which they fit half the index share, and scan chunks hold whole blocks, so the chunk size, read buffers and thread count do not change the index | sparse `(line, offset)` array | line access scans fewer than `C` bytes |
 | Anchor selection | occurrence counts, uniqueness in both files, byte comparison against hash collisions | open-addressing hash table preallocated from the budget | O(n / 2^L) |
 | Skeleton | longest increasing subsequence (patience sorting) | vector of segments with status Equal / Differs / Approx | O(m log m) in anchors |
 | Equality check | streaming comparison of the segment's byte ranges | two fixed buffers | O(n) |
