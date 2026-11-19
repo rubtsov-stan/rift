@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `periodic --period 1000` pairs on an Apple M1 at `--mem 256M` and `1G`.
   Other reference pairs are unchanged.
 
+### Fixed
+
+- A directory run names the side that failed when a file cannot be
+  opened or read, where it always named the file in the first
+  directory.
+
 ## [0.4.0] - 2026-11-19
 
 ### Added

@@ -316,6 +316,24 @@ fn special_files_and_unreadable_entries_are_trouble_but_the_rest_is_printed() {
     );
 }
 
+#[test]
+fn an_unreadable_file_is_named_on_the_side_that_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    build(&dir.path().join("A"), &[("x", File(b"1\n"))]);
+    build(&dir.path().join("B"), &[("x", File(b"2\n"))]);
+    let locked = dir.path().join("B/x");
+    fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    // Root reads it anyway.
+    let root = fs::File::open(&locked).is_ok();
+    let out = rift_in(dir.path(), &["A", "B"]);
+    fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    if !root {
+        let stderr = text(&out.stderr);
+        assert!(stderr.contains("rift: B/x: "), "{stderr}");
+        assert!(!stderr.contains("A/x"), "{stderr}");
+    }
+}
+
 /// Many renamed files at a small `--mem`: the rename table fills, the
 /// first line says so, and every file is still accounted for, renamed or
 /// only in one tree.

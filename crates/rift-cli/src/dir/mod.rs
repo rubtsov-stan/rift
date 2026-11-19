@@ -99,8 +99,11 @@ fn read_full(src: &FileSource, buf: &mut [u8], at: u64) -> io::Result<()> {
     Ok(())
 }
 
+/// A read that failed, and the side whose file it was.
+type Failed = (Side, io::Error);
+
 /// Whether the files hold the same bytes, read through both buffers.
-fn same_bytes(a: &FileSource, b: &FileSource, bufs: &mut [Vec<u8>; 2]) -> io::Result<bool> {
+fn same_bytes(a: &FileSource, b: &FileSource, bufs: &mut [Vec<u8>; 2]) -> Result<bool, Failed> {
     if a.len() != b.len() {
         return Ok(false);
     }
@@ -109,8 +112,8 @@ fn same_bytes(a: &FileSource, b: &FileSource, bufs: &mut [Vec<u8>; 2]) -> io::Re
     let mut at = 0;
     while at < len {
         let n = usize::try_from(len - at).unwrap_or(usize::MAX).min(CMP_BUF);
-        read_full(a, &mut ba[..n], at)?;
-        read_full(b, &mut bb[..n], at)?;
+        read_full(a, &mut ba[..n], at).map_err(|e| (Side::A, e))?;
+        read_full(b, &mut bb[..n], at).map_err(|e| (Side::B, e))?;
         if ba[..n] != bb[..n] {
             return Ok(false);
         }
@@ -120,7 +123,7 @@ fn same_bytes(a: &FileSource, b: &FileSource, bufs: &mut [Vec<u8>; 2]) -> io::Re
 }
 
 fn same_files(a: &[u8], b: &[u8], bufs: &mut [Vec<u8>; 2]) -> io::Result<bool> {
-    same_bytes(&FileSource::open(os(a))?, &FileSource::open(os(b))?, bufs)
+    same_bytes(&FileSource::open(os(a))?, &FileSource::open(os(b))?, bufs).map_err(|(_, e)| e)
 }
 
 fn hash_file(path: &[u8], buf: &mut [u8]) -> io::Result<u64> {
@@ -348,11 +351,11 @@ impl Print<'_, '_> {
     }
 
     fn files(&mut self, at: &At<'_>) -> anyhow::Result<()> {
-        let opened = FileSource::open(os(at.a)).and_then(|a| Ok((a, FileSource::open(os(at.b))?)));
-        let (fa, fb) = match opened {
+        let open = |side| FileSource::open(os(at.on(side))).map_err(|e| (side, e));
+        let (fa, fb) = match open(Side::A).and_then(|a| Ok((a, open(Side::B)?))) {
             Ok(f) => f,
-            Err(e) => {
-                self.complain(at.a, &e);
+            Err((side, e)) => {
+                self.complain(at.on(side), &e);
                 return Ok(());
             }
         };
@@ -362,8 +365,8 @@ impl Print<'_, '_> {
                 return Ok(());
             }
             Ok(false) => {}
-            Err(e) => {
-                self.complain(at.a, &e);
+            Err((side, e)) => {
+                self.complain(at.on(side), &e);
                 return Ok(());
             }
         }
@@ -374,20 +377,20 @@ impl Print<'_, '_> {
         match self.binary(&fa, &fb) {
             Ok(true) => self.line(&[b"Binary files ", &q(at.a), b" and ", &q(at.b), b" differ"]),
             Ok(false) => self.diff(at, fa, fb),
-            Err(e) => {
-                self.complain(at.a, &e);
+            Err((side, e)) => {
+                self.complain(at.on(side), &e);
                 Ok(())
             }
         }
     }
 
-    fn binary(&mut self, a: &FileSource, b: &FileSource) -> io::Result<bool> {
+    fn binary(&mut self, a: &FileSource, b: &FileSource) -> Result<bool, Failed> {
         let [ba, bb] = &mut *self.bufs;
-        for (src, buf) in [(a, ba), (b, bb)] {
+        for (side, src, buf) in [(Side::A, a, ba), (Side::B, b, bb)] {
             let n = usize::try_from(src.len().0)
                 .unwrap_or(usize::MAX)
                 .min(BINARY_PROBE);
-            read_full(src, &mut buf[..n], 0)?;
+            read_full(src, &mut buf[..n], 0).map_err(|e| (side, e))?;
             if memchr::memchr(0, &buf[..n]).is_some() {
                 return Ok(true);
             }
