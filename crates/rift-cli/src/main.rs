@@ -17,7 +17,7 @@ use anyhow::Context;
 use clap::Parser;
 use rift_core::alloc::CountingAlloc;
 use rift_core::{Budget, BudgetExceeded, Bytes};
-use rift_diff::{Args, Command};
+use rift_diff::{Args, Command, FULL_DIFF_MEM};
 
 use crate::source::{FileSource, shown};
 
@@ -142,7 +142,12 @@ fn main() -> ExitCode {
         // Exit as a shell reports a `diff` killed by SIGPIPE: 128 + 13.
         Err(err) if broken_pipe(&err) => ExitCode::from(141),
         Err(err) => {
-            match mem_advice(&err, args.mem, args.key.is_none()) {
+            match mem_advice(
+                &err,
+                args.mem,
+                args.key.is_none(),
+                args.key.is_none() && !args.summary,
+            ) {
                 Some(advice) => eprintln!("rift: {err:#}; {advice}"),
                 None => eprintln!("rift: {err:#}"),
             }
@@ -164,7 +169,14 @@ fn broken_pipe(err: &anyhow::Error) -> bool {
 
 /// For a budget refusal, a `--mem` to rerun with: what
 /// [`BudgetExceeded::mem_advice`] asks of the budget, plus the reserve.
-fn mem_advice(err: &anyhow::Error, mem: Bytes, global_pool: bool) -> Option<String> {
+/// A `full_diff` is advised at least [`FULL_DIFF_MEM`], which it needs
+/// whatever the refusal asks for, so one rerun is enough.
+fn mem_advice(
+    err: &anyhow::Error,
+    mem: Bytes,
+    global_pool: bool,
+    full_diff: bool,
+) -> Option<String> {
     let refusal = err.chain().find_map(|e| match e.downcast_ref() {
         Some(rift_core::Error::Budget(b)) => Some(*b),
         _ => e.downcast_ref::<BudgetExceeded>().copied(),
@@ -176,7 +188,12 @@ fn mem_advice(err: &anyhow::Error, mem: Bytes, global_pool: bool) -> Option<Stri
     let reserve = reserve(Bytes(need.0.saturating_add(most.0)), global_pool);
     // The reserve is taken out of `mem` before the core doubles it, so
     // double the whole figure here.
-    let advised = need.0.checked_add(reserve.0)?.max(mem.0.checked_mul(2)?);
+    let floor = if full_diff { FULL_DIFF_MEM.0 } else { 0 };
+    let advised = need
+        .0
+        .checked_add(reserve.0)?
+        .max(mem.0.checked_mul(2)?)
+        .max(floor);
     Some(format!("rerun with --mem {}", Bytes(advised).to_mem_arg()))
 }
 
@@ -217,18 +234,32 @@ mod tests {
             "rerun with --mem {}",
             Bytes(Bytes::mib(22).0 + reserve(Bytes::mib(22), true).0).to_mem_arg()
         );
-        assert_eq!(mem_advice(&err, mem, true), Some(advised));
+        assert_eq!(mem_advice(&err, mem, true, false), Some(advised));
         let err = err.context("the changes printed above are incomplete");
         assert!(
-            mem_advice(&err, mem, true).is_some(),
+            mem_advice(&err, mem, true, false).is_some(),
             "found under a context"
         );
         // A need under twice `mem` is advised as twice `mem`.
         let err = refusal(rift_core::Half::Refine, 2 << 20, 512 << 10);
         let advised = format!("rerun with --mem {}", Bytes(2 * mem.0).to_mem_arg());
-        assert_eq!(mem_advice(&err, mem, true), Some(advised));
+        assert_eq!(mem_advice(&err, mem, true, false), Some(advised));
+        // A full diff is never advised less than it needs; other modes are.
+        let tiny = Bytes(64 << 10);
+        let err = refusal(rift_core::Half::Skeleton, 40 << 10, 0);
+        assert_eq!(
+            mem_advice(&err, tiny, true, true),
+            Some(format!("rerun with --mem {}", FULL_DIFF_MEM.to_mem_arg()))
+        );
+        assert_eq!(
+            mem_advice(&err, tiny, true, false),
+            Some("rerun with --mem 144K".into())
+        );
         let fits = refusal(rift_core::Half::Skeleton, 10, 20);
-        assert_eq!(mem_advice(&fits, mem, true), None);
-        assert_eq!(mem_advice(&anyhow::anyhow!("other"), mem, true), None);
+        assert_eq!(mem_advice(&fits, mem, true, false), None);
+        assert_eq!(
+            mem_advice(&anyhow::anyhow!("other"), mem, true, false),
+            None
+        );
     }
 }

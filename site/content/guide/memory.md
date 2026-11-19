@@ -35,9 +35,9 @@ Below the smallest limit that works for a pair, Rift exits with status 2 and a b
 
 {{ term(name="mem-error", title="a limit that is too small") }}
 
-The smallest limit that works depends on the files, with one fixed floor: a full diff needs about 10.3 MiB (`10475K`) even for two files of a few bytes, because the buffers that compare the lines of a region are about 5 MiB, and the refinement gets half the limit. `--summary` and key mode do not compare regions and run below it. At exactly `10475K` a region may still come out approximate; `11M` is exact for small files.
+The smallest limit that works depends on the files. A full diff is refused below about 10.3 MiB (`10475K`) even for two files of a few bytes, because the buffers that compare the lines of a region are about 5 MiB, and the refinement gets half the limit. That is the least Rift runs a full diff under, not a limit that always works: a pair with many changed regions also needs a table with a row per region, and a pair of 2000 lines with 20 changed regions is already refused at `10475K`, with a limit to rerun with. `--summary` and key mode do not compare regions and run below it. At exactly `10475K` a region may still come out approximate; `11M` is exact for small files.
 
-Each limit a refusal names is at least twice the one that was refused, so a few reruns reach one that works. The last step can overshoot what the run needs by up to a factor of two. The limit in the message is not a lower bound for the whole run. A run at that limit can stop at a later stage and name a higher one:
+Each limit a refusal names is at least twice the one that was refused, so a few reruns reach one that works. A full diff is never advised less than `10475K`, so from a tiny limit the first rerun starts at the least a full diff runs under. The advice covers what the refused step needed; a later step can ask for more. The last step can overshoot what the run needs by up to a factor of two. The limit in the message is not a lower bound for the whole run. A run at that limit can stop at a later stage and name a higher one:
 
 {{ term(name="mem-rerun", title="the suggested limit, run again") }}
 

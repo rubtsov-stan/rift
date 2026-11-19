@@ -11,6 +11,12 @@ use rift_core::Bytes;
 /// be kept.
 pub const MIN_MEM: Bytes = Bytes(64 << 10);
 
+/// The least `--mem` a full diff runs under, whatever the files hold: the refine half holds
+/// the comparison buffers of one worker, about 5 MiB, and is half of
+/// `--mem`. The help text and the man page give it as `10475K`; a test
+/// keeps them equal. `--summary` and `--key` run below it.
+pub const FULL_DIFF_MEM: Bytes = Bytes(10475 << 10);
+
 /// Parses `--mem`: a size as [`Bytes::parse_budget`] reads it, at least
 /// [`MIN_MEM`].
 ///
@@ -63,10 +69,13 @@ pub struct Args {
     pub summary: bool,
     /// Heap limit, in bytes or with a K, M, G or T unit (powers of 1024),
     /// at least 64K. The output is identical on any machine for the same
-    /// --mem and input. A full diff needs about 10.3 MiB
+    /// --mem and input. A full diff is refused below 10.3 MiB
     /// (10475K), whatever the files hold, for the buffers that compare
-    /// the lines of a region; --summary and --key go lower. A refused run
-    /// names a --mem to rerun with, at least twice the one refused.
+    /// the lines of a region, and a pair with many changed regions needs
+    /// more; --summary and --key go lower. A refused run names a --mem to
+    /// rerun with, at least twice the one refused and, for a full diff,
+    /// at least 10475K. It covers what the refused step needed; a later
+    /// step can ask for more.
     #[arg(long, default_value = "256M", value_parser = parse_mem)]
     pub mem: Bytes,
     /// Browse the diff in the terminal instead of printing it.
@@ -145,4 +154,17 @@ pub struct GitDiffArgs {
     /// is an unmerged path: prints `* Unmerged path <path>` and exits 0.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub external: Vec<OsString>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_help_gives_the_full_diff_floor() {
+        let help = Args::command().render_long_help().to_string();
+        let floor = FULL_DIFF_MEM.to_mem_arg();
+        assert!(help.contains(&format!("({floor})")), "{help}");
+    }
 }

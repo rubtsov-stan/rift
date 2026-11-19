@@ -110,9 +110,14 @@ since parsing the command line takes about 28 KiB before any budget
 exists. The advice `rerun with --mem N` adds `R` to what the halves
 need and is at least twice the `--mem` refused, so a chain of reruns
 reaches the need in about log2 steps; the last step can overshoot it by
-up to about a factor of two. A full diff needs about 10.3 MiB whatever
+up to about a factor of two. The advice for a full diff is never below
+the least `--mem` a full diff runs under. That is about 10.3 MiB whatever
 the files hold: the refine half must hold the comparison buffers of one
-worker, about 5 MiB (`--mem 10475K`); `--summary` and key mode do not
+worker, about 5 MiB (`--mem 10475K`). It is not always enough: the
+scheduler's row table adds 24 bytes per segment, and the segment map is
+bounded only by the skeleton half, so a pair with many changed regions
+is refused at `10475K` and needs up to about twice that (measured on
+generated pairs; no tighter bound is proven). `--summary` and key mode do not
 refine. Key mode keeps only the 48 KiB: it never starts rayon's global
 pool and holds its own pool's heap in the refine half, until the pool's
 threads have exited. `rift serve`

@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A directory run names the side that failed when a file cannot be
   opened or read, where it always named the file in the first
   directory.
+- The `--mem` advice for a full diff is never below `10475K`, the least
+  a full diff runs under, so a run refused at a tiny `--mem` no longer
+  climbs through several refusals first. The docs now call `10475K` the
+  least a full diff runs under, not a limit that always works: a pair with
+  many changed regions is refused there and needs more.
 
 ## [0.4.0] - 2026-11-19
 
