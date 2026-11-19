@@ -823,9 +823,6 @@ where
     }
     if shards.iter().any(|s| !s.suspects.is_empty()) {
         pending.replace(shards)?;
-        for s in shards.iter_mut() {
-            s.release();
-        }
     }
     if pending.list.is_empty() {
         return Ok(dups);
@@ -892,13 +889,22 @@ impl Pending {
 
     /// Drops the suspects the last read counted and takes the shards'
     /// suspects for the next read to count.
+    ///
+    /// The shards' changes must be out: with suspects to take, their lists
+    /// are freed first, so a full refine half still has room for these,
+    /// and after, so the emptied suspect lists hold nothing.
     fn replace<X: Extra>(&mut self, shards: &mut [Pass<'_, X>]) -> Result<()> {
         for s in self.list.drain(..) {
             self.res.shrink(Bytes(s.key.len() as u64));
         }
-        for s in shards {
+        if shards.iter().all(|s| s.suspects.is_empty()) {
+            return Ok(());
+        }
+        shards.iter_mut().for_each(Pass::release);
+        for s in shards.iter_mut() {
             self.take_from(s)?;
         }
+        shards.iter_mut().for_each(Pass::release);
         Ok(())
     }
 
@@ -2302,7 +2308,9 @@ mod tests {
     }
 
     /// Every 50th key comes again at the end of A. The run refuses the
-    /// budget only after it met those copies, and must name them.
+    /// budget only after it met those copies, and must name them. At 90000
+    /// a pass ends with its suspects and a full refine half, which must
+    /// still make room to count them.
     #[test]
     #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn a_refusal_names_the_duplicates_its_read_met() {
@@ -2311,8 +2319,14 @@ mod tests {
         for &(k, v) in a.iter().step_by(50) {
             ca.extend_from_slice(format!("{k},{}\n", v + 1).as_bytes());
         }
-        let err = limited(&ca, &csv(&b), "csv:1", 124_416, MAX_PASSES).unwrap_err();
-        assert!(matches!(err, Error::Keyed(KeyError::Duplicate(_))), "{err}");
+        let cb = csv(&b);
+        for mem in [90_000, 124_416] {
+            let err = limited(&ca, &cb, "csv:1", mem, MAX_PASSES).unwrap_err();
+            assert!(
+                matches!(err, Error::Keyed(KeyError::Duplicate(_))),
+                "{mem}: {err}"
+            );
+        }
     }
 
     /// From the smallest budget the command line takes, following the
