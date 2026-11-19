@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A directory run names the side that failed when a file cannot be
   opened or read, where it always named the file in the first
   directory.
+- `--show-fields` prints a window of at most 64 bytes around the first
+  difference of a long value, where it cut both sides at the same 64
+  bytes and showed no change when the values differed after them.
 - The `--mem` advice for a full diff is never below `10475K`, the least
   a full diff runs under, so a run refused at a tiny `--mem` no longer
   climbs through several refusals first. The docs now call `10475K` the

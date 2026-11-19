@@ -266,10 +266,56 @@ fn long_values_are_cut_on_a_character_boundary() {
         b.as_bytes(),
         &["--key", "csv:id", "--show-fields"],
     );
-    let cut = format!("{}...", "a".repeat(63));
+    // The values differ at byte 70: the window starts 22 bytes in, on a
+    // boundary, and holds the difference.
+    let tail = format!("...{}é tail", "a".repeat(41));
     assert_eq!(
         stdout_of(&out, 1),
-        format!("~1\t2\t2\n    v: {cut} -> {cut}\n~2\t3\t3\n    v: x\\ty -> x\\tz\n")
+        format!("~1\t2\t2\n    v: {tail} -> {tail}!\n~2\t3\t3\n    v: x\\ty -> x\\tz\n")
+    );
+}
+
+/// The printed value of field `v` on each side of the one change.
+fn shown_pair(a: &str, b: &str, key: &str) -> (String, String) {
+    let out = rift_on(a.as_bytes(), b.as_bytes(), &["--key", key, "--show-fields"]);
+    let text = stdout_of(&out, 1);
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("    v: "))
+        .expect(&text);
+    let (x, y) = line["    v: ".len()..].split_once(" -> ").expect(&text);
+    (x.to_owned(), y.to_owned())
+}
+
+#[test]
+fn a_difference_past_byte_64_shows_on_both_sides() {
+    let same = "x".repeat(100);
+    let csv = |tail: &str| format!("id,v\n1,\"{same},{tail}\"\n");
+    let json = |tail: &str| format!("{{\"id\":1,\"v\":\"{same}{tail}\"}}\n");
+    for (key, a, b) in [
+        ("csv:id", csv("abc"), csv("abd")),
+        ("json:id", json("abc"), json("abd")),
+    ] {
+        let (x, y) = shown_pair(&a, &b, key);
+        assert_ne!(x, y, "{key}");
+        assert!(x.len() <= 64 + 6 && y.len() <= 64 + 6, "{key}: {x} {y}");
+        assert!(x.starts_with("...") && !x.ends_with("..."), "{key}: {x}");
+        assert!(x.contains("abc") && y.contains("abd"), "{key}: {x} {y}");
+    }
+}
+
+#[test]
+fn a_window_around_a_difference_never_cuts_a_character() {
+    // Two-byte characters all the way, so every offset but the even ones
+    // is inside a character; the difference sits in a second byte.
+    let a = format!("id,v\n1,{}é{}\n", "é".repeat(60), "é".repeat(30));
+    let b = format!("id,v\n1,{}ê{}\n", "é".repeat(60), "é".repeat(30));
+    let (x, y) = shown_pair(&a, &b, "csv:id");
+    assert!(x.contains('é') && y.contains('ê'), "{x} {y}");
+    assert!(x.trim_matches('.').chars().all(|c| c == 'é'), "{x}");
+    assert!(
+        y.trim_matches('.').chars().all(|c| c == 'é' || c == 'ê'),
+        "{y}"
     );
 }
 
@@ -342,7 +388,7 @@ fn a_record_pair_too_large_for_the_budget_names_a_mem_that_fits() {
         let out = rift_on(a.as_bytes(), b.as_bytes(), &borrowed);
         if out.status.code() == Some(1) {
             let text = String::from_utf8(out.stdout).unwrap();
-            assert!(text.starts_with("~1\t2\t2\n    v: xxx"), "{text}");
+            assert!(text.starts_with("~1\t2\t2\n    v: ...xxx"), "{text}");
             assert!(mem != "1M", "1M was expected to be refused");
             return;
         }
