@@ -745,6 +745,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
     fn a_pair_larger_than_the_refine_half_is_a_budget_error() {
         let long = "x".repeat(300 << 10);
         let a = format!("id,v\n1,{long}\n");
