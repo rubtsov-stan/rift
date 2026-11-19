@@ -113,6 +113,10 @@ pub struct Config {
     pub change_ratio: f64,
     /// Kinds eligible for random selection.
     pub kinds: Vec<Kind>,
+    /// Length of every `ndjson` line before its newline, when set: each
+    /// object gets a `pad` string field so the line is this long. A line
+    /// that is longer without the field stays as it is.
+    pub line_bytes: Option<u64>,
 }
 
 impl Config {
@@ -146,6 +150,7 @@ impl Config {
             period: 1000,
             change_ratio: 0.001,
             kinds,
+            line_bytes: None,
         }
     }
 }
@@ -518,6 +523,83 @@ mod tests {
             v.pop();
         }
         v
+    }
+
+    /// FNV-1a over A, B and the manifest of a small seeded pair per profile.
+    /// The values were recorded from the generator before `line_bytes`
+    /// existed; every past measurement depends on these bytes.
+    #[test]
+    fn default_output_is_unchanged() {
+        fn fnv(parts: &[&[u8]]) -> u64 {
+            let mut h = 0xcbf2_9ce4_8422_2325u64;
+            for b in parts.iter().flat_map(|p| p.iter()) {
+                h = (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            h
+        }
+        let mut got = Vec::new();
+        for profile in [
+            Profile::Sql,
+            Profile::Csv,
+            Profile::Ndjson,
+            Profile::Text,
+            Profile::Nokey,
+            Profile::Shuffled,
+            Profile::Distinct,
+            Profile::Periodic,
+            Profile::Runs,
+            Profile::Alternating,
+            Profile::Empty,
+        ] {
+            let mut cfg = Config::new(7, 300_000, profile);
+            cfg.change_ratio = 0.01;
+            let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
+            generate(&cfg, &mut a, &mut b, &mut m).unwrap();
+            got.push((format!("{profile:?}"), fnv(&[&a, &b, &m])));
+        }
+        let want = [
+            ("Sql", 0xda08_aaa9_0e6d_53e2),
+            ("Csv", 0xcbcb_9e60_45e7_952e),
+            ("Ndjson", 0x944a_753c_333a_2fd3),
+            ("Text", 0x319c_e773_990d_7737),
+            ("Nokey", 0x8793_49aa_8969_a3a2),
+            ("Shuffled", 0x0ae6_e5a1_7b33_11ca),
+            ("Distinct", 0xb1de_3c76_75f9_ab46),
+            ("Periodic", 0x368f_b49e_ad34_9b13),
+            ("Runs", 0xc66f_f627_9520_cd7c),
+            ("Alternating", 0xd4b5_edd9_79a7_1c22),
+            ("Empty", 0x45ac_085f_a84e_d482),
+        ];
+        let got: Vec<_> = got.iter().map(|(n, h)| (n.as_str(), *h)).collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn line_bytes_sets_ndjson_line_length() {
+        for want in [500usize, 2048] {
+            let mut cfg = Config::new(7, 2_000_000, Profile::Ndjson);
+            cfg.line_bytes = Some(want as u64);
+            cfg.change_ratio = 0.01;
+            cfg.kinds = vec![
+                Kind::Insert,
+                Kind::Delete,
+                Kind::Modify,
+                Kind::Move,
+                Kind::Dup,
+            ];
+            let (a, b, muts) = pair(&cfg);
+            assert_ne!(muts, [] as [Mutation; 0]);
+            for data in [&a, &b] {
+                let ls = lines(data);
+                let mean = data.len() / ls.len();
+                assert!(mean.abs_diff(want) * 50 <= want, "mean {mean} for {want}");
+                for l in ls {
+                    serde_json::from_slice::<serde_json::Value>(l).unwrap();
+                }
+            }
+            let unique: HashSet<_> = lines(&a).into_iter().collect();
+            assert!(unique.len() * 100 >= lines(&a).len() * 99);
+        }
     }
 
     #[test]
