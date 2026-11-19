@@ -8,6 +8,7 @@
 //! feature.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// While alive, holds every scan whose A was opened by the path given,
@@ -47,4 +48,23 @@ pub(crate) fn wait(a: &str) {
     while Path::new(&path).exists() {
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+static READS: AtomicU64 = AtomicU64::new(0);
+static READ_BYTES: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn count_read(bytes: usize) {
+    READS.fetch_add(1, Ordering::Relaxed);
+    READ_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+}
+
+/// `pread` calls and bytes they returned, on every file the sessions of
+/// this process have opened, since the process began. A test that diffs two
+/// readings must be the only one running in its binary.
+#[must_use]
+pub fn reads() -> (u64, u64) {
+    (
+        READS.load(Ordering::Relaxed),
+        READ_BYTES.load(Ordering::Relaxed),
+    )
 }
