@@ -238,6 +238,11 @@ fn back_from<S: Source>(
 }
 
 impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
+    /// Passes [`Source::advise`] on to the source.
+    pub fn advise(&self, offset: ByteOffset, len: Bytes) {
+        self.source.advise(offset, len);
+    }
+
     /// Reserves a `scratch`-byte read buffer from `half`.
     ///
     /// A requested line longer than `scratch` is reported as

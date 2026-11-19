@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, reason = "test inputs are small")]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use proptest::prelude::*;
 
@@ -527,4 +527,65 @@ fn refining_a_segment_hashes_it_in_large_blocks() {
         reads <= per_pass * 3 / 2,
         "{reads} reads for {bytes} bytes, {per_pass} per pass of 4 KiB reads"
     );
+}
+
+/// Memory that records the ranges it was advised about.
+struct Advised {
+    data: Vec<u8>,
+    ranges: Mutex<Vec<(u64, u64)>>,
+}
+
+impl Advised {
+    fn new(data: &[u8]) -> Arc<Self> {
+        Arc::new(Self {
+            data: data.to_vec(),
+            ranges: Mutex::default(),
+        })
+    }
+}
+
+impl Source for Advised {
+    fn len(&self) -> Bytes {
+        Source::len(&self.data[..])
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> std::io::Result<usize> {
+        self.data[..].read_at(buf, offset)
+    }
+
+    fn advise(&self, offset: ByteOffset, len: Bytes) {
+        self.ranges.lock().unwrap().push((offset.0, len.0));
+    }
+}
+
+#[test]
+fn refining_a_segment_advises_its_byte_range_on_both_sources() {
+    let a = rows(20_000, |i| format!("row {i}\n"));
+    let b = rows(20_000, |i| match i {
+        10_000 => "changed\n".repeat(50),
+        _ => format!("row {i}\n"),
+    });
+    let (sa, sb) = (Advised::new(&a), Advised::new(&b));
+    let d = Diff::new(
+        Arc::clone(&sa),
+        Arc::clone(&sb),
+        &Budget::new(Bytes::mib(64)),
+        1,
+    )
+    .unwrap();
+    script(&d);
+    let covers = |s: &Advised, pos: usize| {
+        s.ranges
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|&(at, len)| at <= pos as u64 && (pos as u64) < at + len)
+    };
+    let pos = |d: &[u8]| d.windows(9).position(|w| w == b"row 10000").unwrap();
+    assert!(covers(&sa, pos(&a)), "the changed line of A");
+    assert!(covers(
+        &sb,
+        b.windows(7).position(|w| w == b"changed").unwrap()
+    ));
+    assert!(!covers(&sa, 0), "an equal stretch far from the change");
 }
