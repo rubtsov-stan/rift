@@ -16,13 +16,19 @@ struct Pair {
     _dir: tempfile::TempDir,
     a: PathBuf,
     b: PathBuf,
+    key: &'static str,
 }
 
 /// A shuffled CSV pair of `size` bytes, as `rift-gen --profile shuffled
 /// --seed 7 --change-ratio 0.01` writes it.
 fn shuffled(size: u64) -> Pair {
+    shuffled_rows(size, Rows::Csv)
+}
+
+/// [`shuffled`] in the row format `rows`, keyed by its id.
+fn shuffled_rows(size: u64, rows: Rows) -> Pair {
     let mut config = Config::new(7, size, Profile::Shuffled);
-    config.rows = Rows::Csv;
+    config.rows = rows;
     config.change_ratio = 0.01;
     let (mut a, mut b, mut m) = (Vec::new(), Vec::new(), Vec::new());
     rift_gen::generate(&config, &mut a, &mut b, &mut m).unwrap();
@@ -34,15 +40,20 @@ fn shuffled(size: u64) -> Pair {
         _dir: dir,
         a: pa,
         b: pb,
+        key: match rows {
+            Rows::Csv => "csv:id",
+            Rows::Ndjson => "json:id",
+            Rows::Sql => "copy:id",
+        },
     }
 }
 
-/// Standard output of `rift --key csv:id --stats --mem MEM a b` on
+/// Standard output of `rift --key KEY --stats --mem MEM a b` on
 /// `threads` threads, after checking that it found changes and peaked
 /// under `--mem`.
 fn run(pair: &Pair, mem: &str, threads: &str, records: bool) -> Vec<u8> {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_rift"));
-    cmd.args(["--key", "csv:id", "--stats", "--mem", mem]);
+    cmd.args(["--key", pair.key, "--stats", "--mem", mem]);
     if records {
         cmd.arg("--show-records");
     }
@@ -105,6 +116,30 @@ fn the_output_does_not_depend_on_the_thread_count() {
     same_bytes_every_run(&pair, &["8M", "17M"], 1);
 }
 
+/// Budgets whose tables hold far fewer keys than the files have lines:
+/// the first pass takes a share of the hash range from the line count,
+/// several passes follow, and their order must not follow the threads.
+#[test]
+fn a_first_pass_sized_from_the_line_count_does_not_depend_on_the_thread_count() {
+    for rows in [Rows::Csv, Rows::Ndjson] {
+        let pair = shuffled_rows(2 << 20, rows);
+        for mem in ["256K", "512K"] {
+            let out = Command::new(env!("CARGO_BIN_EXE_rift"))
+                .args(["--key", pair.key, "--stats", "--mem", mem])
+                .args([&pair.a, &pair.b])
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let passes: u32 = stderr
+                .lines()
+                .find_map(|l| l.strip_prefix("passes ")?.split(',').next()?.parse().ok())
+                .unwrap_or_else(|| panic!("{rows:?} at {mem}: {stderr}"));
+            assert!(passes > 1, "{rows:?} at {mem}: {passes} pass");
+        }
+        same_bytes_every_run(&pair, &["256K", "512K"], 1);
+    }
+}
+
 #[test]
 #[ignore = "about 1200 runs on a 32 MiB pair; run with --release"]
 fn every_run_prints_the_same_bytes() {
@@ -150,6 +185,7 @@ fn dump(tables: usize, rows: usize, repeat: bool) -> Pair {
         _dir: dir,
         a: pa,
         b: pb,
+        key: "copy:id",
     }
 }
 
@@ -158,7 +194,7 @@ fn dump(tables: usize, rows: usize, repeat: bool) -> Pair {
 /// after checking the peak heap against `--mem`.
 fn keyed(pair: &Pair, mem: &str, threads: &str) -> (Option<i32>, Vec<u8>, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_rift"))
-        .args(["--key", "copy:id", "--stats", "--mem", mem])
+        .args(["--key", pair.key, "--stats", "--mem", mem])
         .args([&pair.a, &pair.b])
         .env("RAYON_NUM_THREADS", threads)
         .output()

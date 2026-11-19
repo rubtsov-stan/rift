@@ -200,11 +200,20 @@ where
     });
     let locks = X::HEADS || matches!(spec, super::KeySpec::Copy(_));
     let _lock = budget.try_reserve(Half::Refine, Bytes(if locks { LOCK_BYTES } else { 0 }))?;
-    let keys = ra.estimate_lines()? + rb.estimate_lines()?;
-    let (mut shards, _list) = Pass::<X>::shards(budget, keys, sizes.chunks)?;
+    let lines = [ra.estimate_lines()?, rb.estimate_lines()?];
+    let (mut shards, _list) = Pass::<X>::shards(budget, lines[0] + lines[1], sizes.chunks)?;
     let mut pending = Pending::new(budget)?;
     let mut report = Report::default();
-    let (mut lo, mut width) = (0, END);
+    // A dump has lines outside the key's table, so its line count says
+    // little of its keys.
+    let mut width = if matches!(spec, super::KeySpec::Copy(_)) {
+        END
+    } else {
+        first(&shards, lines[0].max(lines[1]))
+    };
+    let mut lo = 0;
+    // The range came from the line count, and no read has corrected it.
+    let mut estimated = width < END;
     // Below the narrowest range that ran out of waiting room.
     let mut ceiling = END;
     // The shards take their turns on the whole refine half.
@@ -218,6 +227,7 @@ where
         let read = read.map_err(|e| sized_for_record(e, &ra, &rb, pool.bytes().0, budget, lens));
         match read? {
             Outcome::Overflow(half, progress, alone) => {
+                estimated = false;
                 let w = hi - lo;
                 ra.shrink_lists();
                 rb.shrink_lists();
@@ -343,8 +353,12 @@ where
                     return Err(or_duplicates(e, dups, unlocked(&mut tables)));
                 }
                 // A range cut short by waiting records may leave the
-                // tables half empty; widen the next pass toward 90%.
-                let grown = scale(hi - lo, (0.9 / fill(&shards).max(f64::EPSILON)).min(2.0));
+                // tables half empty; widen the next pass toward 90%. A
+                // range from a line count that ran high widens all the way
+                // at once, not in doublings.
+                let most = if estimated { f64::INFINITY } else { 2.0 };
+                estimated = false;
+                let grown = scale(hi - lo, (0.9 / fill(&shards).max(f64::EPSILON)).min(most));
                 width = width.max(grown.min(ceiling));
                 lo = hi;
                 if lo == END && pending.list.is_empty() {
@@ -484,6 +498,25 @@ fn narrowed(half: Half, w: u64, progress: f64, fill: f64, ceiling: &mut u64) -> 
         }
     };
     scale(w, keep).clamp(1, w - 1)
+}
+
+/// The range of the first pass, for files of about `keys` keys each.
+///
+/// A key takes one slot whichever file holds it, so files that share
+/// their keys fill the tables with as many keys as the larger file has
+/// lines. When the tables hold that many, the pass takes the whole hash
+/// range. Otherwise it takes the share they should hold at 90% by the
+/// end, as [`narrowed`] keeps after an overflow, so the first pass does
+/// not read part of the files only to start over. Files with keys of
+/// their own can still overflow, and then narrow as before.
+fn first<X: Extra>(shards: &[Pass<'_, X>], keys: u64) -> u64 {
+    let capacity: usize = shards.iter().map(|s| s.limit).sum();
+    if capacity == 0 || keys <= capacity as u64 {
+        return END;
+    }
+    #[allow(clippy::cast_precision_loss, reason = "an estimate")]
+    let share = 0.9 * capacity as f64 / keys as f64;
+    scale(END, share).max(1)
 }
 
 /// The fewest passes `keys` distinct keys can take, `rest` from the
@@ -2167,6 +2200,98 @@ mod tests {
             }
             assert!(reruns > 0, "{name}: the first budget was enough");
         }
+    }
+
+    /// A file that counts the bytes read from it.
+    struct Counted<'d> {
+        data: &'d [u8],
+        read: std::sync::atomic::AtomicU64,
+    }
+
+    impl Source for Counted<'_> {
+        fn len(&self) -> Bytes {
+            Source::len(self.data)
+        }
+
+        fn read_at(&self, buf: &mut [u8], offset: crate::types::ByteOffset) -> io::Result<usize> {
+            let n = self.data.read_at(buf, offset)?;
+            self.read
+                .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+            Ok(n)
+        }
+    }
+
+    /// Tables too small for every key: the first pass must not read part
+    /// of the files only to start over on a narrower range. Besides one
+    /// read of both files per pass, only what sizes the tables is read:
+    /// the first window of each file, at most `mem / 32` each.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn tables_too_small_for_every_key_read_each_file_once_per_pass() {
+        // Few changes and the same order, so no record waits long and the
+        // tables, not the waiting records, bound the passes.
+        let (mut a, mut b) = (String::from("id,v\n"), String::from("id,v\n"));
+        for i in 0..100_000 {
+            writeln!(a, "k{i},v").unwrap();
+            writeln!(b, "k{i},{}", if i % 1000 == 0 { "w" } else { "v" }).unwrap();
+        }
+        let spec: KeySpec = "csv:1".parse().unwrap();
+        let total = (a.len() + b.len()) as u64;
+        for mem in [256 << 10, 512 << 10] {
+            let counted = |data| Counted {
+                data,
+                read: 0.into(),
+            };
+            let (ca, cb) = (counted(a.as_bytes()), counted(b.as_bytes()));
+            let report = compare(&ca, &cb, &spec, &Budget::new(Bytes(mem)), |_| Ok(())).unwrap();
+            let read = ca.read.into_inner() + cb.read.into_inner();
+            let passes = u64::from(report.passes);
+            assert!(passes > 1, "{mem}: {report:?}");
+            assert!(
+                read <= passes * total + mem / 16,
+                "{mem}: {read} bytes read in {passes} passes over {total}"
+            );
+        }
+    }
+
+    /// Short records first, then long ones: the first window counts far
+    /// more lines than the file has, and the first pass comes out narrow.
+    /// The pass after it must take what the tables hold, not just twice
+    /// as much, so the misjudged estimate costs one pass at most.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn a_first_window_of_short_lines_costs_one_pass_at_most() {
+        let mut a = String::from("id,v\n");
+        for i in 0..3000 {
+            writeln!(a, "s{i},v").unwrap();
+        }
+        for i in 0..3000 {
+            writeln!(a, "l{i},{}", "x".repeat(2000)).unwrap();
+        }
+        let b = a.replacen("s7,v", "s7,w", 1);
+        let (want, report) = run(a.as_bytes(), b.as_bytes(), "csv:1", 1 << 20).unwrap();
+        assert_eq!(want.len(), 1);
+        assert!(report.passes <= 2, "{report:?}");
+    }
+
+    /// A dump whose keyed table is small beside the others: its line
+    /// count says nothing of the keys, which fit in one pass.
+    #[test]
+    #[cfg_attr(miri, ignore = "too slow under Miri")]
+    fn a_small_table_in_a_large_dump_takes_one_pass() {
+        let mut a = String::from("COPY public.other (a, b) FROM stdin;\n");
+        for i in 0..60_000 {
+            writeln!(a, "{i}\tx").unwrap();
+        }
+        a.push_str("\\.\nCOPY public.t (id, v) FROM stdin;\n");
+        for i in 0..500 {
+            writeln!(a, "{i}\tv").unwrap();
+        }
+        a.push_str("\\.\n");
+        let b = a.replacen("\n7\tv\n", "\n7\tw\n", 1);
+        let (want, report) = run(a.as_bytes(), b.as_bytes(), "copy:id", 256 << 10).unwrap();
+        assert_eq!(want.len(), 1);
+        assert_eq!(report.passes, 1, "{report:?}");
     }
 
     #[test]
