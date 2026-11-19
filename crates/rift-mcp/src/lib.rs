@@ -207,7 +207,31 @@ impl Server {
             .map_err(|e| format!("mem: {e}"))?;
         let a = FileSource::open(&p.a).map_err(|e| format!("a: {e}"))?;
         let b = FileSource::open(&p.b).map_err(|e| format!("b: {e}"))?;
-        self.sessions.get(a, b, mem).map_err(|e| e.to_string())
+        self.sessions.get(a, b, mem).map_err(|e| message(&e))
+    }
+
+    /// Answers `f` from the session of `pair`, unless a file changed while
+    /// the session had it open: checked after `f` has read what it reads.
+    fn with_session<T>(
+        &self,
+        pair: &Pair,
+        f: impl FnOnce(&Session) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let s = self.session(pair)?;
+        let answer = f(&s);
+        s.check_files().map_err(|e| message(&e))?;
+        answer
+    }
+}
+
+/// What a tool says for a session error. A changed file has a new
+/// identity, so the next call opens a new session for it.
+fn message(e: &rift_session::Error) -> String {
+    match e {
+        rift_session::Error::Changed { side } => {
+            format!("{side}: file changed since it was opened; call again")
+        }
+        e => e.to_string(),
     }
 }
 
@@ -280,33 +304,34 @@ impl Server {
     async fn summary(&self, Parameters(pair): Parameters<Pair>) -> Result<Json<Summary>, String> {
         let this = self.clone();
         blocking(move || {
-            let s = this.session(&pair)?;
-            let sum = s.summary().map_err(|e| e.to_string())?;
-            let tally = |t: rift_session::Tally| Tally {
-                segments: t.segments,
-                a_lines: t.a_lines,
-                b_lines: t.b_lines,
-            };
-            let all = usize::try_from(sum.differing).unwrap_or(usize::MAX);
-            Ok(Summary {
-                a_lines: sum.a_lines,
-                b_lines: sum.b_lines,
-                a_bytes: sum.a_bytes.0,
-                b_bytes: sum.b_bytes.0,
-                identical: sum.identical,
-                equal: tally(sum.equal),
-                differs: tally(sum.differs),
-                approx: tally(sum.approx),
-                refined_segments: sum.progress.done,
-                first_differences: s
-                    .differing()
-                    .map_err(|e| e.to_string())?
-                    .take(SUMMARY_RANGES)
-                    .map(|(_, x)| range(x))
-                    .collect(),
-                more_differences: all.saturating_sub(SUMMARY_RANGES) as u64,
-                mem_budget_bytes: sum.mem.0,
-                mem_reserved_bytes: sum.reserved.0,
+            this.with_session(&pair, |s| {
+                let sum = s.summary().map_err(|e| message(&e))?;
+                let tally = |t: rift_session::Tally| Tally {
+                    segments: t.segments,
+                    a_lines: t.a_lines,
+                    b_lines: t.b_lines,
+                };
+                let all = usize::try_from(sum.differing).unwrap_or(usize::MAX);
+                Ok(Summary {
+                    a_lines: sum.a_lines,
+                    b_lines: sum.b_lines,
+                    a_bytes: sum.a_bytes.0,
+                    b_bytes: sum.b_bytes.0,
+                    identical: sum.identical,
+                    equal: tally(sum.equal),
+                    differs: tally(sum.differs),
+                    approx: tally(sum.approx),
+                    refined_segments: sum.progress.done,
+                    first_differences: s
+                        .differing()
+                        .map_err(|e| message(&e))?
+                        .take(SUMMARY_RANGES)
+                        .map(|(_, x)| range(x))
+                        .collect(),
+                    more_differences: all.saturating_sub(SUMMARY_RANGES) as u64,
+                    mem_budget_bytes: sum.mem.0,
+                    mem_reserved_bytes: sum.reserved.0,
+                })
             })
         })
         .await
@@ -330,40 +355,41 @@ impl Server {
                 .max_lines
                 .unwrap_or(render::DEFAULT_LINES)
                 .clamp(1, render::MAX_LINES);
-            let s = this.session(&args.pair)?;
             let line = args.line;
-            // The first segment whose lines, widened by the context, hold the
-            // line. A pure insertion holds the line after which it sits.
-            let hit = s.differing().map_err(|e| e.to_string())?.find(|(_, x)| {
-                x.a.start.0.saturating_sub(ctx) < line.max(1)
-                    && line <= x.a.end.0.max(x.a.start.0) + ctx
-            });
-            let Some((i, _)) = hit else {
-                return Ok(HunkAnswer {
-                    found: false,
-                    range: None,
-                    text: String::new(),
-                    lines_shown: 0,
-                    lines_total: 0,
-                    truncated: false,
+            this.with_session(&args.pair, |s| {
+                // The first segment whose lines, widened by the context, hold
+                // the line. A pure insertion holds the line after which it sits.
+                let hit = s.differing().map_err(|e| message(&e))?.find(|(_, x)| {
+                    x.a.start.0.saturating_sub(ctx) < line.max(1)
+                        && line <= x.a.end.0.max(x.a.start.0) + ctx
                 });
-            };
-            let r = render::hunk_text(s.diff().map_err(|e| e.to_string())?, i, ctx, max)?;
-            let lines = |(start, count)| Lines {
-                start: start + 1,
-                count,
-            };
-            Ok(HunkAnswer {
-                found: true,
-                range: Some(Range {
-                    a: lines(r.a),
-                    b: lines(r.b),
-                    status: seg_status(r.approx),
-                }),
-                truncated: r.shown < r.total,
-                text: r.text,
-                lines_shown: r.shown,
-                lines_total: r.total,
+                let Some((i, _)) = hit else {
+                    return Ok(HunkAnswer {
+                        found: false,
+                        range: None,
+                        text: String::new(),
+                        lines_shown: 0,
+                        lines_total: 0,
+                        truncated: false,
+                    });
+                };
+                let r = render::hunk_text(s.diff().map_err(|e| message(&e))?, i, ctx, max)?;
+                let lines = |(start, count)| Lines {
+                    start: start + 1,
+                    count,
+                };
+                Ok(HunkAnswer {
+                    found: true,
+                    range: Some(Range {
+                        a: lines(r.a),
+                        b: lines(r.b),
+                        status: seg_status(r.approx),
+                    }),
+                    truncated: r.shown < r.total,
+                    text: r.text,
+                    lines_shown: r.shown,
+                    lines_total: r.total,
+                })
             })
         })
         .await
@@ -379,14 +405,15 @@ impl Server {
     ) -> Result<Json<Next>, String> {
         let this = self.clone();
         blocking(move || {
-            let s = this.session(&args.pair)?;
-            let next = s
-                .differing()
-                .map_err(|e| e.to_string())?
-                .find(|(_, x)| x.a.start.0 + 1 > args.after_line);
-            Ok(Next {
-                found: next.is_some(),
-                range: next.map(|(_, x)| range(x)),
+            this.with_session(&args.pair, |s| {
+                let next = s
+                    .differing()
+                    .map_err(|e| message(&e))?
+                    .find(|(_, x)| x.a.start.0 + 1 > args.after_line);
+                Ok(Next {
+                    found: next.is_some(),
+                    range: next.map(|(_, x)| range(x)),
+                })
             })
         })
         .await

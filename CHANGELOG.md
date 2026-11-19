@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `rift serve` and the MCP server check both files with `fstat` on every
+  request that answers from a session, after its reads. A file written
+  over in place after it was opened used to be read at offsets taken from
+  its old contents, so a hunk could show wrong lines with no error. Now
+  the request fails with the new `changed` error (-32009 in `rift serve`;
+  "file changed since it was opened; call again" in the MCP server), and
+  the session answers nothing more. Opening the pair again gives a new
+  session. A writer that keeps the length and sets the modification time
+  back is not detected.
 - When a refinement worker thread cannot be started, the workers already
   started stop and free their share of the memory budget. They used to
   stay alive, idle, which in `rift serve` and the MCP server kept them and

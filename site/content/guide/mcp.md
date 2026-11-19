@@ -183,6 +183,7 @@ A `hunks_at` answer says when it cut the hunk: `truncated` is `true` and `lines_
 
 - It opens regular files read-only, and refuses symbolic links, directories, devices and pipes.
 - It keeps the diff of each pair of files between calls, so only the first call scans them. A changed file is a new pair.
+- Every call that answers from a kept diff checks both files again after it has read them. A file written over in place since the diff opened it fails the call with "a: file changed since it was opened; call again" (or `b:`), and the next call scans the new contents. A writer that keeps the length and sets the modification time back, as `touch -r` does, is not detected.
 - `mem` is 64M unless the call sets it, and at most 256M for one diff. A larger value fails with an error, as the last call of the session above shows.
 - A keyed call takes the same `mem` limits: 64M unless the call sets it, at most 256M. Its `mem` counts in the 512 MiB total and the call takes one of the 4 slots until it returns, then gives both back. It evicts an idle diff for room like a new pair does, and waits and fails the same way.
 - Of that `mem`, a keyed call sets 128 KiB of the refine half aside for the answer. A `mem` too small for that fails with the budget error and a `--mem` to rerun with.

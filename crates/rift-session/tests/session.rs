@@ -892,3 +892,71 @@ fn an_excerpt_is_busy_with_a_retry_time_when_the_pool_stays_held() {
     assert!(err.to_string().contains("retry in"), "{err}");
     assert!(waited >= Duration::from_secs(1), "busy after {waited:?}");
 }
+
+/// The protocol's `changed` code.
+const CHANGED: i32 = -32009;
+
+/// Writes `bytes` over the file at `path` in place, keeping its inode, and
+/// sets its modification time a minute later than it was, so the change
+/// never hides below the clock's granularity.
+fn rewrite(path: &str, bytes: &[u8]) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .unwrap();
+    let mtime = f.metadata().unwrap().modified().unwrap();
+    f.write_all(bytes).unwrap();
+    f.set_modified(mtime + Duration::from_secs(60)).unwrap();
+}
+
+/// Rewrites A between two excerpts with line 10 replaced by `line10`, and
+/// checks that the session refuses to answer from it again.
+fn a_rewrite_between_requests_fails_the_session(line10: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let s = sessions();
+    let session = open(&s, &a, &b);
+    let req = ExcerptRequest::new(At::LineA(LineNo(9)));
+    assert!(texts(&session.excerpt(&req).unwrap().a.lines).contains(&"line 10"));
+    let new_a = String::from_utf8(numbered(1..=40))
+        .unwrap()
+        .replace("line 10\n", &format!("{line10}\n"));
+    rewrite(&a, new_a.as_bytes());
+
+    let refused = session.excerpt(&req);
+    assert_eq!(
+        refused.as_ref().err().map(Error::code),
+        Some(CHANGED),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        "a: file changed since it was opened; open the files again"
+    );
+    // Nothing the session holds is served again.
+    let again = session.excerpt(&req);
+    assert_eq!(
+        again.as_ref().err().map(Error::code),
+        Some(CHANGED),
+        "{again:?}"
+    );
+    assert_eq!(session.check_files().map_err(|e| e.code()), Err(CHANGED));
+    assert_eq!(session.state(), SessionState::Failed);
+
+    let fresh = open(&s, &a, &b);
+    assert_ne!(fresh.id(), session.id());
+    let shown = fresh.excerpt(&req).unwrap();
+    assert!(texts(&shown.a.lines).contains(&line10), "{shown:?}");
+}
+
+#[test]
+fn a_rewrite_of_the_same_length_fails_the_session() {
+    a_rewrite_between_requests_fails_the_session("LINE 10");
+}
+
+#[test]
+fn a_rewrite_of_another_length_fails_the_session() {
+    a_rewrite_between_requests_fails_the_session("a longer line 10");
+}

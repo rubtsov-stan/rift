@@ -497,3 +497,91 @@ async fn a_new_pair_past_the_memory_limit_waits() {
     let failed = the_last_call_waits(&Server::default(), &mems).await;
     assert!(failed.is_empty(), "{failed:?}");
 }
+
+/// Writes `text` over the file at `path` in place, keeping its inode, and
+/// sets its modification time a minute later than it was, so the change
+/// never hides below the clock's granularity.
+fn rewrite(path: &str, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .unwrap();
+    let mtime = f.metadata().unwrap().modified().unwrap();
+    f.write_all(text.as_bytes()).unwrap();
+    f.set_modified(mtime + Duration::from_secs(60)).unwrap();
+}
+
+/// Rewrites A while a `hunks_at` call holds its scan, after the call
+/// opened the files: the call fails, and the next one opens the new
+/// contents.
+async fn a_rewrite_during_a_call_fails_it(line500: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let server = Server::default();
+    let c = connect(&server).await;
+    let hold = ScanHold::new(&a);
+    let args = json!({"a": a, "b": b, "line": 500, "context": 1});
+    let peer = c.peer().clone();
+    let call = tokio::spawn(async move {
+        let params = CallToolRequestParams::new("hunks_at")
+            .with_arguments(args.as_object().unwrap().clone());
+        peer.call_tool(params).await.unwrap()
+    });
+    // The files are opened before the session takes its memory.
+    while server.sessions().mem() == Bytes(0) {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let text: String = (1..=1000)
+        .map(|i| match i {
+            500 => format!("{line500}\n"),
+            _ => format!("line {i}\n"),
+        })
+        .collect();
+    rewrite(&a, &text);
+    drop(hold);
+    let refused = call.await.unwrap();
+    assert_eq!(refused.is_error, Some(true), "{refused:?}");
+    assert!(
+        format!("{refused:?}").contains("a: file changed since it was opened; call again"),
+        "{refused:?}"
+    );
+    let hunk = ok(
+        &c,
+        "hunks_at",
+        json!({"a": a, "b": b, "line": 500, "context": 1}),
+    )
+    .await;
+    let text = hunk["text"].as_str().unwrap();
+    assert!(text.contains(&format!("-{line500}\n")), "{text}");
+}
+
+#[tokio::test]
+async fn a_rewrite_between_calls_is_read_by_the_next_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let c = connect(&Server::default()).await;
+    let args = json!({"a": a, "b": b, "line": 500, "context": 1});
+    let h = ok(&c, "hunks_at", args.clone()).await;
+    assert!(h["text"].as_str().unwrap().contains("-line 500\n"), "{h}");
+    let text: String = (1..=1000)
+        .map(|i| match i {
+            500 => "LINE 500\n".to_owned(),
+            _ => format!("line {i}\n"),
+        })
+        .collect();
+    rewrite(&a, &text);
+    let h = ok(&c, "hunks_at", args).await;
+    assert!(h["text"].as_str().unwrap().contains("-LINE 500\n"), "{h}");
+}
+
+#[tokio::test]
+async fn a_rewrite_of_the_same_length_during_a_call_fails_it() {
+    a_rewrite_during_a_call_fails_it("LINE 500").await;
+}
+
+#[tokio::test]
+async fn a_rewrite_of_another_length_during_a_call_fails_it() {
+    a_rewrite_during_a_call_fails_it("a longer line 500").await;
+}

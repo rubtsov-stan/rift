@@ -173,6 +173,18 @@ replaces it: the old id becomes unknown and a new session scans with
 the `mem` asked for, so a client reopens with `suggested_mem` after a
 budget refusal. A changed file gets a new session.
 
+A session keeps checking its files after the `open`. Every request on it
+but `close` compares both open files (`fstat`) with what the `open`
+found, after the request has read what it reads and before it answers.
+A file written over in place since then fails the request with
+`changed`, and every later request on the session but `close` gets
+`changed` as well, so nothing the session read or keeps is served again.
+An `open` of the pair then gets a new session, since the changed file
+no longer matches. A writer that keeps the length and sets the
+modification time back, as `touch -r` does, is not detected. A file
+replaced by a rename is not a change to the session: it reads the file
+it opened, which the server keeps open.
+
 When a new session does not fit `max_sessions` or `max_total_mem`, the
 server first drops failed sessions, then idle ones, then the least
 recently used ready ones that no request is using; a session it drops
@@ -190,7 +202,7 @@ finds its session's response pool held.
 #### Session states
 
 ```
-open ──> scanning ──> ready
+open ──> scanning ──> ready ──(a file changed)──> failed, answering changed
             │  └────> failed ──(open of the same pair)──> new session
             └── close ──> gone (unknown_session)
 ready, failed ── close ──> gone
@@ -201,6 +213,11 @@ ready, failed ── close ──> gone
 | `summary` | `state`, sizes, `mem_bytes`, scan `progress` | everything | `state`, `error` |
 | `segments`, `hunk`, `moves`, `set_visible` | `not_ready` | answered | `not_ready` |
 | `close` | cancels the scan | closes | closes |
+
+A session whose file changed is `failed`, but answers every method but
+`close` with `changed` instead of the table above, and no notification
+names it again. It keeps its budget until it is closed, or dropped for
+room as failed sessions are once no request holds it.
 
 A failed session holds no budget. Its error is sent once in the
 `session_state` notification and repeated by `summary` until the
@@ -487,6 +504,7 @@ LSP client libraries already know.
 | -32006 | `unknown_session` | the session was closed, dropped for room or idleness, or never existed | `session` | `rift_session::Error::UnknownSession` |
 | -32007 | `io` | a file failed to read after it was opened, for instance it was truncated | none | `rift_core::Error::Io` |
 | -32008 | `not_ready` | `segments`, `hunk`, `moves` or `set_visible` on a session that is `scanning` or `failed` | `session`, `state`; scan `progress` while scanning; `error` when failed | `rift_session::Error::NotReady` |
+| -32009 | `changed` | a file of the session changed since `open`, found by this request or an earlier one; `open` the pair again | `side`: the first file found changed, `a` or `b` | `rift_session::Error::Changed` |
 
 `file` reasons: `not_found`, `permission_denied`, `not_regular` (a
 directory, device, FIFO or socket), `symlink`, `changed` (the path was

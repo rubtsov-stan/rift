@@ -182,9 +182,10 @@ impl Server {
             .map_err(|e| session_error(&e, None))
     }
 
-    /// The session `id`, which must be ready.
+    /// The session `id`, which must be ready, with both files unchanged.
     fn ready(&self, id: SessionId) -> Result<Arc<Session>, RpcError> {
         let s = self.session(id)?;
+        s.check_files().map_err(|e| session_error(&e, None))?;
         if s.state() == SessionState::Ready {
             Ok(s)
         } else {
@@ -227,6 +228,7 @@ impl Server {
 
     fn summary(&self, id: &Value, sid: SessionId) -> Result<Box<dyn Body>, RpcError> {
         let s = self.session(sid)?;
+        s.check_files().map_err(|e| session_error(&e, None))?;
         let result = match s.summary() {
             Ok(sum) => {
                 let tally = |t: rift_session::Tally| json!({"segments": t.segments, "a_lines": t.a_lines, "b_lines": t.b_lines});

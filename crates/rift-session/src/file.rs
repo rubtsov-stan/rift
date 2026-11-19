@@ -15,6 +15,7 @@ pub struct FileSource {
     file: File,
     len: u64,
     path: String,
+    id: FileId,
 }
 
 /// What identifies a file's contents for the session cache: a changed file
@@ -160,9 +161,22 @@ impl FileSource {
                 file,
                 len: after.len(),
                 path: path.to_owned(),
+                id,
             },
             id,
         ))
+    }
+
+    /// Whether the file is no longer the one opened: the `fstat` of the
+    /// descriptor differs from the [`FileId`] taken at open. A writer that
+    /// keeps the length and sets the modification time back is not seen.
+    /// A failed `fstat` counts as a change: the file can no longer be
+    /// vouched for.
+    pub(crate) fn changed(&self) -> bool {
+        !self
+            .file
+            .metadata()
+            .is_ok_and(|m| FileId::of(&m) == self.id)
     }
 }
 
