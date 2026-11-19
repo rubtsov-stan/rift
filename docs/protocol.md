@@ -511,7 +511,8 @@ replaced while it was being opened), `io` (anything else).
   had free.
 - `suggested_mem_bytes`, `suggested_mem`: a budget to reopen with, in
   bytes and in the form `open` takes (`"10240K"`). The same value
-  `rift` prints as `rerun with --mem 10240K`, from the same code. It is
+  `rift` prints as `rerun with --mem 10240K`, from the same code; `rift` adds
+  its reserve and, for a full diff, raises it to at least 10475K. It is
   twice what the refusing half held plus what it asked for, rounded up
   by less than 1/64. It is not a lower bound and not a promise: a later
   stage may need more, and the client compares it with

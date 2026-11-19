@@ -103,6 +103,9 @@ fn key_mode_advises_a_mem_that_works() {
     let (a, b) = pair(dir.path(), &rows("x"), &rows("y"));
     let (refused, last) = follow(&["--key", "csv:id"], "64K".into(), &a, &b);
     assert!(!refused.is_empty(), "64K is too small");
+    // Key mode runs below the full diff's floor and is not advised it.
+    let first = advice(&rift(&["--key", "csv:id"], "64K", &a, &b)).unwrap();
+    assert!(bytes(&first) < 10475 << 10, "advised {first}");
     assert_eq!(
         last.status.code(),
         Some(1),
@@ -253,6 +256,62 @@ fn approx_for_lack_of_budget_names_a_mem_that_removes_it() {
         assert!(
             seen > 0,
             "{name}: no budget of the band came out approximate"
+        );
+    }
+}
+
+/// Lines of 40 random bits, unique in practice, and the same lines with
+/// every second one replaced: many small changed regions, so the
+/// scheduler's row table is large for the file's size.
+fn many_regions(lines: usize) -> (String, String) {
+    let mut x = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        format!("{:x}\n", x >> 24)
+    };
+    let a: Vec<String> = (0..lines).map(|_| next()).collect();
+    let b: Vec<String> = a
+        .iter()
+        .enumerate()
+        .map(|(i, l)| if i % 2 == 0 { next() } else { l.clone() })
+        .collect();
+    (a.concat(), b.concat())
+}
+
+/// One rerun at the advice of a refusal gets past the budget: from the
+/// smallest `--mem` on two tiny files, from the least a full diff accepts
+/// on 2000 lines with 20 changed regions, and on a pair with many regions,
+/// where the refused step asks for more than the budget holds at 10475K
+/// and again at 11M (measured: 100000 lines, the smallest of the shapes
+/// tried that is refused at both; the same shape at a million lines is
+/// refused at 12M too).
+#[test]
+fn one_rerun_at_the_advice_gets_past_the_refusal() {
+    let (many_a, many_b) = many_regions(100_000);
+    let cases = [
+        ("tiny", "a\nb\n".to_owned(), "a\nc\n".to_owned(), "64K"),
+        ("2000 lines", text(false), text(true), "10475K"),
+        ("many regions", many_a.clone(), many_b.clone(), "10475K"),
+        ("many regions", many_a, many_b, "11M"),
+    ];
+    for (name, a, b, start) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = pair(dir.path(), &a, &b);
+        let refused = rift(&[], start, &a, &b);
+        let next = advice(&refused).unwrap_or_else(|| panic!("{name} at {start} was not refused"));
+        assert!(
+            bytes(&next) >= 2 * bytes(start),
+            "{name}: {start} -> {next}"
+        );
+        assert!(bytes(&next) >= 10475 << 10, "{name}: {start} -> {next}");
+        let rerun = rift(&[], &next, &a, &b);
+        assert_eq!(
+            rerun.status.code(),
+            Some(1),
+            "{name}: {start} -> {next}: {}",
+            String::from_utf8_lossy(&rerun.stderr)
         );
     }
 }
