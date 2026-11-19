@@ -19,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A directory run names the side that failed when a file cannot be
-  opened or read, where it always named the file in the first
-  directory.
+  opened or read, or a symbolic link cannot be read, where it always
+  named the path in the first directory.
 - `--show-fields` prints a window of at most 64 bytes around the first
   difference of a long value, where it cut both sides at the same 64
   bytes and showed no change when the values differed after them.
