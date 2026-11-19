@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is refined, diff faster: 9 to 13% on the 256 MiB and 1 GiB
   `periodic --period 1000` pairs on an Apple M1 at `--mem 256M` and `1G`.
   Other reference pairs are unchanged.
+- The scan reads with eight threads at any `--mem` a full diff runs
+  under. Up to `--mem 64M` it used one thread, and seven at `256M`,
+  because each thread's read buffer held a whole chunk; a thread now
+  reads its chunk through a buffer of 64 to 256 KiB. The output is the same, and the peak
+  heap is lower on the reference pairs from `--mem 16M` to `1G`.
+- The line index keeps the first line start of every block of bytes
+  instead of one per run of lines, so a line is reached by scanning less
+  than one block, however long the lines, and the scan's chunk size no
+  longer touches the index.
 
 ### Fixed
 

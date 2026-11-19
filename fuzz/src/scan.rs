@@ -27,7 +27,8 @@ impl rift_core::Source for Short<'_> {
 }
 
 /// Scans the input with a configuration taken from its first two bytes
-/// (chunk size, threads, sample and checkpoint caps, reader scratch) and
+/// (chunk and buffer sizes, threads, sample and checkpoint caps, reader
+/// scratch) and
 /// checks the result against a plain split of the bytes.
 ///
 /// # Panics
@@ -42,9 +43,10 @@ pub fn check(data: &[u8]) {
     let cfg = ScanConfig {
         level: u32::from(c1 >> 6),
         sample_cap: CAPS[usize::from(c0 >> 5 & 3)],
-        checkpoint_interval: u64::from(c1 & 7) + 1,
+        checkpoint_interval: Bytes(u64::from(c1 & 7) + 1),
         checkpoint_cap: CAPS[usize::from(c1 >> 3 & 3)].max(2),
         chunk: Bytes(CHUNKS[usize::from(c0 & 7)]),
+        buffer: Bytes(CHUNKS[usize::from((c0 ^ c1) & 7)]),
         threads: usize::from(c0 >> 3 & 3) + 1,
     };
     let scanned = match scan(text, &budget, &cfg) {
@@ -73,18 +75,19 @@ pub fn check(data: &[u8]) {
             "first checkpoint"
         );
     }
-    for w in cps.windows(2) {
-        assert!(w[0].line < w[1].line, "checkpoints out of order");
-        // One checkpoint per multiple of the interval: the last line start
-        // at or before it, so two can be up to twice the interval apart.
-        assert!(
-            w[1].line.0 - w[0].line.0 < 2 * index.interval(),
-            "checkpoint gap"
-        );
+    // The first line start of every block of `interval` bytes, no other.
+    let interval = index.interval().0;
+    let mut want = Vec::new();
+    for (i, &s) in starts.iter().enumerate() {
+        if want
+            .last()
+            .is_none_or(|&(_, o): &(u64, u64)| o / interval != s / interval)
+        {
+            want.push((i as u64, s));
+        }
     }
-    for c in cps {
-        assert_eq!(starts.get(c.line.0 as usize), Some(&c.offset.0), "{c:?}");
-    }
+    let have: Vec<_> = cps.iter().map(|c| (c.line.0, c.offset.0)).collect();
+    assert_eq!(have, want, "checkpoints, interval {interval}");
 
     let level = scanned.level();
     for w in scanned.samples().windows(2) {
@@ -103,9 +106,10 @@ pub fn check(data: &[u8]) {
     let reference = ScanConfig {
         level: cfg.level,
         sample_cap: 1 << 16,
-        checkpoint_interval: 1,
+        checkpoint_interval: Bytes(1),
         checkpoint_cap: 1 << 16,
         chunk: Bytes(text.len() as u64 + 1),
+        buffer: Bytes(text.len() as u64 + 1),
         threads: 1,
     };
     let mut whole = scan(text, &budget, &reference).expect("reference scan");

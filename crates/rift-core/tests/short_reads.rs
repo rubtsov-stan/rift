@@ -31,9 +31,10 @@ fn a_long_line_skipped_by_short_reads_is_still_too_long_when_read() {
     let cfg = ScanConfig {
         level: 0,
         sample_cap: 1 << 10,
-        checkpoint_interval: 3,
+        checkpoint_interval: Bytes(3),
         checkpoint_cap: 1 << 10,
         chunk: Bytes(1 << 20),
+        buffer: Bytes(1 << 20),
         threads: 1,
     };
     let scanned = scan(&src, &budget, &cfg).unwrap();
@@ -66,7 +67,7 @@ proptest! {
             ],
             0..80,
         ).prop_map(|v| v.concat()),
-        interval in 1u64..6,
+        interval in 1u64..30,
         scratch in 1u64..40,
         order in prop::collection::vec(0u64..1000, 0..40),
     ) {
@@ -75,9 +76,10 @@ proptest! {
         let cfg = ScanConfig {
             level: 0,
             sample_cap: 1 << 10,
-            checkpoint_interval: interval,
+            checkpoint_interval: Bytes(interval),
             checkpoint_cap: 1 << 10,
             chunk: Bytes(1 << 20),
+            buffer: Bytes(scratch),
             threads: 1,
         };
         let scanned = scan(&src, &budget, &cfg).unwrap();

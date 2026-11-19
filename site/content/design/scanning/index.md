@@ -23,11 +23,11 @@ Measured 2026-11-07, Apple M1, 16 GiB, macOS 27.0.1, warm page cache: `/usr/bin/
 
 ## Parallel chunks
 
-`scan` cuts a file into chunks of equal size. Each worker thread keeps one read buffer of a chunk plus 64 KiB, takes the next chunk number from a shared counter, and hashes every line that starts in its chunk, however far that line runs past the chunk's end. Taking chunks in file order keeps the reads close to sequential.
+`scan` cuts a file into chunks of 4 MiB. Each worker thread keeps one read buffer, takes the next chunk number from a shared counter, reads the chunk through its buffer, and hashes every line that starts in its chunk, however far that line runs past the chunk's end. Taking chunks in file order keeps the reads close to sequential.
 
 A worker cannot know the absolute line number of its first line until the chunks before it are counted. It numbers lines from zero within the chunk, stores the count per chunk, and when all workers finish, a prefix sum over the counts turns every sample's local line number into an absolute one.
 
-`ScanConfig::for_pair` sizes this. A quarter of the skeleton half pays for read buffers while the scan runs. The chunk is that quarter divided by the core count, kept between a floor (4 MiB when the budget allows) and 16 MiB, and the thread count is the core count, or fewer when the buffers would not fit. At the default 256 MiB budget, each half is 128 MiB, the buffer pool 32 MiB.
+`ScanConfig::for_pair` sizes this. A quarter of the skeleton half pays for read buffers while the scan runs. The quarter is cut into eight shares, one per thread at most; a share holds a read buffer of 64 to 256 KiB and 52 KiB of staging vectors, and the thread count is eight, or fewer when the shares would not fit. Eight of the smallest shares fit from a little under `--mem 8M`, so every budget a full diff runs under scans with eight threads. At the default 256 MiB budget each half is 128 MiB and the pool 32 MiB, of which the eight shares take 2.4 MiB.
 
 The scan needs several cores. In the spike recorded in DESIGN.md, a single thread hashed short lines at 1.16 GB/s from a cold cache, against 3.25 GB/s for `cat` on the same 10 GiB file; four threads reached 3.32 GB/s and eight 3.43 GB/s, the speed of the disk. The Linux benchmark shows the same shape for `--summary` on a 1 GiB SQL pair in tmpfs: 1.04 s on one CPU, 0.62 s on two, 0.47 s on four and 0.46 s on all twelve (median of five runs, 2026-11-14).
 
@@ -37,7 +37,7 @@ Sources: `crates/rift-core/src/scan/mod.rs`, `ScanConfig::for_pair`, `scan_meter
 
 `memchr` finds each `\n`, and xxh3-64 hashes the whole line with its terminator, so `a\n`, `a\r\n` and an unterminated `a` are three different lines, as in GNU diff. A line longer than the read buffer is hashed in streaming mode across reads, so a 1 GiB line costs no more memory than a short one.
 
-Every line is hashed, but only some are kept. A kept line becomes a `Sample` of 24 bytes: the hash, the line number and the byte offset where the line starts. The scan also keeps a checkpoint, a line number and an offset (16 bytes), every `C` lines, so any line can be reached later by a binary search and a forward scan of fewer than `C` lines.
+Every line is hashed, but only some are kept. A kept line becomes a `Sample` of 24 bytes: the hash, the line number and the byte offset where the line starts. The scan also keeps a checkpoint, a line number and an offset (16 bytes), for the first line that starts in every block of `C` bytes, so any line can be reached later by a binary search and a forward scan of fewer than `C` bytes, however long the lines. `C` is at least 1 KiB, raised until the file's blocks fit half the index's share of the budget, and chunks are rounded up to whole blocks, so the index is the same whatever the chunk size and thread count.
 
 Sources: `scan/mod.rs`, `Worker::line`; `crates/rift-core/src/sample.rs`; `crates/rift-core/src/index/mod.rs`, `Checkpoint` and `IndexedLines`.
 
@@ -176,13 +176,13 @@ Rift picks a starting stratum before it reads a byte. `ScanConfig::for_pair` giv
 
 At the default budget the skeleton half is 128 MiB, which holds 3,145,728 samples. For a pair of 10 GiB files the guess is 335,544,321 lines, and the smallest `L` that fits is 7. The unit test `level_halves_the_lines_until_they_fit` pins that case.
 
-The guess can be wrong in either direction, and the scan corrects one of them. Its sample vector starts at the expected size and doubles as samples arrive, reserving each step from the budget first. When the vector reaches its cap, or the budget refuses to grow it, the scan raises the stratum by one and thins what it has. Checkpoints work the same way: when they fill up, the interval between them doubles. After both files are scanned, the skeleton thins them to one common stratum, and raises it again whenever the anchor table, the chain search or the comparison buffers do not fit what is left.
+The guess can be wrong in either direction, and the scan corrects one of them. Its sample vector starts at the expected size and doubles as samples arrive, reserving each step from the budget first. When the vector reaches its cap, or the budget refuses to grow it, the scan raises the stratum by one and thins what it has. Checkpoints need no guess: the file's length gives the number of blocks, so their vector is sized once, and the block doubles only when the budget cannot hold that many. After both files are scanned, the skeleton thins them to one common stratum, and raises it again whenever the anchor table, the chain search or the comparison buffers do not fit what is left.
 
 A guess that was too pessimistic is not corrected: strata only go up, so a file of long lines keeps sample capacity unused. The code comment on `PESSIMISTIC_BYTES_PER_LINE` puts it at about six strata for 3.5 KB lines.
 
 You can watch the choice in `rift --summary`, which prints the stratum. On a 256 MiB pair from `rift-gen --seed 7 --size 256M --profile shuffled --rows csv` (3,350,294 lines in A), `--mem 64M` ran at stratum 4, `--mem 256M` at stratum 2, and `--mem 1G` at stratum 0, every line a sample. Measured 2026-11-07 on the Apple M1 above.
 
-Sources: `scan/mod.rs`, `ScanConfig::for_pair`, `PESSIMISTIC_BYTES_PER_LINE`, `Shared::push_samples`, `Shared::push_checkpoints` and `Shared::grow`; `crates/rift-core/src/skeleton/mod.rs`, `build_watched`.
+Sources: `scan/mod.rs`, `ScanConfig::for_pair`, `PESSIMISTIC_BYTES_PER_LINE`, `Shared::push_samples` and `Shared::grow`; `crates/rift-core/src/skeleton/mod.rs`, `build_watched`.
 
 ## What the scan holds
 

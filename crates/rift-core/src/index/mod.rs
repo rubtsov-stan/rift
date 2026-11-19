@@ -1,10 +1,10 @@
-//! Sparse line index: one checkpoint offset per C lines.
+//! Sparse line index: one checkpoint per block of `interval` bytes.
 //!
-//! The scanner keeps one checkpoint per multiple of `interval`: the last
-//! line start it recorded at or before it, so consecutive checkpoints are
-//! fewer than `2 * interval` lines apart. [`IndexedLines`] turns the index
-//! plus a [`Source`] into [`LineAccess`]: reaching any line costs one
-//! binary search and a forward scan of fewer than `2 * interval` lines.
+//! The scanner keeps the first line start of every `interval`-byte block
+//! of the file, so the block a line starts in holds a checkpoint at or
+//! before it. [`IndexedLines`] turns the index plus a [`Source`] into
+//! [`LineAccess`]: reaching any line costs one binary search and a forward
+//! scan of fewer than `interval` bytes, however long the lines.
 
 use std::borrow::Borrow;
 use std::io;
@@ -19,8 +19,8 @@ use crate::lines::{LineAccess, LineBuf};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineNo};
 
-/// A known line start: 16 bytes, so a 1 GiB pair indexed every 2 048 lines
-/// costs well under a mebibyte.
+/// A known line start: 16 bytes, so a 1 GiB pair indexed every 64 KiB
+/// costs half a mebibyte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Checkpoint {
@@ -38,22 +38,19 @@ const _: () = assert!(size_of::<Checkpoint>() == 16);
 pub struct LineIndex {
     checkpoints: Vec<Checkpoint>,
     lines: u64,
-    interval: u64,
+    interval: Bytes,
 }
 
 impl LineIndex {
-    /// Builds an index from sorted checkpoints fewer than `2 * interval`
-    /// lines apart. Lives in the skeleton half together with the samples; the
-    /// scanner holds the reservation.
+    /// Builds an index from sorted checkpoints, at most one per
+    /// `interval`-byte block. Lives in the skeleton half together with the
+    /// samples; the scanner holds the reservation.
     #[must_use]
-    pub(crate) fn new(checkpoints: Vec<Checkpoint>, lines: u64, interval: u64) -> Self {
-        debug_assert!(checkpoints.is_sorted_by_key(|c| c.line));
+    pub(crate) fn new(checkpoints: Vec<Checkpoint>, lines: u64, interval: Bytes) -> Self {
         debug_assert!(lines == 0 || checkpoints.first().map(|c| c.line) == Some(LineNo(0)));
-        debug_assert!(
-            checkpoints
-                .windows(2)
-                .all(|w| w[1].line - w[0].line < 2 * interval)
-        );
+        debug_assert!(checkpoints.windows(2).all(|w| {
+            w[0].line < w[1].line && w[0].offset.0 / interval.0 < w[1].offset.0 / interval.0
+        }));
         Self {
             checkpoints,
             lines,
@@ -67,10 +64,10 @@ impl LineIndex {
         self.lines
     }
 
-    /// Lines per checkpoint; consecutive checkpoints are fewer than twice
-    /// this apart.
+    /// Bytes per checkpoint block: a line starts fewer than this many bytes
+    /// after the checkpoint before it.
     #[must_use]
-    pub fn interval(&self) -> u64 {
+    pub fn interval(&self) -> Bytes {
         self.interval
     }
 
@@ -690,7 +687,8 @@ mod tests {
     use super::*;
     use crate::lines::MemLines;
 
-    /// An index with a checkpoint every `interval` lines, built by hand.
+    /// An index with a checkpoint every `interval` lines, built by hand;
+    /// it claims only one checkpoint per byte.
     fn index_of(data: &[u8], interval: u64) -> LineIndex {
         let mem = MemLines::new(data);
         let mut checkpoints = Vec::new();
@@ -704,7 +702,7 @@ mod tests {
             }
             offset += mem.line(i).unwrap().len() as u64;
         }
-        LineIndex::new(checkpoints, mem.line_count(), interval)
+        LineIndex::new(checkpoints, mem.line_count(), Bytes(1))
     }
 
     fn lines(data: &[u8], interval: u64, scratch: u64, range: Range<u64>) -> Result<Vec<Vec<u8>>> {
@@ -882,7 +880,7 @@ mod tests {
         );
         assert_eq!(index.checkpoint_before(LineNo(5)), None);
         assert_eq!(
-            LineIndex::new(Vec::new(), 0, 1).checkpoint_before(LineNo(0)),
+            LineIndex::new(Vec::new(), 0, Bytes(1)).checkpoint_before(LineNo(0)),
             None
         );
     }

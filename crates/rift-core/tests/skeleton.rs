@@ -11,9 +11,10 @@ fn config(level: u32) -> ScanConfig {
     ScanConfig {
         level,
         sample_cap: 1 << 14,
-        checkpoint_interval: 16,
+        checkpoint_interval: Bytes(256),
         checkpoint_cap: 1 << 12,
         chunk: Bytes(4096),
+        buffer: Bytes(4096),
         threads: 2,
     }
 }
