@@ -189,6 +189,8 @@ impl Source for FileSource {
         let left = self.len.saturating_sub(offset.0);
         let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
         let got = self.file.read_at(&mut buf[..n], offset.0)?;
+        #[cfg(feature = "test-hooks")]
+        crate::test_hooks::count_read(got);
         if got == 0 && n > 0 {
             // Cut while being read, or holding less than it reports: taking
             // this as the end would make a wrong diff.

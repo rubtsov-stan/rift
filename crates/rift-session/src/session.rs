@@ -359,8 +359,10 @@ impl Session {
     /// `max_line_bytes` bytes, and both sides together fit what the
     /// response pool had free when the call began. Memory: the lines, their
     /// text and one line buffer, held by the returned excerpt until it is
-    /// dropped. Time: one positional read per line shown, two for a
-    /// truncated one, plus `O(moved blocks)`.
+    /// dropped. Time: lines that lie in the bytes of one read
+    /// share it, so short lines cost a fraction of a positional read each;
+    /// a line cut at `max_line_bytes` can cost one more, plus
+    /// `O(moved blocks)`.
     ///
     /// [`Sessions::get`]: crate::Sessions::get
     /// [`Limits::waiters`]: crate::Limits::waiters
