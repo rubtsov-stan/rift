@@ -453,6 +453,92 @@ impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
         scratch.hint = Some(Checkpoint { line, offset });
     }
 
+    /// Calls `f` with every line of `range` in order, as `(piece, first,
+    /// last)`: a line that fits the read buffer comes whole, a longer one
+    /// in pieces of the buffer's length. Lines are handed out where they
+    /// were read; only the partial line at a buffer's end moves to its
+    /// front before the next read. Reads go through `block` when it is
+    /// longer than the reader's own buffer, so a caller with room for a
+    /// larger one reads in fewer calls. The reader stays locked while `f`
+    /// runs, so `f` must not use it.
+    ///
+    /// # Errors
+    ///
+    /// `LineOutOfRange` if `range.end` exceeds the line count, `Io` on a
+    /// read failure, or what `f` returns.
+    pub(crate) fn for_each_line(
+        &self,
+        range: Range<LineNo>,
+        block: &mut [u8],
+        mut f: impl FnMut(&[u8], bool, bool) -> Result<()>,
+    ) -> Result<()> {
+        let count = self.index.borrow().line_count();
+        if range.end.0 > count {
+            return Err(Error::LineOutOfRange {
+                line: range.end,
+                count,
+            });
+        }
+        if range.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.scratch.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.held = None;
+        let mut pos = self.line_start(range.start, &mut guard)?;
+        let Scratch { buf: own, memo, .. } = &mut *guard;
+        let buf = if block.len() > own.len() {
+            block
+        } else {
+            own.as_mut_slice()
+        };
+        let mut filled = 0;
+        let mut line = range.start.0;
+        // Whether the next piece starts a line.
+        let mut first = true;
+        loop {
+            let n = read_retrying(
+                &self.source,
+                &mut buf[filled..],
+                ByteOffset(pos + filled as u64),
+            )?;
+            if n == 0 {
+                // The file's last line has no newline, or a long one
+                // ended exactly at the buffer's end.
+                if filled > 0 || !first {
+                    f(&buf[..filled], first, true)?;
+                    line += 1;
+                }
+                return ended(line, range.end);
+            }
+            let scanned = filled;
+            filled += n;
+            let mut start = 0;
+            for nl in memchr_iter(b'\n', &buf[scanned..filled]).map(|i| i + scanned) {
+                f(&buf[start..=nl], first, true)?;
+                first = true;
+                line += 1;
+                start = nl + 1;
+                if line == range.end.0 {
+                    *memo = Some(Checkpoint {
+                        line: LineNo(line),
+                        offset: ByteOffset(pos + start as u64),
+                    });
+                    return Ok(());
+                }
+            }
+            if start == 0 && filled == buf.len() {
+                f(&buf[..filled], first, false)?;
+                first = false;
+                pos += filled as u64;
+                filled = 0;
+            } else {
+                buf.copy_within(start..filled, 0);
+                pos += start as u64;
+                filled -= start;
+            }
+        }
+    }
+
     /// Where `read_lines` starts scanning for `line`, and how many bytes
     /// at the front of the buffer, kept from the last read, start there.
     fn read_start(&self, scratch: &mut Scratch, line: LineNo) -> Result<(Checkpoint, usize)> {
@@ -895,6 +981,69 @@ mod tests {
                     .read_lines(LineNo(i + 1)..LineNo(i + 2), &mut buf)
                     .unwrap();
                 assert_eq!(buf.line(0), mem.line(i + 1).unwrap(), "line {}", i + 1);
+            }
+        }
+    }
+
+    /// Lines handed out in place come back as `MemLines` holds them, in
+    /// pieces that start and end each line, for every buffer size, with
+    /// long lines, one ending exactly at a buffer's end and a last line
+    /// without a newline.
+    #[test]
+    fn lines_in_place_match_memory_for_every_buffer() {
+        let mut data = b"a\n\nbc\r\n".to_vec();
+        data.extend_from_slice(&[b'x'; 300]);
+        data.extend_from_slice(b"\nshort\n");
+        data.extend_from_slice(&[b'y'; 63]);
+        data.extend_from_slice(b"\n");
+        data.extend_from_slice(&[b'z'; 200]);
+        data.extend_from_slice(b"tail");
+        let mem = MemLines::new(&data);
+        let count = mem.line_count();
+        let budget = Budget::new(Bytes::mib(1));
+        for interval in [1, 3, 100] {
+            let index = index_of(&data, interval);
+            for scratch in [1, 7, 64, 4096] {
+                let access =
+                    IndexedLines::new(&data[..], &index, &budget, Half::Refine, Bytes(scratch))
+                        .unwrap();
+                for block in [0, 16, 64, 1000] {
+                    for start in 0..count {
+                        let mut got: Vec<Vec<u8>> = Vec::new();
+                        let mut open = false;
+                        let mut block = vec![0u8; block];
+                        access
+                            .for_each_line(
+                                LineNo(start)..LineNo(count),
+                                &mut block,
+                                |piece, first, last| {
+                                    assert_eq!(
+                                        first, !open,
+                                        "a piece starts a line after one ends"
+                                    );
+                                    if first {
+                                        got.push(Vec::new());
+                                    }
+                                    got.last_mut().unwrap().extend_from_slice(piece);
+                                    open = !last;
+                                    Ok(())
+                                },
+                            )
+                            .unwrap();
+                        let want: Vec<Vec<u8>> = (start..count)
+                            .map(|i| mem.line(i).unwrap().to_vec())
+                            .collect();
+                        assert_eq!(
+                            got, want,
+                            "interval {interval} scratch {scratch} from {start}"
+                        );
+                    }
+                }
+                let mut buf = [0u8; 8];
+                assert!(matches!(
+                    access.for_each_line(LineNo(0)..LineNo(count + 1), &mut buf, |_, _, _| Ok(())),
+                    Err(Error::LineOutOfRange { .. })
+                ));
             }
         }
     }

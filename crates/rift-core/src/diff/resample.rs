@@ -259,9 +259,9 @@ fn chain<A: Source + Send + ?Sized, B: Source + Send + ?Sized>(
             line += 1;
         };
         if side == 0 {
-            each_hash(&w.a, range.clone(), &mut w.buf, &mut sample)?;
+            each_hash(&w.a, range.clone(), &mut [], &mut sample)?;
         } else {
-            each_hash(&w.b, range.clone(), &mut w.buf, &mut sample)?;
+            each_hash(&w.b, range.clone(), &mut [], &mut sample)?;
         }
     }
     if seen.take().is_some_and(Seen::disjoint) {
