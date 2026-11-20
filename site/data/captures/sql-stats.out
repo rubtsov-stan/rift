@@ -1,5 +1,5 @@
-peak heap 74.4 MiB of 256.0 MiB (78022856 bytes)
-time 0.09 s
+peak heap 72.9 MiB of 256.0 MiB (76389976 bytes)
+time 0.12 s
 approx 0 segments, 0 lines in a and b
 moved    62 blocks, 2737 lines
   a 21557..21560  b 22434..22437

@@ -42,7 +42,7 @@ cd "$work/sql"
 cap sql-summary 'rift --summary a.sql b.sql'
 cap sql-stats 'rift --stats a.sql b.sql > changes.patch'
 cap sql-no-moves 'rift --no-moves --summary a.sql b.sql | tail -n 6'
-cap mem-error 'rift --summary --mem 512K a.sql b.sql'
+cap mem-error 'rift --summary --mem 64K a.sql b.sql'
 limit=$(sed -n 's/.*rerun with --mem \([0-9A-Za-z]*\).*/\1/p' "$out/mem-error.out")
 # The named limit can fail at a later stage and name a higher one.
 cap mem-rerun "rift --summary --mem $limit a.sql b.sql"
