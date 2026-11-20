@@ -13,12 +13,14 @@ Each run starts a new server, waits for the scan and for the refinement the
 visible span asked for, and times only the hunk requests. Runs of the two
 binaries alternate, BASE first, after one untimed run of each. The answers of
 every run must match its side's first one, and HEAD's must match BASE's.
-Prints the median and range of the hunk phase per side, and the 1-minute
+Prints the median and range of the hunk phase per side, the range of the
+peak heap each server printed on exit (`rift serve --stats`), and the 1-minute
 load average before and after each run.
 """
 import hashlib
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -29,8 +31,8 @@ PAGE = 100
 
 class Server:
     def __init__(self, binary):
-        self.p = subprocess.Popen([binary, "serve"], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.p = subprocess.Popen([binary, "serve", "--stats"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.id = 0
         self.notes = []
 
@@ -69,8 +71,14 @@ class Server:
             self.notes.append(self._read())
 
     def close(self):
+        """Ends the server; returns the peak heap it printed, in bytes."""
         self.p.stdin.close()
+        err = self.p.stderr.read().decode()
         self.p.wait()
+        m = re.search(r"peak heap (\d+) bytes", err)
+        if not m:
+            raise SystemExit(f"no peak heap from the server: {err!r}")
+        return int(m.group(1))
 
 
 def run(binary, a, b):
@@ -104,8 +112,7 @@ def run(binary, a, b):
         s.call("set_visible", {"session": sid, "a": hk["range"]["a"]})
     dt = time.perf_counter() - t0
     s.call("close", {"session": sid})
-    s.close()
-    return dt, h.hexdigest()
+    return dt, h.hexdigest(), s.close()
 
 
 def main():
@@ -119,18 +126,21 @@ def main():
     if ref["base"] != ref["head"]:
         raise SystemExit("answers differ: head against base")
     times = {"base": [], "head": []}
+    heaps = {"base": [], "head": []}
     loads = []
     for _ in range(runs):
         for k, v in side.items():
             l0 = os.getloadavg()[0]
-            dt, dig = run(v, a, b)
+            dt, dig, heap = run(v, a, b)
             loads += [l0, os.getloadavg()[0]]
             if dig != ref[k]:
                 raise SystemExit(f"answers of a {k} run changed")
             times[k].append(dt)
+            heaps[k].append(heap)
     for k, t in times.items():
         print(f"{k}: median {statistics.median(t) * 1000:.1f} ms, "
-              f"min-max {min(t) * 1000:.1f}-{max(t) * 1000:.1f} ms, runs {len(t)}")
+              f"min-max {min(t) * 1000:.1f}-{max(t) * 1000:.1f} ms, runs {len(t)}, "
+              f"peak heap {min(heaps[k])}-{max(heaps[k])} bytes")
     mb, mh = statistics.median(times["base"]), statistics.median(times["head"])
     spread = (max(times["base"]) - min(times["base"]) + max(times["head"]) - min(times["head"])) / 2
     print(f"head vs base: {100 * (mh - mb) / mb:+.1f}%, threshold "

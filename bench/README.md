@@ -29,7 +29,7 @@ The script holds a lock directory, `gate.lock` in the repository's git directory
 bench/serve-replay.py BASE_RIFT HEAD_RIFT DIR [RUNS]    # DIR holds a and b from rift-gen
 ```
 
-Replays what the VS Code extension sends to `rift serve` (initialize, open, summary, the first page of segments, `set_visible` on its span, then a `hunk` with context 3 and a `set_visible` per segment) and times the hunk requests only, 10 runs per side interleaved after one untimed run of each. The hash of every hunk answer must be the same on both sides and in every run. It takes no lock: hold `gate.lock` around it by hand. Reads are counted by `crates/rift-session/tests/serve_reads.rs`, not here.
+Replays what the VS Code extension sends to `rift serve` (initialize, open, summary, the first page of segments, `set_visible` on its span, then a `hunk` with context 3 and a `set_visible` per segment) and times the hunk requests only, 10 runs per side interleaved after one untimed run of each. The hash of every hunk answer must be the same on both sides and in every run. Each server runs with `--stats`, and the peak heap it prints on exit is reported per side as a range. It takes no lock: hold `gate.lock` around it by hand. Reads are counted by `crates/rift-session/tests/serve_reads.rs`, not here.
 
 ## linux-safe.sh
 
