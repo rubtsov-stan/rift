@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-21
+
+- Bundles `rift` 0.4.1.
 - When `rift serve` answers `changed` (a compared file was written over after it
   was opened), the pair is compared again by itself, so the view shows the new
   contents instead of an error. A `rift` before 0.4.1 never sends `changed`.

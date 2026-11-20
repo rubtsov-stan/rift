@@ -1704,7 +1704,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rift-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bumpalo",
  "crossbeam-utils",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "rift-diff"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "rift-gen"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "rift-mcp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "rift-core",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "rift-session"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "rift-core",
  "rift-session",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "rift-tui"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2730,7 +2730,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xtask"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
