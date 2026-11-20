@@ -6,6 +6,15 @@ import {
 
 export const PAGE = 100;
 const MAX_CRASHES = 2;
+// The extension sends nothing during a scan, so a change is noticed at ready or after: by the
+// summary it loads then, or by a later request. It counts unless the session had been ready and
+// unchanged for a minute. A file that changes during every scan is thus counted at each ready, as
+// is one that changes again soon after, as a growing log does. Counted from ready, not from the
+// reopen, because a scan of a large file outlasts the window. Three full rescans are enough to
+// catch one that only changed twice.
+const MAX_REOPENS = 3;
+const REOPEN_WINDOW_MS = 60_000;
+export const KEEPS_CHANGING = 'The file keeps changing; compare again when it settles.';
 
 export type ComparisonState = 'opening' | 'scanning' | 'ready' | 'failed';
 
@@ -18,8 +27,9 @@ export interface Events {
   // The server answered `open` with `session`, whether or not this comparison is still current.
   opened?(): void;
   // A file changed after the open: the session answers nothing more, and the pair is to be
-  // opened again. Called once per comparison.
-  changed?(): void;
+  // opened again. Called once per comparison. `user` is whether a request the user triggered
+  // met the change, rather than one the extension sent for itself.
+  changed?(user: boolean): void;
 }
 
 // One open of a pair of files and the session the server gave it. A comparison
@@ -42,6 +52,17 @@ export class Comparison {
   reruns = 0;
   // Crashes since the refinement of this pair last ended, carried into its reopen.
   crashes = 0;
+  // Reopens of this pair for `changed` since a session of it last stayed unchanged for the
+  // window after it was ready, carried into each reopen.
+  reopens = 0;
+  // The pair was given up because its file keeps changing; the message stays, and no crash reopens it.
+  givenUp = false;
+  // A user request joined the load in flight: its `changed` is the user's.
+  private segmentsUser = false;
+  private movesUser = false;
+  // When this session became ready, by the clock of the window that opened it.
+  readyAt?: number;
+  now: () => number = Date.now;
   // Asked before every request, the open included. Nothing is sent and nothing changes once it says no.
   live: () => boolean = () => true;
   // Notices that came before the open answered, the latest per kind, session and process:
@@ -84,8 +105,16 @@ export class Comparison {
     this.state = r.state;
     const early = [...this.early.values()];
     this.early.clear();
-    for (const e of early) this.handle(e.n, e.epoch);
-    if (r.state === 'ready') await this.ready();
+    // Stops once a notice gave the pair up or the compare was replaced: the rest are for a
+    // session this comparison no longer has, or has no use for.
+    for (const e of early) {
+      if (this.session !== r.session || !this.live()) break;
+      this.handle(e.n, e.epoch);
+    }
+    // Given up or replaced in the replay: nothing more to load or to announce.
+    if (this.session !== r.session || !this.live()) return;
+    // A failure in the replay is final: do not make it ready again.
+    if (r.state === 'ready' && this.state === 'ready') await this.ready();
     this.events.change();
   }
 
@@ -94,6 +123,7 @@ export class Comparison {
     this.epoch = undefined;
     this.state = 'opening';
     this.summary = this.progress = this.error = undefined;
+    this.readyAt = undefined;
     this.segments = [];
     this.moves = [];
     this.segmentsTotal = this.movesTotal = 0;
@@ -122,6 +152,7 @@ export class Comparison {
 
   // `epoch` is the server process that sent `n`; ids restart with each process.
   handle(n: Notification, epoch?: number): void {
+    if (this.givenUp) return;
     if (this.session === undefined) {
       // Deleted first, so the replay keeps the order in which the kept ones came.
       const key = `${n.method}:${epoch}:${n.params.session}`;
@@ -141,7 +172,7 @@ export class Comparison {
         break;
       case 'session_state':
         if (n.params.error?.code === Code.changed) {
-          this.changed();
+          this.changed(false);
         } else if (n.params.state === 'failed') {
           this.state = 'failed';
           this.error = n.params.error;
@@ -161,6 +192,7 @@ export class Comparison {
 
   private async ready(): Promise<void> {
     this.state = 'ready';
+    this.readyAt = this.now();
     this.progress = undefined;
     try {
       await this.refreshSummary();
@@ -201,35 +233,44 @@ export class Comparison {
     this.events.change();
   }
 
-  loadSegments(): Promise<void> {
+  // `user`: the request answers something the user did, not the opening of the pair.
+  loadSegments(user = false): Promise<void> {
+    if (user) this.segmentsUser = true;
     this.loadingSegments ??= (async () => {
-      const r = await this.call<SegmentsResult>('segments', { offset: this.segments.length, limit: PAGE });
+      const r = await this.call<SegmentsResult>('segments', { offset: this.segments.length, limit: PAGE }, () => this.segmentsUser);
       if (r) {
         this.segments.push(...r.segments);
         this.segmentsTotal = r.total;
-        if (r.segments.length) this.setVisible(span(r.segments));
+        if (r.segments.length) this.setVisible(span(r.segments), this.segmentsUser);
       }
-    })().finally(() => (this.loadingSegments = undefined));
+    })().finally(() => {
+      this.loadingSegments = undefined;
+      this.segmentsUser = false;
+    });
     return this.loadingSegments;
   }
 
-  loadMoves(): Promise<void> {
+  loadMoves(user = false): Promise<void> {
+    if (user) this.movesUser = true;
     this.loadingMoves ??= (async () => {
-      const r = await this.call<MovesResult>('moves', { offset: this.moves.length, limit: PAGE });
+      const r = await this.call<MovesResult>('moves', { offset: this.moves.length, limit: PAGE }, () => this.movesUser);
       if (r) {
         this.moves.push(...r.blocks);
         this.movesTotal = r.total;
       }
-    })().finally(() => (this.loadingMoves = undefined));
+    })().finally(() => {
+      this.loadingMoves = undefined;
+      this.movesUser = false;
+    });
     return this.loadingMoves;
   }
 
   hunk(target: { segment: number } | { line_a: number }, context: number): Promise<HunkResult | undefined> {
-    return this.call<HunkResult>('hunk', { ...target, context });
+    return this.call<HunkResult>('hunk', { ...target, context }, true);
   }
 
-  setVisible(a: Range): void {
-    void this.call('set_visible', { a });
+  setVisible(a: Range, user = false): void {
+    void this.call('set_visible', { a }, user);
   }
 
   // Both hold the same session of the same server process.
@@ -244,7 +285,9 @@ export class Comparison {
 
   // A request on this session. `not_ready` and `unknown_session` mean the
   // session moved on (still scanning, closed, restarted): not an error to show.
-  private async call<T>(method: string, params: object): Promise<T | undefined> {
+  // `user`: whether the request answers something the user did; read when the answer comes, so a
+  // user request that joined a load in flight counts.
+  private async call<T>(method: string, params: object, user: boolean | (() => boolean) = false): Promise<T | undefined> {
     const { session, epoch } = this;
     if (session === undefined) return undefined;
     try {
@@ -256,7 +299,7 @@ export class Comparison {
         return undefined;
       }
       if (e.code === Code.changed && session === this.session) {
-        this.changed();
+        this.changed(typeof user === 'function' ? user() : user);
         return undefined;
       }
       if (e.code === Code.notReady || e.code === Code.unknownSession) return undefined;
@@ -264,10 +307,10 @@ export class Comparison {
     }
   }
 
-  private changed(): void {
+  private changed(user: boolean): void {
     if (this.reopening) return;
     this.reopening = true;
-    this.events.changed?.();
+    this.events.changed?.(user);
   }
 
   // The server forgot this session while it was shown, as a full server does for the one
@@ -287,6 +330,8 @@ export interface WindowEvents {
   failed(error: RpcErrorObject, c: Comparison): void;
   // The current compare could not open.
   error(e: unknown): void;
+  // A pair was given up because its file keeps changing. Once per give-up.
+  keepsChanging?(): void;
 }
 
 // The window's comparisons. `shown` is on screen; `pending` is the newest compare, opening
@@ -320,6 +365,9 @@ export class Compares {
     // load), but the extension host can stall for seconds behind other extensions, and a stop
     // for nothing costs every comparison and a strike against the crash limit.
     private closeWaitMs = 10_000,
+    // Wall clock: a monotonic one stops while the machine sleeps. A clock set back makes the
+    // window count as over. Injected by tests that must pass minutes.
+    private now: () => number = Date.now,
   ) {}
 
   handle(n: Notification, epoch: number): void {
@@ -351,8 +399,28 @@ export class Compares {
       },
       // The compare that replaces it closes the stale session, as for any replaced one. A
       // newer compare of the user's, pending, replaces it anyway and is left alone.
-      changed: () => {
-        if (next === this.pending || (next === this.shown && !this.pending)) void this.compare(next.a, next.b, next.mem, next);
+      changed: (user) => {
+        if (next !== this.pending && !(next === this.shown && !this.pending)) return;
+        // A change met by the user's own request does not count, and ends the run of changes
+        // before it: someone is editing and looking, not a writer running ahead of every scan.
+        if (user) {
+          next.reopens = 0;
+        } else if (next.readyAt !== undefined) {
+          const age = this.now() - next.readyAt;
+          if (age < 0 || age >= REOPEN_WINDOW_MS) next.reopens = 0;
+        }
+        if (user || next.reopens < MAX_REOPENS) {
+          if (!user) next.reopens++;
+          void this.compare(next.a, next.b, next.mem, next);
+          return;
+        }
+        // Swapped before `gone`, whose change event is the one that redraws the view with the
+        // message, and flagged before it so that redraw reads it as a give-up.
+        this.show(next);
+        next.givenUp = true;
+        next.gone({ code: Code.changed, message: KEEPS_CHANGING });
+        this.settle();
+        this.events.keepsChanging?.();
       },
       opened: () => {
         if (this.wire === next) this.wire = undefined;
@@ -363,9 +431,11 @@ export class Compares {
     // A comparison failed without a session has nothing left to ask: an open of it that still
     // waits for a backoff or for closes is not sent.
     next.live = () => (next === this.pending || next === this.shown) && !(next.state === 'failed' && next.session === undefined);
+    next.now = this.now;
     if (from) {
       next.reruns = from.reruns;
       next.crashes = from.crashes;
+      next.reopens = from.reopens;
     }
     this.pending = next;
     this.settle();
@@ -387,6 +457,8 @@ export class Compares {
     // The server reuses a session and does not send its progress and segment_ready again, so
     // `prev` knows more and stays; unless it failed, which must not keep its replacement out.
     if (!(next.sameSession(prev) && prev?.state !== 'failed')) this.shown = next;
+    // The kept one answers the user's compare again, which starts the count over.
+    else if (!from) prev!.reopens = 0;
     this.settle();
     this.events.change();
   }
@@ -395,6 +467,7 @@ export class Compares {
   rerun(mem: string): Promise<void> {
     const c = this.shown!;
     c.reruns++;
+    c.reopens = 0;
     return this.compare(c.a, c.b, mem, c);
   }
 
@@ -404,27 +477,33 @@ export class Compares {
     return this.settle();
   }
 
+  // A target that failed is the one shown, where nothing more is sent for it.
+  private show(c: Comparison): void {
+    if (c === this.pending) {
+      this.pending = undefined;
+      this.shown = c;
+    }
+  }
+
   // The server process died, or was stopped for what it sent (`deliberate`). Its sessions are
   // gone. The current pair is reopened after a crash that restarts the server, up to its crash
-  // limit, and after a stop that cut short a compare still loading. Returns whether it is.
-  lost(reason: string, restarting: boolean, deliberate: boolean): boolean {
+  // limit, and after a stop that cut short a compare still loading. Returns whether it is, and
+  // whether the pair was given up for its file, which no crash reopens.
+  lost(reason: string, restarting: boolean, deliberate: boolean): { reopened: boolean; givenUp: boolean } {
     const target = this.pending ?? this.shown;
-    if (!target) return restarting;
+    if (!target) return { reopened: restarting, givenUp: false };
+    if (target.givenUp) return { reopened: false, givenUp: true };
     // A stop counts toward the crash limit too: the reopen asks the server the same thing again.
     const again = deliberate ? target === this.pending && ++target.crashes < MAX_CRASHES : target.lost(reason, restarting);
     const error = { code: -32603, message: deliberate ? `${reason}. Compare the files again.` : reason };
     if (this.shown && this.shown !== target) this.shown.gone(again ? undefined : error);
     if (!again) {
       if (deliberate) target.gone(error);
-      // Given up: shown failed, where nothing more is sent for it.
-      if (target === this.pending) {
-        this.pending = undefined;
-        this.shown = target;
-      }
+      this.show(target);
     }
     if (again) void this.compare(target.a, target.b, target.mem, target);
     this.settle();
-    return again;
+    return { reopened: again, givenUp: false };
   }
 
   private closeSession(id: number, epoch: number): Promise<void> {
@@ -489,6 +568,23 @@ function memArg(bytes: number): string {
     if (bytes % size === 0) return `${bytes / size}${unit}`;
   }
   return String(bytes);
+}
+
+// The row shown for a failed comparison. A pair given up for `changed` had no scan fail.
+export function failureLabel(e: RpcErrorObject | undefined, givenUp: boolean): string {
+  return givenUp && e ? e.message : `Scan failed: ${e?.message ?? 'unknown error'}`;
+}
+
+// The warning for a server that died. `reopen`: the current pair is opened again with it.
+// `givenUp`: the pair was given up because its file keeps changing, so a restart does not
+// open it again.
+export function crashMessage(reason: string, o: { reopen: boolean; deliberate: boolean; restarting: boolean; givenUp: boolean }): string {
+  let text: string;
+  if (o.reopen || (o.givenUp && o.restarting && !o.deliberate)) text = `${reason}. Restarting it.`;
+  else if (o.deliberate) text = `${reason}. Compare the files again.`;
+  else if (o.restarting) text = `${reason}. This comparison crashed it twice, so it is not reopened.`;
+  else text = `${reason}. It stopped right after starting, so it is not restarted.`;
+  return o.givenUp ? `${text} The pair is not opened again: its file keeps changing.` : text;
 }
 
 // What to offer after a scan failed on the budget: the server's advice plus

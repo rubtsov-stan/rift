@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Server } from './client';
-import { Comparison, Compares, MEMORY_GUIDE, rerunOffer } from './comparison';
+import { Comparison, Compares, KEEPS_CHANGING, MEMORY_GUIDE, crashMessage, rerunOffer } from './comparison';
 import { excerpt, num, title } from './format';
 import { HunkDocs, SCHEME } from './hunk';
 import { RpcErrorObject } from './protocol';
@@ -35,20 +35,18 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     args: ['serve'],
     onNotification: (n, epoch) => compares.handle(n, epoch),
     onCrash: (reason, restarting, deliberate) => {
-      const reopen = compares.lost(reason, restarting, deliberate);
+      const { reopened: reopen, givenUp } = compares.lost(reason, restarting, deliberate);
       // A binary that cannot start gets the hint to set rift.path, not a crash warning.
       if (reason.startsWith('cannot start')) return showError(new Error(reason));
-      const text = reopen
-        ? `${reason}. Restarting it.`
-        : deliberate
-          ? `${reason}. Compare the files again.`
-          : restarting
-            ? `${reason}. This comparison crashed it twice, so it is not reopened.`
-            : `${reason}. It stopped right after starting, so it is not restarted.`;
-      void vscode.window.showWarningMessage(`Rift: ${text}`);
+      void vscode.window.showWarningMessage(`Rift: ${crashMessage(reason, { reopen, deliberate, restarting, givenUp })}`);
     },
   });
-  const compares = new Compares(server, { change: render, failed, error: showError });
+  const compares = new Compares(server, {
+    change: render,
+    failed,
+    error: showError,
+    keepsChanging: () => void vscode.window.showWarningMessage(`Rift: ${KEEPS_CHANGING}`),
+  });
   tree.maxSessionMem = () => server.limits?.max_session_mem;
 
   function showError(e: unknown): void {
@@ -110,7 +108,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     const left = docs.add('a', basename(c.a), excerpt(h.a));
     const right = docs.add('b', basename(c.b), excerpt(h.b));
     await vscode.commands.executeCommand('vscode.diff', left, right, title(basename(c.a), basename(c.b), h), { preview: true });
-    c.setVisible(h.range.a);
+    c.setVisible(h.range.a, true);
     const seg = h.segment;
     // An equal segment or a moved block is not in the list: stand after the last difference before it.
     const pos = c.segments.findIndex((s) => s.index === seg);
@@ -133,7 +131,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
     const pos = c.current < 0 ? 0 : c.current + dir;
     if (pos >= c.segments.length && c.segments.length < c.segmentsTotal) {
       try {
-        await c.loadSegments();
+        await c.loadSegments(true);
       } catch (e) {
         showError(e);
         return;
@@ -198,7 +196,7 @@ export function activate(ctx: vscode.ExtensionContext): Api {
   reg('rift.closeComparison', () => compares.close());
   reg('rift.loadMore', async (kind: 'segments' | 'moves') => {
     try {
-      await (kind === 'segments' ? compares.shown?.loadSegments() : compares.shown?.loadMoves());
+      await (kind === 'segments' ? compares.shown?.loadSegments(true) : compares.shown?.loadMoves(true));
     } catch (e) {
       showError(e);
     }

@@ -46,7 +46,10 @@
 //                                          go out in one write
 //   hunk, on the first session of a path containing "changes" -> changed (side a), as if file A was written
 //                                          over after the open; the session answers changed to everything but
-//                                          close from then on, and an open of the pair gets a new session
+//                                          close from then on, and an open of the pair gets a new session;
+//                                          with "always" in the path too, every session of the pair does this
+//   any request but close, on a session of a path containing "rewritten" -> changed (side a), as above, on the
+//                                          first request of any kind
 // With MOCK_LOG set to a file name, every request is appended to it as one JSON line {method, params}.
 // With MOCK_FAIL_INIT=1 in the environment, or while the file named by MOCK_FAIL_INIT_FILE exists,
 // initialize fails (internal error).
@@ -331,7 +334,7 @@ const METHODS = {
 
   hunk(p) {
     const [id, s] = readySession(p);
-    if (s.key.includes('changes') && !changedPairs.has(s.key)) {
+    if (s.key.includes('changes') && (s.key.includes('always') || !changedPairs.has(s.key))) {
       changedPairs.add(s.key);
       s.changed = true;
       throw changedError();
@@ -437,6 +440,8 @@ function session(p) {
       session: id,
     });
   }
+  // "rewritten": the file changes under every request, the extension's own included.
+  if (s.key.includes('rewritten')) s.changed = true;
   if (s.changed) throw changedError();
   return s;
 }
