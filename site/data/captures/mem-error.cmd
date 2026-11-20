@@ -1,1 +1,1 @@
-rift --summary --mem 512K a.sql b.sql
+rift --summary --mem 64K a.sql b.sql
