@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of one per run of lines, so a line is reached by scanning less
   than one block, however long the lines, and the scan's chunk size no
   longer touches the index.
+- `rift serve` reads the bytes behind a hunk request once instead of
+  once per line: the line reader keeps what one read brought in for the
+  lines that follow. On a 64 MiB SQL pair at `--mem 256M`, the hunk
+  requests the VS Code extension sends after opening a diff took 27.6%
+  less time on an Apple M1, with the same answers and the same peak heap.
+  The CLI's diff is unchanged.
 
 ### Fixed
 
