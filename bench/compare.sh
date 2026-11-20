@@ -34,7 +34,8 @@ base=$1 head=$2 scratch=$3
 runs=${RUNS:-10}
 sorted=${SORTED:-0}
 root=$(cd "$(dirname "$0")/.." && pwd)
-lock=$(cd "$(git -C "$root" rev-parse --git-common-dir)" && pwd)/gate.lock
+# --git-common-dir can be relative to $root, so resolve it from there.
+lock=$(cd "$root" && cd "$(git rev-parse --git-common-dir)" && pwd)/gate.lock
 
 # Pair name | rift-gen args | rift args. Seed 7, 0.1% changes.
 pairs='sql-256M|--profile sql --size 256M|
