@@ -56,4 +56,11 @@ else echo "ok: the report prints no path"; fi
 if grep -q '^- head: abc1234, ' "$t/report" && grep -q '^- base: unknown commit, ' "$t/report"; then
   echo "ok: the report names the given commit"
 else echo "FAIL: the report does not name the commits" >&2; grep '^- ' "$t/report" >&2; fails=1; fi
+# Run from a directory outside the repository, the lock is still the
+# repository's: compare.sh finds it from its own tree, not the caller's.
+mkdir "$t/elsewhere"
+if (cd "$t/elsewhere" && SORTED=1 RUNS=1 PAIRS='t|x|' "$root/bench/compare.sh" "$t/base/rift" \
+  "$t/reordered/rift" "$t/scratch-elsewhere" > "$t/out" 2> "$t/err"); then
+  echo "ok: runs from outside the repository"
+else echo "FAIL: compare.sh run from outside the repository" >&2; cat "$t/err" >&2; fails=1; fi
 exit "$fails"
