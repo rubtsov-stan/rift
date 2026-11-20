@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-21
+
 ### Changed
 
 - Refinement hashes a segment's lines where it read them, in reads of up
@@ -30,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests the VS Code extension sends after opening a diff took 27.6%
   less time on an Apple M1, with the same answers and the same peak heap.
   The CLI's diff is unchanged.
+- Output change: with `csv:` and `json:` keys, a run that takes more
+  than one pass prints its changes in a different order than before. The
+  set of lines is the same, and the order still depends only on the
+  files and `--mem`, never on the thread count. Sort the output before
+  comparing it with 0.4.0. The first pass now takes the share of the key
+  hashes the tables hold, from the line count that sizes them, instead
+  of reading part of both files and starting over when the tables cannot
+  hold every key. On the 1 GiB shuffled CSV pair at `--mem 64M` a run
+  reads both files three times instead of four. A file whose first lines
+  are much shorter than the rest can take about one pass more. `copy:` runs
+  are unchanged.
 
 ### Fixed
 
@@ -122,17 +135,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `capabilities.retry_after` in `initialize`. Other clients keep the
   immediate busy answer. `initialize` ignores a capability it does not
   know and refuses a known one of the wrong type.
-- Output change: with `csv:` and `json:` keys, a run that takes more
-  than one pass prints its changes in a different order than before. The
-  set of lines is the same, and the order still depends only on the
-  files and `--mem`, never on the thread count. Sort the output before
-  comparing it with 0.4.0. The first pass now takes the share of the key
-  hashes the tables hold, from the line count that sizes them, instead
-  of reading part of both files and starting over when the tables cannot
-  hold every key. On the 1 GiB shuffled CSV pair at `--mem 64M` a run
-  reads both files three times instead of four. A file whose first lines
-  are much shorter than the rest can take about one pass more. `copy:` runs
-  are unchanged.
 
 ### Fixed
 
@@ -629,7 +631,8 @@ First release.
   installer. The minimum supported Rust version for building from source
   is 1.97.
 
-[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rubtsov-stan/rift/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/rubtsov-stan/rift/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/rubtsov-stan/rift/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/rubtsov-stan/rift/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/rubtsov-stan/rift/compare/v0.3.2...v0.3.3
