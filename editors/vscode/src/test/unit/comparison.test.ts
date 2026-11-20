@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { Link, RpcError, Server, Superseded } from '../../client';
-import { Comparison, Compares, rerunOffer } from '../../comparison';
+import { Comparison, Compares, WindowEvents, crashMessage, failureLabel, rerunOffer } from '../../comparison';
 import { OpenResult, RpcErrorObject } from '../../protocol';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -23,7 +23,7 @@ function setup(a = '/x/a.sql', mem = '256M') {
 }
 
 // A window's comparisons on the mock, logging what it is sent.
-function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: string, restarting: boolean) => void, onRestarted?: () => void, failed: (e: RpcErrorObject) => void = () => {}) {
+function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: string, restarting: boolean) => void, onRestarted?: () => void, failed: (e: RpcErrorObject) => void = () => {}, now?: () => number, extra: Partial<WindowEvents> = {}) {
   const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rift-log-')), 'log');
   const errors: unknown[] = [];
   const server: Server = new Server({
@@ -34,7 +34,7 @@ function window(env: Record<string, string> = {}, crash?: (c: Compares, reason: 
     onCrash: (reason, restarting) => crash?.(w, reason, restarting),
     onRestarted,
   });
-  const w: Compares = new Compares(server, { change() {}, failed, error: (e) => errors.push(e) });
+  const w: Compares = new Compares(server, { change() {}, failed, error: (e) => errors.push(e), ...extra }, undefined, now);
   return { server, w, errors, log: () => mockLog(log) };
 }
 
@@ -297,6 +297,283 @@ describe('Compares', () => {
     assert.ok(await w.shown!.hunk({ segment: 1 }, 3));
     await until(() => closes(log()).includes(stale.session));
     assert.strictEqual(log().filter((r) => r.method === 'open').length, 2);
+    server.dispose();
+  });
+
+  type Log = () => { method: string }[];
+  const opens = (log: Log) => log().filter((r) => r.method === 'open').length;
+  const ready = (c: Comparison) => until(() => c.state === 'ready' && c.segments.length > 0);
+  const CAP_OPENS = 4;
+  const gaveUp = (w: Compares) => /keeps changing; compare again when it settles/.test(w.shown?.error?.message ?? '');
+  // The server tells the shown session that its file changed, as it does for a request the
+  // extension sent for itself; waits for the reopen to replace it or for the give-up. The mock's
+  // session is flagged by a request that bypasses the comparison, so the reopen gets a new one.
+  async function ownChange(w: Compares, server: Server) {
+    const c = w.shown!;
+    await ready(c);
+    await server.request('hunk', { session: c.session!, segment: 1, context: 3 }).catch(() => {});
+    w.handle({ method: 'session_state', params: { session: c.session!, state: 'failed', error: { code: -32009, message: 'changed' } } }, server.epoch!);
+    await until(() => w.shown !== c || c.state === 'failed');
+  }
+  // A click on a hunk, which the server answers with `changed`; waits like ownChange.
+  async function userChange(w: Compares) {
+    const c = w.shown!;
+    await ready(c);
+    await c.hunk({ segment: 1 }, 3);
+    await until(() => w.shown !== c || c.state === 'failed');
+  }
+  // Every call of the clock is one step of this many ms, so a reopen's ready and the change it
+  // meets, the two reads of the clock, are `step` apart.
+  const stepping = (step: number) => {
+    let t = 0;
+    return () => (t += step);
+  };
+
+  it('stops reopening a pair whose file changes under every request of the extension', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => gaveUp(w));
+    assert.strictEqual(opens(log), CAP_OPENS);
+    server.dispose();
+  });
+
+  it('stops reopening when each scan outlasts the window', async () => {
+    // The clock passes a minute with every open, as it does during a scan of a large file.
+    const ref: { log?: Log } = {};
+    const { server, w, log } = window({}, undefined, undefined, undefined, () => opens(ref.log!) * 61_000);
+    ref.log = log;
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => gaveUp(w));
+    assert.strictEqual(opens(log), CAP_OPENS);
+    server.dispose();
+  });
+
+  it('reopens freely after a session stayed unchanged for the window', async () => {
+    // Three reopens at once, then a change a window after a session was ready.
+    let calls = 0;
+    const { server, w, log } = window({}, undefined, undefined, undefined, () => (++calls <= 6 ? 0 : calls * 61_000));
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => opens(log) >= CAP_OPENS + 2);
+    assert.strictEqual(w.shown!.state === 'failed', false);
+    server.dispose();
+  });
+
+  it('never gives up a pair whose changes are each a window apart', async () => {
+    const { server, w, log } = window({}, undefined, undefined, undefined, stepping(61_000));
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => opens(log) >= 7);
+    assert.strictEqual(w.shown!.state === 'failed', false);
+    server.dispose();
+  });
+
+  it('counts a clock set back as a window that is over', async () => {
+    // The change reads a clock a day before the one that stamped the session.
+    let calls = 0;
+    const { server, w, log } = window({}, undefined, undefined, undefined, () => (calls++ % 2 === 0 ? 86_400_000 : 0));
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => opens(log) >= 7);
+    assert.strictEqual(w.shown!.state === 'failed', false);
+    server.dispose();
+  });
+
+  it('reopens a pair again and again for the changes the user meets', async () => {
+    let told = 0;
+    const { server, w, log } = window({}, undefined, undefined, undefined, undefined, { keepsChanging: () => told++ });
+    await w.compare('/x/changesalways.sql', '/x/b.sql', '256M');
+    for (let i = 0; i < 6; i++) await userChange(w);
+    assert.deepStrictEqual([opens(log), w.shown!.state === 'failed', told], [7, false, 0]);
+    server.dispose();
+  });
+
+  it('lets a change the user met end the run before it', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/changesalways.sql', '/x/b.sql', '256M');
+    await ownChange(w, server);
+    await ownChange(w, server);
+    await userChange(w);
+    for (let i = 0; i < 3; i++) await ownChange(w, server);
+    // Three more reopens of the extension's own after the click, and no give-up yet.
+    assert.deepStrictEqual([opens(log), w.shown!.state === 'failed'], [7, false]);
+    await ownChange(w, server);
+    assert.ok(gaveUp(w));
+    server.dispose();
+  });
+
+  it('tells the window once when it gives a pair up', async () => {
+    let told = 0;
+    const { server, w } = window({}, undefined, undefined, undefined, undefined, { keepsChanging: () => told++ });
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => gaveUp(w));
+    assert.deepStrictEqual([gaveUp(w), told], [true, 1]);
+    server.dispose();
+  });
+
+  it('shows the message when the cap trips on a compare that is still pending', async () => {
+    // The change reaches the reopen before its open is answered and before the slow scan ends, so it is pending when it is given up.
+    const seen: { pending?: string; shown?: string }[] = [];
+    const { server, w } = window({}, undefined, undefined, undefined, undefined, { change: () => seen.push({ pending: w.pending?.error?.message, shown: w.shown?.error?.message }) });
+    const seed = new Comparison(server, '/x/lag-slow-changesalways.sql', '/x/b.sql', '256M', { change() {}, failed() {} });
+    seed.reopens = 3;
+    const opening = w.compare('/x/lag-slow-changesalways.sql', '/x/b.sql', '256M', seed);
+    await until(() => w.pending !== undefined && server.epoch! > 0);
+    w.handle({ method: 'session_state', params: { session: 1, state: 'failed', error: { code: -32009, message: 'changed' } } }, server.epoch!);
+    await opening;
+    assert.ok(gaveUp(w));
+    assert.ok(seen.some((e) => e.shown), 'a change event saw the message on the shown comparison');
+    assert.deepStrictEqual(seen.filter((e) => e.pending && !e.shown), [], 'no change event sees the message before the swap');
+    server.dispose();
+  });
+
+  it('leaves nothing of the notices it stopped replaying when it gave the pair up', async () => {
+    const { server, w } = window();
+    const seed = new Comparison(server, '/x/lag-slow-changesalways.sql', '/x/b.sql', '256M', { change() {}, failed() {} });
+    seed.reopens = 3;
+    const opening = w.compare('/x/lag-slow-changesalways.sql', '/x/b.sql', '256M', seed);
+    await until(() => w.pending !== undefined && server.epoch! > 0);
+    const epoch = server.epoch!;
+    w.handle({ method: 'session_state', params: { session: 1, state: 'failed', error: { code: -32009, message: 'changed' } } }, epoch);
+    w.handle({ method: 'progress', params: { session: 1, phase: 'scan', done: 1, total: 2 } }, epoch);
+    await opening;
+    assert.ok(gaveUp(w));
+    assert.strictEqual(w.shown!['early'].size, 0);
+    server.dispose();
+  });
+
+  it('does not reopen a pair it gave up when the server crashes', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => gaveUp(w));
+    assert.deepStrictEqual(w.lost('exited', true, false), { reopened: false, givenUp: true });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.strictEqual(opens(log), CAP_OPENS);
+    assert.ok(gaveUp(w));
+    server.dispose();
+  });
+
+  it('reopens a pair that failed with changed outside the cap when the server crashes, and keeps its label', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/b.sql', '/x/a.sql', '256M');
+    const c = w.shown!;
+    await ready(c);
+    // Any other path that ends a pair with this code, `open()`'s catch for one.
+    const error = { code: -32009, message: 'a: file changed since it was opened; open the files again' };
+    c.gone(error);
+    assert.strictEqual(failureLabel(c.error, c.givenUp), `Scan failed: ${error.message}`);
+    assert.deepStrictEqual(w.lost('exited', true, false), { reopened: true, givenUp: false });
+    await until(() => opens(log) === 2);
+    server.dispose();
+  });
+
+  it('buffers no notice for a pair it gave up', async () => {
+    const { server, w } = window();
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => gaveUp(w));
+    w.handle({ method: 'progress', params: { session: 99, phase: 'scan', done: 1, total: 2 } }, server.epoch!);
+    assert.strictEqual(w.shown!['early'].size, 0);
+    server.dispose();
+  });
+
+  it('takes a change met by a user request that joined a load the extension started as a user change', async () => {
+    const users: boolean[] = [];
+    const ref: { cmp?: Comparison } = {};
+    const server = new Server({ command: mockBinary, args: [], onNotification: (n) => ref.cmp?.handle(n), onCrash: () => {}, onRestarted: () => {} });
+    const cmp = new Comparison(server, '/x/rewritten.sql', '/x/b.sql', '256M', { change() {}, failed() {}, changed: (user) => users.push(user) });
+    ref.cmp = cmp;
+    await cmp.open();
+    // The extension's own load is in flight when the user asks for the next page.
+    void cmp.loadSegments();
+    void cmp.loadSegments(true);
+    await until(() => users.length > 0);
+    assert.deepStrictEqual(users, [true]);
+    server.dispose();
+  });
+
+  it('starts the count again when the user compares the files again and the server reuses the session', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/changesalways.sql', '/x/b.sql', '256M');
+    await ownChange(w, server);
+    await ownChange(w, server);
+    const kept = w.shown!;
+    await ready(kept);
+    // The session of the pair is not flagged: the server answers the open with it.
+    await w.compare('/x/changesalways.sql', '/x/b.sql', '256M');
+    assert.deepStrictEqual([w.shown === kept, kept.reopens, opens(log)], [true, 0, 4]);
+    // A full run of three more reopens, then the give-up.
+    for (let i = 0; i < 3; i++) await ownChange(w, server);
+    assert.strictEqual(w.shown!.state === 'failed', false);
+    await ownChange(w, server);
+    assert.ok(gaveUp(w));
+    server.dispose();
+  });
+
+  it('leaves a replaced comparison alone once the replay found it no longer live', async () => {
+    const { server, w } = window();
+    // The open is answered ready, by the session the first one made.
+    await w.compare('/x/lag-reuse.sql', '/x/b.sql', '256M');
+    await until(() => w.shown?.state === 'ready');
+    const opening = w.compare('/x/lag-reuse.sql', '/x/b.sql', '256M');
+    await until(() => w.pending !== undefined);
+    const old = w.pending!;
+    // A change below the cap reopens the pending compare, which replaces it.
+    w.handle({ method: 'session_state', params: { session: 1, state: 'failed', error: { code: -32009, message: 'changed' } } }, server.epoch!);
+    await opening;
+    assert.strictEqual(old.readyAt, undefined);
+    server.dispose();
+  });
+
+  it('compares a pair that kept changing again when the user asks', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    await until(() => gaveUp(w));
+    assert.strictEqual(opens(log), CAP_OPENS);
+    await w.compare('/x/rewritten.sql', '/x/b.sql', '256M');
+    // A new count: the compare's own open, then three reopens, then the give-up again.
+    await until(() => opens(log) === 2 * CAP_OPENS && gaveUp(w));
+    server.dispose();
+  });
+
+  it('starts the count again on a rerun', async () => {
+    const { server, w, log } = window();
+    await w.compare('/x/changesalways.sql', '/x/b.sql', '256M');
+    // Two reopens made: one more is left before the cap.
+    await ownChange(w, server);
+    await ownChange(w, server);
+    await w.rerun('256M');
+    for (let i = 0; i < 3; i++) await ownChange(w, server);
+    // The rerun's own open, then a full budget of three reopens.
+    assert.deepStrictEqual([opens(log), w.shown!.state === 'failed'], [3 + 1 + 3, false]);
+    await ownChange(w, server);
+    assert.ok(gaveUp(w));
+    server.dispose();
+  });
+
+  it('stops replaying notices once the compare was replaced', async () => {
+    const { server, w } = window();
+    // A change below the cap reopens the pending compare, which replaces it.
+    const opening = w.compare('/x/lag-slow-changesalways.sql', '/x/b.sql', '256M');
+    await until(() => w.pending !== undefined && server.epoch! > 0);
+    const old = w.pending!;
+    const epoch = server.epoch!;
+    w.handle({ method: 'session_state', params: { session: 1, state: 'failed', error: { code: -32009, message: 'changed' } } }, epoch);
+    w.handle({ method: 'progress', params: { session: 1, phase: 'scan', done: 1, total: 2 } }, epoch);
+    await opening;
+    assert.strictEqual(old.progress, undefined);
+    server.dispose();
+  });
+
+  it('keeps a give-up that came with the notices before the open answered ready', async () => {
+    const { server, w } = window();
+    // The second open is answered ready, by the session the first one made.
+    await w.compare('/x/lag-reuse.sql', '/x/b.sql', '256M');
+    await until(() => w.shown?.state === 'ready');
+    const seed = new Comparison(server, '/x/lag-reuse.sql', '/x/b.sql', '256M', { change() {}, failed() {} });
+    seed.reopens = 3;
+    const opening = w.compare('/x/lag-reuse.sql', '/x/b.sql', '256M', seed);
+    await until(() => w.pending !== undefined);
+    w.handle({ method: 'session_state', params: { session: 1, state: 'failed', error: { code: -32009, message: 'changed' } } }, server.epoch!);
+    await opening;
+    assert.ok(gaveUp(w));
+    assert.strictEqual(w.shown!.state, 'failed');
     server.dispose();
   });
 
@@ -602,6 +879,30 @@ describe('Comparison and a server that restarted', () => {
     assert.strictEqual(done(), undefined);
     cmp.handle(progress, 2);
     assert.strictEqual(done(), 1);
+  });
+});
+
+describe('crashMessage', () => {
+  const base = { reopen: false, deliberate: false, restarting: true, givenUp: false };
+  it('keeps its text for a pair that is reopened', () => {
+    assert.strictEqual(crashMessage('exited', { ...base, reopen: true }), 'exited. Restarting it.');
+  });
+  const kept = ' The pair is not opened again: its file keeps changing.';
+  it('adds that the pair is not opened again after a give-up, once, to what the server does', () => {
+    assert.strictEqual(crashMessage('exited', { ...base, givenUp: true }), `exited. Restarting it.${kept}`);
+    for (const restarting of [true, false]) {
+      assert.strictEqual(crashMessage('stopped', { ...base, deliberate: true, restarting, givenUp: true }), `stopped. Compare the files again.${kept}`);
+    }
+    assert.strictEqual(crashMessage('exited', { ...base, restarting: false, givenUp: true }), `exited. It stopped right after starting, so it is not restarted.${kept}`);
+  });
+});
+
+describe('failureLabel', () => {
+  it('says scan failed for a scan error and gives the message alone for a give-up', () => {
+    assert.strictEqual(failureLabel({ code: -32603, message: 'boom' }, false), 'Scan failed: boom');
+    assert.strictEqual(failureLabel({ code: -32009, message: 'The file keeps changing; compare again when it settles.' }, true), 'The file keeps changing; compare again when it settles.');
+    assert.strictEqual(failureLabel({ code: -32009, message: 'a: file changed' }, false), 'Scan failed: a: file changed');
+    assert.strictEqual(failureLabel(undefined, false), 'Scan failed: unknown error');
   });
 });
 

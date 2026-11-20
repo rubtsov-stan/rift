@@ -5,6 +5,14 @@
 - When `rift serve` answers `changed` (a compared file was written over after it
   was opened), the pair is compared again by itself, so the view shows the new
   contents instead of an error. A `rift` before 0.4.1 never sends `changed`.
+  A file that keeps changing, such as a log still being written, is reopened at
+  most three times in a row. Then the view shows "The file keeps changing;
+  compare again when it settles." with a warning, and stops. A change counts
+  when the extension's own requests notice it, at the end of the scan or within
+  a minute after it. One noticed more than a minute after the pair was ready
+  starts a new count at 1. A change that meets your own click reopens the pair
+  without counting and starts the count over, as does comparing the files
+  again.
 
 ## [0.4.0] - 2026-11-19
 

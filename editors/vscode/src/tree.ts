@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Comparison, rerunOffer } from './comparison';
+import { Comparison, failureLabel, rerunOffer } from './comparison';
 import { fmtRange, movedNote, num } from './format';
 import { MoveBlock, Segment } from './protocol';
 
@@ -76,7 +76,7 @@ export class RiftTree implements vscode.TreeDataProvider<Node> {
       case 'summary':
         return this.summary(c);
       case 'error': {
-        const item = new vscode.TreeItem(`Scan failed: ${c.error?.message ?? 'unknown error'}`);
+        const item = new vscode.TreeItem(failureLabel(c.error, c.givenUp));
         item.iconPath = new vscode.ThemeIcon('error');
         item.tooltip = c.error?.message;
         return item;
