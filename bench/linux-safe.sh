@@ -4,7 +4,7 @@
 #
 #   bench/linux-safe.sh [--dry-run] [--yes] [--ref REF] [--repo URL]
 #                       [--read-only-pair DIR] [--disk-dir DIR]
-#                       [--suite standard|le|tools|all] [--reps N]
+#                       [--suite standard|le|tools|all] [--reps N] [--cold]
 #
 #   --dry-run            print the plan and exit
 #   --yes                skip the 10 second wait before the run starts
@@ -22,6 +22,12 @@
 #                        DuckDB, csvdiff, qsv, daff, each if installed) on
 #                        256 MiB, 1 GiB and, with --disk-dir, 4 GiB pairs
 #   --reps N             repetitions of each repeated run, 1 to 20 (default 3)
+#   --cold               the one option that uses root: before each timed run
+#                        of an on-disk group (--disk-dir, --read-only-pair)
+#                        drop the page cache, and hold every CPU's governor at
+#                        performance for the whole run, restoring each CPU's own
+#                        afterwards. Uses sudo -n only, refreshed every 60 s
+#                        while the script runs: run sudo -v first.
 #
 # Test knobs, for running the script on a host that is not Linux. They turn
 # safety checks off; never set them for a real run:
@@ -37,13 +43,17 @@
 #   RIFT_BENCH_TOOLS_SIZES=S  tools-suite pair sizes in bytes, space-separated
 #   RIFT_BENCH_TOOLS_TIMEOUT=N  seconds before a tools-suite run is stopped
 #   RIFT_BENCH_TOOLS_TIMELINE=N pair size in bytes for the RSS timelines
+#   RIFT_SUDO=CMD          use CMD instead of sudo for --cold
+#   RIFT_SUDO_KEEPALIVE=N  seconds between the sudo -n -v refreshes (default 60)
+#   RIFT_SYSFS_CPU=DIR     use DIR instead of /sys/devices/system/cpu
+#   RIFT_DROP_CACHES=F     write to F instead of /proc/sys/vm/drop_caches
 #
 # See bench/README.md.
 set -eu
 
 GIB=1073741824
 schema=4
-repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 suite=standard reps=3 ropair=
+repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 suite=standard reps=3 ropair='' cold=0
 diskdir=
 diskroot=
 testing=${RIFT_BENCH_TESTING:-0}
@@ -53,6 +63,135 @@ outdir=$(pwd)
 
 die() { echo "linux-safe: $*" >&2; exit 1; }
 usage() { sed -n '2,/^set/p' "$0" | sed '$d' >&2; exit 2; }
+
+# cold:begin
+# --cold: page cache drops and the performance governor, through sudo -n
+# only, so a missing credential fails at the start, not mid-run.
+sudo_cmd=${RIFT_SUDO:-sudo}
+sysfs_cpu=${RIFT_SYSFS_CPU:-/sys/devices/system/cpu}
+drop_file=${RIFT_DROP_CACHES:-/proc/sys/vm/drop_caches}
+cold_saved='' cold_before='' cold_failed='' cold_skipped='' cold_keep_pid='' cold_drops=0
+cold_nl='
+'
+# `sh -c :` is what the drops and writes need, so a sudoers that allows only
+# some commands fails here and not after the build. Then one write to
+# drop_caches and each governor written back to itself prove the files take
+# writes, so a read-only /proc/sys or sysfs fails here and not after the runs.
+cold_check() {
+  $sudo_cmd -n sh -c : >/dev/null 2>&1 || die "--cold needs sudo without a prompt for sh: run sudo -v first, then rerun"
+  cold_write 3 "$drop_file" 2>/dev/null || die "--cold cannot write drop_caches ($drop_file); nothing was changed"
+  for f in "$sysfs_cpu"/cpu[0-9]*/cpufreq/scaling_governor; do
+    [ -e "$f" ] || continue
+    g=$(cat "$f" 2>/dev/null) && [ -n "$g" ] || continue
+    cold_write "$g" "$f" 2>/dev/null || die "--cold cannot write $f; nothing was changed"
+  done
+}
+# An on-disk group runs for --read-only-pair, and for --disk-dir except in the
+# tools suite, whose disk rows are in group tools.
+cold_has_disk_group() { [ -n "$ropair" ] || { [ -n "$diskdir" ] && [ "$suite" != tools ]; }; }
+# What the report says about the drops is the count that happened.
+cold_cache_desc() {
+  if [ "$cold_drops" = 0 ]; then
+    echo "no on-disk group ran, no drop"
+  else
+    echo "dropped $cold_drops times, before each timed run of the on-disk groups (sync, then echo 3 > drop_caches); not before tmpfs runs"
+  fi
+}
+# cold_ram_clause PAIR_BYTES MEM_TOTAL: the RAM remark of the on-disk note.
+cold_ram_clause() {
+  if [ "$1" -gt "$2" ]; then
+    echo "; that exceeds RAM, so most reads come from the disk."
+  elif [ "$cold" = 1 ]; then
+    echo "; that fits in RAM, so a later pass within the run can read the pair from the page cache (the drop is only before each run): these are not fully cold numbers."
+  else
+    echo "; that fits in RAM, so repeated reads may come from the page cache and these are not cold-disk numbers."
+  fi
+}
+# Keeps the credential alive for the whole run. A refresh that fails is not
+# an error here: the next real sudo -n fails the run. The loop stops when its
+# parent is gone, so a SIGKILL cannot leave it behind.
+cold_keepalive() {
+  (
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    trap - EXIT
+    while kill -0 "$$" 2>/dev/null; do
+      sleep "${RIFT_SUDO_KEEPALIVE:-60}" & s=$!
+      wait "$s" || true
+      $sudo_cmd -n -v >/dev/null 2>&1 || true
+    done
+  ) &
+  cold_keep_pid=$!
+}
+cold_keep_stop() {
+  [ -z "$cold_keep_pid" ] || { kill "$cold_keep_pid" 2>/dev/null || true; wait "$cold_keep_pid" 2>/dev/null || true; }
+  cold_keep_pid=''
+}
+# Only runs that read a pair from disk are dropped. Dropping before a tmpfs
+# run would evict the compared tools' binaries but not rift's, which sits in
+# tmpfs, and add a sudo call per run for nothing.
+cold_run_drop() {
+  [ "$cold" = 1 ] || return 0
+  case $1 in disk|read-only-pair) cold_drop ;; esac
+}
+cold_drop() {
+  sync
+  # shellcheck disable=SC2016
+  $sudo_cmd -n sh -c 'echo 3 > "$1"' sh "$drop_file" || die "could not drop the page cache (sudo -n failed; run sudo -v again)"
+  cold_drops=$((cold_drops + 1))
+}
+# cold_write VALUE FILE
+# shellcheck disable=SC2016
+cold_write() { $sudo_cmd -n sh -c 'echo "$1" > "$2"' sh "$1" "$2"; }
+# cold_cpu PATH: cpuN from a path under that CPU's cpufreq directory.
+cold_cpu() { c=${1%/cpufreq/*}; echo "${c##*/}"; }
+# Saves "VALUE PATH" lines for each CPU's governor, then its
+# energy_performance_preference when the file exists (intel_pstate and
+# amd_pstate change it with the governor), before writing the governor. A CPU
+# whose governor cannot be read is skipped and listed in $cold_skipped. A host
+# without cpufreq saves nothing.
+cold_set() {
+  for f in "$sysfs_cpu"/cpu[0-9]*/cpufreq/scaling_governor; do
+    [ -e "$f" ] || continue
+    g=$(cat "$f" 2>/dev/null) && [ -n "$g" ] || { cold_skipped="$cold_skipped$(cold_cpu "$f") "; continue; }
+    cold_saved="$cold_saved$g $f
+"
+    e=${f%scaling_governor}energy_performance_preference
+    if [ -e "$e" ] && v=$(cat "$e" 2>/dev/null) && [ -n "$v" ]; then
+      cold_saved="$cold_saved$v $e
+"
+    fi
+    cold_write performance "$f" || die "could not set the governor of $f (sudo -n failed)"
+  done
+}
+# Writes back in saved order (governor, then its preference). An entry leaves
+# $cold_saved only after its write was attempted, so a signal in the middle
+# lets the exit trap finish the rest. A write that fails is listed in
+# $cold_failed with what the file holds now. Safe to call twice; runs from the
+# exit trap, so it never dies.
+cold_restore() {
+  [ -n "$cold_saved" ] || return 0
+  [ -n "$cold_before" ] || cold_before=$cold_saved
+  while [ -n "$cold_saved" ]; do
+    line=${cold_saved%%"$cold_nl"*}
+    g=${line%% *} p=${line#* }
+    if ! cold_write "$g" "$p" 2>/dev/null; then
+      now=$(cat "$p" 2>/dev/null || echo unreadable)
+      cold_failed="$cold_failed$(cold_cpu "$p") ${p##*/} left on $now (wanted $g); "
+      echo "linux-safe: could not restore $p to $g" >&2
+    fi
+    cold_saved=${cold_saved#"$line$cold_nl"}
+  done
+}
+# cold_vals KIND [now]: the distinct values saved for scaling_governor or
+# energy_performance_preference, or those the files hold now.
+cold_vals() {
+  printf '%s' "$cold_before$cold_saved" | while read -r g p; do
+    case $p in */"$1") if [ "${2:-}" = now ]; then cat "$p"; else echo "$g"; fi ;; esac
+  done | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+# The governor of cpu0 as the runs see it: read after cold_set.
+cold_host_governor() { cat "$sysfs_cpu/cpu0/cpufreq/scaling_governor" 2>/dev/null || echo unreadable; }
+# cold:end
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -64,6 +203,7 @@ while [ $# -gt 0 ]; do
     --disk-dir) [ $# -ge 2 ] || usage; diskdir=$2; shift 2 ;;
     --suite) [ $# -ge 2 ] || usage; suite=$2; shift 2 ;;
     --reps) [ $# -ge 2 ] || usage; reps=$2; shift 2 ;;
+    --cold) cold=1; shift ;;
     *) usage ;;
   esac
 done
@@ -75,6 +215,7 @@ if [ "$testing" != 1 ]; then
   [ "$(uname -s)" = Linux ] || die "Linux only"
   "$timebin" -v true >/dev/null 2>&1 || die "GNU time not found at $timebin (package: time)"
 fi
+[ "$cold" = 0 ] || [ "$dry" = 1 ] || cold_check
 command -v cargo >/dev/null 2>&1 ||
   die "cargo not found. Install a Rust toolchain with rustup first; this script does not install one."
 command -v git >/dev/null 2>&1 || die "git not found"
@@ -291,6 +432,16 @@ plan() {
     echo "  disk runs         cat a b | wc -c, rift --summary, rift --stats, all --mem 256M, one run each, cap 1 GiB; diff and git diff skipped: they need several times the pair in memory"
     echo "  disk time         about $(awk -v b="$((2 * disksize))" 'BEGIN { printf "%d to %d minutes", b * 4 / 500e6 / 60, b * 4 / 100e6 / 60 }') (four passes over the pair at 500 to 100 MB/s, plus the build and the other runs)"
   fi
+  if [ "$cold" = 1 ]; then
+    ngov=$(cat "$sysfs_cpu"/cpu[0-9]*/cpufreq/scaling_governor 2>/dev/null | wc -l | tr -d ' ')
+    cold_has_disk_group || echo "  warning           --cold: no on-disk group (--read-only-pair, or --disk-dir without --suite tools): no page cache will be dropped, only the governor is set"
+    echo "  cold runs         page cache dropped before each timed run of the on-disk groups, not before tmpfs runs (sync, then sudo -n, echo 3 > drop_caches); needs sudo -v first"
+    if [ "$ngov" -gt 0 ]; then
+      echo "  governor          performance on $ngov CPUs for the run (now: $(cat "$sysfs_cpu"/cpu[0-9]*/cpufreq/scaling_governor | sort -u | tr '\n' ' ' | sed 's/ $//')), each CPU's own restored afterwards"
+    else
+      echo "  governor          no cpufreq files under $sysfs_cpu: only the cache drops"
+    fi
+  fi
   echo "  output            rift-bench-$label.tar.gz in the current directory"
 }
 
@@ -366,6 +517,8 @@ fi
 scratch=$base/rift-bench-$$
 diskwork=
 cleanup() {
+  cold_restore
+  cold_keep_stop
   case $scratch in
     */rift-bench-*) rm -rf "$scratch" ;;
   esac
@@ -379,6 +532,8 @@ mkdir -m 700 "$scratch" || die "$scratch already exists; remove it or rerun"
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'exit 129' HUP
+[ "$cold" = 0 ] || cold_keepalive
 
 raw=$scratch/pkg/raw
 mkdir -p "$raw" "$scratch/bin"
@@ -430,7 +585,6 @@ fact cpu_model "$cpu_model"
 fact cpu_threads "$cpus"
 fact cpu_cores_per_socket "$(lscpu_get 'Core(s) per socket')"
 fact cpu_sockets "$(lscpu_get 'Socket(s)')"
-fact cpu_governor "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unreadable)"
 fact mem_total_bytes "$mem_total"
 fact mem_available_bytes "$avail"
 fact kernel "$(uname -r)"
@@ -451,6 +605,18 @@ if [ -n "$diskdir" ]; then
   fact disk_pair_size_bytes "$disksize"
 fi
 fact load_before "$(loadavg)"
+if [ "$cold" = 1 ]; then
+  cold_set
+  if [ -n "$cold_saved" ]; then
+    fact cold_governor "performance on every CPU for the runs; before: $(cold_vals scaling_governor); energy_performance_preference before: $(cold_vals energy_performance_preference)"
+  else
+    fact cold_governor "unchanged: no cpufreq files under $sysfs_cpu (VM or no cpufreq); cache drops only"
+    note "--cold: no cpufreq files under $sysfs_cpu, so the governor was not changed; only the cache was dropped before each run"
+  fi
+  [ -z "$cold_skipped" ] || note "--cold: governor not readable, left alone: $cold_skipped"
+fi
+# After cold_set, so a cold report names the governor the runs used.
+fact cpu_governor "$(cold_host_governor)"
 
 # ---- measured runs ---------------------------------------------------------
 
@@ -507,6 +673,7 @@ run_one() {
     return
   fi
   echo "[$id] $grp $prof $(gib "$sz") $tool threads=$thr rep=$rep" >&2
+  cold_run_drop "$grp"
   unit=
   case $limiter in
     systemd)
@@ -975,7 +1142,7 @@ if [ -n "$diskdir" ] && [ "$suite" != tools ]; then
     note "on-disk pair not run: rift-gen failed in $diskroot (log in raw/)"
   fi
   rm -rf "$diskwork"; diskwork=
-  note "on-disk pair: $disk_fstype on $disk_dev, $disk_model ($disk_rot). The script cannot drop the page cache without root, so the cache state is whatever the host had: the pair was written just before the first read, so the last pages of B may be cached. A and B together are $(gib $((2 * disksize))) against $(gib "$mem_total") of RAM; $(if [ $((2 * disksize)) -gt "$mem_total" ]; then echo "that exceeds RAM, so most reads come from the disk"; else echo "that fits in RAM, so repeated reads may come from the page cache and these are not cold-disk numbers"; fi). Reads run at idle I/O priority (ionice -c3), which can lengthen them on a busy disk. diff and git diff were not run: GNU diff holds far more than the 1 GiB rift cap for files this size."
+  note "on-disk pair: $disk_fstype on $disk_dev, $disk_model ($disk_rot). $(if [ "$cold" = 1 ]; then echo "The page cache was dropped before each timed run of this group (--cold)."; else echo "The script cannot drop the page cache without root (no --cold), so the cache state is whatever the host had: the pair was written just before the first read, so the last pages of B may be cached."; fi) A and B together are $(gib $((2 * disksize))) against $(gib "$mem_total") of RAM$(cold_ram_clause $((2 * disksize)) "$mem_total") Reads run at idle I/O priority (ionice -c3), which can lengthen them on a busy disk. diff and git diff were not run: GNU diff holds far more than the 1 GiB rift cap for files this size."
 fi
 
 fact load_after "$(loadavg)"
@@ -983,6 +1150,15 @@ fact load_after "$(loadavg)"
 
 # ---- report ----------------------------------------------------------------
 
+if [ "$cold" = 1 ]; then
+  fact cold_cache "$(cold_cache_desc)"
+  g_before=$(cold_vals scaling_governor)
+  cold_restore
+  if [ -n "$cold_before" ]; then
+    fact cold_governor_restored "$(cold_vals scaling_governor now) (was $g_before); energy_performance_preference now: $(cold_vals energy_performance_preference now)${cold_failed:+; NOT RESTORED: $cold_failed}"
+    [ -z "$cold_failed" ] || note "--cold: restore failed, the host was left on: $cold_failed"
+  fi
+fi
 pkg=$scratch/pkg
 # Input lines are tagged F (fact), N (note) or R (run) so one awk can read all three.
 { awk '{print "F\t" $0}' "$facts"; awk '{print "N\t" $0}' "$notes"; awk '{print "R\t" $0}' "$runs"; } | awk -F'\t' -v schema="$schema" '

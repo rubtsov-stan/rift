@@ -52,7 +52,7 @@ Needs: Linux, a non-root user, `cargo` (from rustup), `git`, network access to c
 - The clone, the build, `CARGO_HOME`, `CARGO_TARGET_DIR`, the generated files and all logs are in that directory. After the build the binaries are copied out and the target directory, crate cache and clone are deleted.
 - A trap on exit, error, Ctrl-C and termination removes the directory. A power loss does the same, since it is RAM.
 - The only disk write is the result archive, unless `--disk-dir` is given (below). Outside that, `systemd-run` leaves a few lines in the journal, and cargo is pointed away from `~/.cargo`.
-- Does not run as root, call `sudo`, drop caches or change kernel settings. It never installs rustup or a toolchain (`RUSTUP_AUTO_INSTALL=0`); if a ref pins a toolchain you do not have, the build stops. Settings in `~/.cargo/config.toml` do not apply, because `CARGO_HOME` moves.
+- Without `--cold` it does not run as root, call `sudo`, drop caches or change kernel settings; with it, only the two changes under "Cold runs" below. It never installs rustup or a toolchain (`RUSTUP_AUTO_INSTALL=0`); if a ref pins a toolchain you do not have, the build stops. Settings in `~/.cargo/config.toml` do not apply, because `CARGO_HOME` moves.
 - Each measured command runs as `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0 nice -n 10 ionice -c3 /usr/bin/time -v ...`. Without a systemd user session it falls back to `prlimit --as=<cap>` (an address-space limit, stricter than RSS) and says so in the report. With neither, `diff` and `git diff` are skipped.
 - Caps: 1 GiB for rift, 1.5 GiB for the `--mem 1G` run (its heap alone is 1 GiB; the extra half GiB comes out of the margin below), 3 times the pair for `diff` and `git diff`. `rift-gen` runs under a cap of the pair it writes plus 1 GiB, because files written to tmpfs count against the memory cap of the process that writes them.
 - Sizing: the largest pair of 1, 2, 4, 8 or 16 GiB for which `2 x size + 1 GiB cap + 2 GiB margin` stays within 60% of `MemAvailable` and the pair plus 1 GiB fits the tmpfs. Below 8.4 GiB of `MemAvailable` not even a 1 GiB pair fits, and the script stops. Pairs of 1 GiB and of the largest size are run, one pair at a time; the small one is deleted before the large one is generated.
@@ -95,7 +95,7 @@ Refused unless `DIR` exists, is writable, is not tmpfs or ramfs, and has free sp
 
 `diff` and `git diff` are skipped at this size: they hold several times the pair in memory and would only be killed by their cap. The report records the file system type and, when `/sys` shows it without root, the device and its model and whether it is rotational; otherwise `unreadable`.
 
-The script cannot drop the page cache without root and does not try. Read passes are neither cold nor warm by construction: the pair is written just before the first read, so the tail of B may be cached. When A and B together exceed `MemTotal`, most reads hit the disk; the report states which case applies, from `MemTotal`.
+Without `--cold` the script cannot drop the page cache and does not try. Read passes are then neither cold nor warm by construction: the pair is written just before the first read, so the tail of B may be cached. When A and B together exceed `MemTotal`, most reads hit the disk; the report states which case applies, from `MemTotal`.
 
 ```sh
 bench/linux-safe.sh --disk-dir /path/on/real/disk
@@ -122,10 +122,24 @@ pipx install daff                     # pip --user is refused on Ubuntu 24.04 an
 bench/linux-safe.sh --suite tools --reps 5 --ref main --dry-run
 ```
 
+### Cold runs (`--cold`)
+
+Off by default; without it the script stays root-free and behaves as before. For a cold-disk comparison, run `sudo -v` first and then:
+
+```sh
+bench/linux-safe.sh --cold --disk-dir /path/on/real/disk --dry-run   # what it would do, nothing done
+bench/linux-safe.sh --cold --disk-dir /path/on/real/disk
+```
+
+- Before each timed run of an on-disk group (`disk` for `--disk-dir`, `read-only-pair` for `--read-only-pair`): `sync`, then `sudo -n sh -c 'echo 3 > /proc/sys/vm/drop_caches'`. Runs on tmpfs pairs are not dropped: that would evict the binaries of the tools being compared (rift's own sits in tmpfs) and bias the tools suite toward rift, for no change to the numbers. The `--suite tools` rows that read a pair from `--disk-dir` are in group `tools`, so they are not dropped either.
+- From after the build to the end of the runs, every CPU's cpufreq governor is `performance`. Each CPU's own governor is saved first and restored afterwards, on normal exit, error, Ctrl-C, termination and hangup (`SIGHUP`, an SSH drop). The hangup trap is armed for every run, with or without `--cold`: a hangup now runs the cleanup and removes the scratch directory instead of leaving it. On intel_pstate and amd_pstate hosts the governor change can also change `cpufreq/energy_performance_preference`; where that file exists it is saved and restored per CPU too. A CPU whose governor cannot be read is left alone and noted. A signal during the restore itself does not strand the remaining CPUs: an entry is dropped from the saved list only after its write was attempted, so the exit trap finishes the rest. If the host has no cpufreq files (a VM, for example), the governor is left alone, the report says so, and only the cache drops happen.
+- Only `sudo -n` is used, never a prompt. At the start it runs `sudo -n sh -c :` (the command the drops and writes use): if that fails, because the credential is missing or sudoers does not allow `sh`, the script exits with "run sudo -v first", before it changes anything. It then proves the writes work: one write to `drop_caches` (a drop, no other effect) and each CPU's current governor written back to itself. A read-only `/proc/sys` or a sysfs that rejects writes stops the run there, not after the runs. While the run lasts, a background loop runs `sudo -n -v` every 60 s to keep the credential from expiring during the build or the restore; it is stopped on exit, error and signals. If a refresh fails, the next `sudo -n` fails the run, so warm numbers are never recorded as cold. `--dry-run` does not check or call sudo and starts no loop.
+- The report's Host section records `cpu_governor` (read after the change, so it is what the runs used), `cold_cache` (the number of drops that happened, or "no on-disk group ran, no drop"; `--dry-run` and the start of a real run warn when `--cold` has no on-disk group, that is without `--read-only-pair` and without `--disk-dir` outside `--suite tools`), `cold_governor` (what ran, and the governors and preferences before) and `cold_governor_restored` (what the files held after the restore). If a restore write failed, `cold_governor_restored` ends with `NOT RESTORED:` and each CPU, file and the value it was left on, and a note says the same. The drop is only before each run, so a pair that fits in RAM (`2 x size` below `MemTotal`) can still be read from the page cache by a later pass within the same run; the report's note on the on-disk pair says so, and those are not fully cold numbers. `bench/cold-test.sh` checks the save, set and restore logic, the checks at the start and the keep-alive against a fake cpufreq tree and a fake sudo, and CI runs it.
+
 ### What it does not do
 
 - It does not measure the disk, except through `--read-only-pair` and `--disk-dir`.
-- It does not control CPU frequency, other load or turbo; read the governor and load lines before trusting a number.
+- Without `--cold` it does not control CPU frequency; with it, it sets the governor but not turbo. It does not control other load: read the governor and load lines before trusting a number.
 - Outside `--suite tools`, it does not compare against other diff tools beyond GNU `diff` and `git diff`.
 - A build of a ref newer than `v0.1.0` (the default `v0.2.0` is) uses the toolchain that ref pins; a `v0.1.0` build uses the stable `cargo` of the host, and the report records the rustc.
 
@@ -145,3 +159,7 @@ These knobs turn safety checks off. They exist so the plan, sizing, report and c
 | `RIFT_BENCH_TOOLS_SIZES="S ..."` | tools-suite pair sizes in bytes |
 | `RIFT_BENCH_TOOLS_TIMEOUT=N` | seconds before a tools-suite run is stopped, instead of 600 |
 | `RIFT_BENCH_TOOLS_TIMELINE=N` | pair size in bytes for the RSS timelines, instead of 1 GiB |
+| `RIFT_SUDO=CMD` | command used instead of `sudo` for `--cold` |
+| `RIFT_SUDO_KEEPALIVE=SECONDS` | interval of the `sudo -n -v` refresh, instead of 60 |
+| `RIFT_SYSFS_CPU=DIR` | cpufreq root instead of `/sys/devices/system/cpu` |
+| `RIFT_DROP_CACHES=FILE` | file written instead of `/proc/sys/vm/drop_caches` |
