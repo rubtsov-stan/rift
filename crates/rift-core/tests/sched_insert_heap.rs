@@ -79,8 +79,7 @@ fn finished_hunks_and_new_jobs_fit_the_refine_half() {
         .collect();
     let budget = Budget::new(Bytes::mib(2));
     let half = budget.capacity(Half::Refine).0;
-    let base = alloc::current().0;
-    alloc::reset_peak();
+    let base = alloc::reset_peak().0;
     // The work share is what Scheduler::new leaves: half of the rest of
     // the Refine half after the row table.
     let table = 24 * n + 8 * n.div_ceil(4096);

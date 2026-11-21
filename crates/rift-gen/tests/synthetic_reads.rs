@@ -14,8 +14,7 @@ static ALLOC: CountingAlloc = CountingAlloc;
 fn main() {
     let a = Synthetic::new(7, 1 << 30, 0.001, Side::A);
     let mut buf = vec![0u8; 1 << 20];
-    let base = alloc::current().0;
-    alloc::reset_peak();
+    let base = alloc::reset_peak().0;
     for k in 0..64u64 {
         a.read_at(&mut buf, ByteOffset(k * 16_777_259)).unwrap();
     }

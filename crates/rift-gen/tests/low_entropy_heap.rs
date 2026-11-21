@@ -57,8 +57,7 @@ fn peak(a: &Arc<[u8]>, b: &Arc<[u8]>, mem: Bytes) -> u64 {
         old: label,
         new: label,
     };
-    let base = alloc::current().0;
-    alloc::reset_peak();
+    let base = alloc::reset_peak().0;
     let diff = Diff::new(Arc::clone(a), Arc::clone(b), &Budget::new(mem), 4).unwrap();
     diff.write_unified(&opts, Sink).unwrap();
     drop(diff);

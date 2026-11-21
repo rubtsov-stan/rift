@@ -16,8 +16,7 @@ const SLACK: u64 = 1 << 20;
 
 #[test]
 fn counters_follow_a_large_allocation() {
-    let before = alloc::current().0;
-    alloc::reset_peak();
+    let before = alloc::reset_peak().0;
     let v = vec![1u8; BIG];
     assert!(alloc::current().0 >= before + BIG_U64 - SLACK);
     assert!(alloc::peak().0 >= before + BIG_U64 - SLACK);

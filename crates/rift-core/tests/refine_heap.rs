@@ -75,8 +75,7 @@ fn heap_stays_within_the_estimate() {
     let mut r = Refiner::new(1000);
     // First call grows the line buffers; the second is measured.
     r.refine(&seg, &ha, &hb, &ma, &mb, &mut res).unwrap();
-    let before = alloc::current().0;
-    alloc::reset_peak();
+    let before = alloc::reset_peak().0;
     let hunk = r.refine(&seg, &ha, &hb, &ma, &mb, &mut res).unwrap();
     let peak = alloc::peak().0 - before;
     let hunk_bytes = (hunk.edits.capacity() * size_of::<Edit>()) as u64;

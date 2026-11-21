@@ -22,8 +22,7 @@ fn key_mode_peaks_under_the_budget() {
     for mem in [Bytes::mib(1), Bytes::mib(4), Bytes::mib(64)] {
         let budget: &'static Budget = Box::leak(Box::new(Budget::new(mem)));
         alloc::watch(budget);
-        let before = alloc::current().0;
-        alloc::reset_peak();
+        let before = alloc::reset_peak().0;
         let mut changes = 0u64;
         let report = compare(&a[..], &b[..], &spec, budget, |_| {
             changes += 1;
