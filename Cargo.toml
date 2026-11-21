@@ -61,3 +61,10 @@ inherits = "release"
 # Release binaries are built with the release profile the benchmarks use.
 [profile.dist]
 inherits = "release"
+
+# The heavy tests (`--ignored`): release code without the fat-LTO link of
+# every test binary.
+[profile.release-test]
+inherits = "release"
+lto = false
+codegen-units = 16
