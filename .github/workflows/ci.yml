@@ -126,6 +126,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: compare.sh tells reordered output from changed output
         run: bench/compare-test.sh
+      - name: linux-safe.sh --cold restores the governors and needs sudo -n
+        run: bench/cold-test.sh
       - run: cargo build --release -p rift-diff -p rift-gen
       - name: Summary and full diff of a 1 GiB pair stay under --mem
         run: bench/ci-mem.sh 1G 256M
