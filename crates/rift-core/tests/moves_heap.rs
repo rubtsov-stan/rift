@@ -39,8 +39,7 @@ fn check(len: usize) {
     let (moves, budget, peak) = (1..)
         .map(|k| Budget::new(Bytes(2 * k * (4 << 10))))
         .find_map(|budget| {
-            let before = alloc::current();
-            alloc::reset_peak();
+            let before = alloc::reset_peak();
             let list = Moves::list_bytes(pairs.len(), &budget);
             let list = budget.try_reserve(Half::Refine, list).ok();
             let m = Moves::find(pairs, map.segments(), &ra, &rb, CAP, &budget, list).unwrap();

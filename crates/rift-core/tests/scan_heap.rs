@@ -14,8 +14,7 @@ fn a_tiny_pair_under_a_huge_budget_peaks_in_kibibytes() {
     let budget = Budget::new("1T".parse().unwrap());
     let (a, b): (&[u8], &[u8]) = (b"x\n", b"y");
     let (cfg_a, cfg_b) = ScanConfig::for_pair(Source::len(a), Source::len(b), &budget);
-    let before = alloc::current().0;
-    alloc::reset_peak();
+    let before = alloc::reset_peak().0;
     let sa = scan(a, &budget, &cfg_a).unwrap();
     let sb = scan(b, &budget, &cfg_b).unwrap();
     let peak = alloc::peak().0 - before;

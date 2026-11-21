@@ -51,8 +51,7 @@ fn one_huge_hunk_costs_the_writer_a_bounded_amount() {
         old: label("a"),
         new: label("b"),
     };
-    let base = alloc::current().0;
-    alloc::reset_peak();
+    let base = alloc::reset_peak().0;
     write_diff(&la, &lb, |i| Ok(hunks.get(i)), &opts, std::io::sink()).unwrap();
     let used = alloc::peak().0 - base;
     // The 1 MiB output buffer and a line buffer; the edits of the open hunk

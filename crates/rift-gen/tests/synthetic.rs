@@ -60,8 +60,7 @@ fn options() -> Options<'static> {
 
 /// Peak heap of `f`, measured from what is allocated when it starts.
 fn peak_of<T>(f: impl FnOnce() -> T) -> (T, Bytes) {
-    alloc::reset_peak();
-    let base = alloc::current().0;
+    let base = alloc::reset_peak().0;
     let out = f();
     (out, Bytes(alloc::peak().0 - base))
 }

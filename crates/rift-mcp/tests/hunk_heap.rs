@@ -61,8 +61,7 @@ fn a_cached_hunk_is_shared_not_copied_when_rendered() {
         "{script} bytes of edits is too few to tell"
     );
 
-    let before = alloc::current().0;
-    alloc::reset_peak();
+    let before = alloc::reset_peak().0;
     hunk_text(&diff, i, 3, 100).unwrap();
     let rise = alloc::peak().0 - before;
     assert!(

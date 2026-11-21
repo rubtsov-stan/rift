@@ -13,8 +13,7 @@ static ALLOC: CountingAlloc = CountingAlloc;
 fn a_tiny_pair_under_a_huge_budget_peaks_in_kibibytes() {
     let budget = Budget::new("1T".parse().unwrap());
     let (a, b): (&[u8], &[u8]) = (b"x\nsame\n", b"y\nsame\n");
-    let before = alloc::current().0;
-    alloc::reset_peak();
+    let before = alloc::reset_peak().0;
     let (_, _, map) = build_pair(a, b, &budget).unwrap();
     let peak = alloc::peak().0 - before;
     eprintln!("peak heap {peak} bytes");

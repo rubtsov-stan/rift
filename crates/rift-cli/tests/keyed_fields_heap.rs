@@ -22,8 +22,7 @@ fn show_fields_peaks_under_the_budget() {
     for mem in [Bytes::mib(1), Bytes::mib(4), Bytes::mib(64)] {
         let budget: &'static Budget = Box::leak(Box::new(Budget::new(mem)));
         alloc::watch(budget);
-        let before = alloc::current().0;
-        alloc::reset_peak();
+        let before = alloc::reset_peak().0;
         let mut fields = 0u64;
         let report = compare_fields(&a[..], &b[..], &spec, None, budget, |c| {
             fields += c.fields().map_or(0, |f| f.count() as u64);

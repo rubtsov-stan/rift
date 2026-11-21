@@ -71,8 +71,7 @@ pub fn config(data: &[u8]) -> (u8, &[u8]) {
 /// thread-locals) should be warmed up before the first call, or it is
 /// charged to the first input.
 pub fn peak_heap<T>(f: impl FnOnce() -> T) -> (T, Bytes) {
-    let base = alloc::current().0;
-    alloc::reset_peak();
+    let base = alloc::reset_peak().0;
     let out = f();
     (out, Bytes(alloc::peak().0.saturating_sub(base)))
 }

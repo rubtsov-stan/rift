@@ -42,9 +42,16 @@ pub fn peak() -> Bytes {
     Bytes(PEAK.load(Ordering::Relaxed) as u64)
 }
 
-/// Sets the peak to the current value.
-pub fn reset_peak() {
-    PEAK.store(CURRENT.load(Ordering::Relaxed), Ordering::Relaxed);
+/// Sets the peak to the current value, and returns that value: the
+/// baseline to measure the peak from. Reading [`current`] first instead
+/// lets another thread free in between, which leaves the peak below it.
+pub fn reset_peak() -> Bytes {
+    let now = CURRENT.load(Ordering::Relaxed);
+    PEAK.store(now, Ordering::Relaxed);
+    // An allocation between the load and the store raised the peak, and
+    // the store took it back down.
+    PEAK.fetch_max(CURRENT.load(Ordering::Relaxed), Ordering::Relaxed);
+    Bytes(now as u64)
 }
 
 #[inline]

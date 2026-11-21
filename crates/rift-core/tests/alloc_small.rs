@@ -14,8 +14,7 @@ const SLACK: u64 = 2048;
 
 #[test]
 fn alloc_zeroed_realloc_and_free_move_the_counters() {
-    let base = alloc::current().0;
-    alloc::reset_peak();
+    let base = alloc::reset_peak().0;
 
     let mut v = vec![0u8; N];
     assert!(

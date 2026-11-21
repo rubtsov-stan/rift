@@ -24,8 +24,7 @@ fn show_records_peaks_under_the_budget() {
     for mem in [Bytes::mib(1), Bytes::mib(4), Bytes::mib(64)] {
         let budget: &'static Budget = Box::leak(Box::new(Budget::new(mem)));
         alloc::watch(budget);
-        let before = alloc::current().0;
-        alloc::reset_peak();
+        let before = alloc::reset_peak().0;
         let mut reader = RecordReader::new(budget, 64 << 10).unwrap();
         let (mut records, mut bytes) = (0u64, 0u64);
         let report = compare_with_ranges(&a[..], &b[..], &spec, budget, |c| {
