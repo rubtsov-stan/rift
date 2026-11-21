@@ -32,12 +32,15 @@
    Do not tag while it is red or still running.
 
 3. Tag the commit and push the tag together with a release branch at the
-   same commit:
+   same commit, in one atomic push:
 
    ```sh
-   git tag -a vX.Y.Z -m vX.Y.Z <commit>
-   git push --atomic origin <commit>:refs/heads/release/vX.Y.Z vX.Y.Z
+   scripts/release-push.sh vX.Y.Z <commit>
    ```
+
+   The script refuses a tag that differs from `Cargo.toml` at that commit.
+   Typed into zsh by hand, `$c:refs/...` in the refspec reads as a history
+   modifier and the push fails.
 
    GitHub lets `GITHUB_TOKEN` create a release only when the target commit's
    workflow files match the tip of some branch. The release targets the
