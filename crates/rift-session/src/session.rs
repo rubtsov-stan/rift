@@ -326,18 +326,23 @@ impl Session {
     /// # Errors
     ///
     /// [`Error::NotReady`] while the session scans or after its scan
-    /// failed, [`Error::SegmentOutOfRange`], or [`Error::Segment`] with the
-    /// error the refinement failed with.
+    /// failed, [`Error::SegmentOutOfRange`], [`Error::Segment`] with the
+    /// error the refinement failed with, or [`Error::Changed`] when a file
+    /// changed since the open, which it checks when the refinement failed.
     pub fn hunk_state(&self, i: usize) -> Result<HunkState, Error> {
         self.check_segment(i)?;
-        self.built()?
-            .diff
-            .try_hunk(i)
-            .map_err(|error| Error::Segment {
-                segment: i,
-                mem: self.mem,
-                error,
-            })
+        self.built()?.diff.try_hunk(i).map_err(|error| {
+            // A file cut or rewritten under refinement fails its read;
+            // that is a change to report, not the read's error.
+            match self.check_files() {
+                Err(changed) => changed,
+                Ok(()) => Error::Segment {
+                    segment: i,
+                    mem: self.mem,
+                    error,
+                },
+            }
+        })
     }
 
     fn check_segment(&self, index: usize) -> Result<(), Error> {

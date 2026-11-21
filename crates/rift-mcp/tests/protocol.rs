@@ -7,7 +7,7 @@ use rift_core::Bytes;
 use rift_mcp::Server;
 use rift_mcp::render::{MAX_LINES, MAX_TEXT_BYTES};
 use rift_mcp::sessions::Limits;
-use rift_session::test_hooks::ScanHold;
+use rift_session::test_hooks::{RefineHold, ScanHold};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RoleClient, RunningService};
@@ -555,6 +555,35 @@ async fn a_rewrite_during_a_call_fails_it(line500: &str) {
     .await;
     let text = hunk["text"].as_str().unwrap();
     assert!(text.contains(&format!("-{line500}\n")), "{text}");
+}
+
+/// A cut after the scan and before refinement reads the segment fails the
+/// refinement's read; the call answers that the file changed.
+#[tokio::test]
+async fn a_cut_before_refinement_reads_fails_the_call_as_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let server = Server::default();
+    let c = connect(&server).await;
+    let hold = RefineHold::new(&a);
+    let args = json!({"a": a, "b": b, "line": 500, "context": 1});
+    let peer = c.peer().clone();
+    let call = tokio::spawn(async move {
+        let params = CallToolRequestParams::new("hunks_at")
+            .with_arguments(args.as_object().unwrap().clone());
+        peer.call_tool(params).await.unwrap()
+    });
+    while !hold.holding() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    rewrite(&a, "line 1\n");
+    drop(hold);
+    let refused = call.await.unwrap();
+    assert_eq!(refused.is_error, Some(true), "{refused:?}");
+    assert!(
+        format!("{refused:?}").contains("a: file changed since it was opened; call again"),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]

@@ -188,6 +188,8 @@ impl Source for FileSource {
     fn read_at(&self, buf: &mut [u8], offset: ByteOffset) -> io::Result<usize> {
         let left = self.len.saturating_sub(offset.0);
         let n = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+        #[cfg(feature = "test-hooks")]
+        crate::test_hooks::refine_read(&self.path);
         let got = self.file.read_at(&mut buf[..n], offset.0)?;
         #[cfg(feature = "test-hooks")]
         crate::test_hooks::count_read(got);

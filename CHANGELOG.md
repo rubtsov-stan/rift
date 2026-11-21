@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `rift serve` answers `changed` instead of `io` for a hunk whose
+  refinement failed because a file was cut or rewritten after the open.
+  The VS Code extension reopens the pair on `changed`; on `io` it showed
+  an error.
+- `rift-mcp`'s `hunks_at` answers that the file changed when a file was
+  cut after the open, instead of an internal error from a panic.
+
 ## [0.4.1] - 2026-11-21
 
 ### Changed

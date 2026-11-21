@@ -502,7 +502,7 @@ LSP client libraries already know.
 | -32004 | `too_large` | `mem` is over `limits.max_session_mem` | `mem_bytes`, `max_mem_bytes` | `rift_session::Error::MemOverLimit` |
 | -32005 | `busy` | no room for another session, or the session's response pool is in use | `what`: `sessions` or `responses`; `retry_after_ms` | `rift_session::Error::{Busy, ResponsesBusy}` |
 | -32006 | `unknown_session` | the session was closed, dropped for room or idleness, or never existed | `session` | `rift_session::Error::UnknownSession` |
-| -32007 | `io` | a file failed to read after it was opened, for instance it was truncated | none | `rift_core::Error::Io` |
+| -32007 | `io` | a file failed to read after it was opened: the scan (in a failed session's `error`), even when a truncation caused it; a request or a refinement only while both files still match the `open`, else it answers `changed` | none | `rift_core::Error::Io` |
 | -32008 | `not_ready` | `segments`, `hunk`, `moves` or `set_visible` on a session that is `scanning` or `failed` | `session`, `state`; scan `progress` while scanning; `error` when failed | `rift_session::Error::NotReady` |
 | -32009 | `changed` | a file of the session changed since `open`, found by this request or an earlier one; `open` the pair again | `side`: the first file found changed, `a` or `b` | `rift_session::Error::Changed` |
 
