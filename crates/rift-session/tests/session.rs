@@ -8,7 +8,8 @@ use rift_core::{BudgetExceeded, Bytes, DiffView, HunkState, LineNo, SegmentStatu
 use rift_session::file::Reason;
 use rift_session::{
     At, Eol, Error, ExcerptRequest, Limits, MovesState, Session, SessionId, SessionState, Sessions,
-    Side, code, test_hooks::ScanHold,
+    Side, code,
+    test_hooks::{RefineHold, ScanHold},
 };
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> String {
@@ -959,4 +960,39 @@ fn a_rewrite_of_the_same_length_fails_the_session() {
 #[test]
 fn a_rewrite_of_another_length_fails_the_session() {
     a_rewrite_between_requests_fails_the_session("a longer line 10");
+}
+
+/// A cut before refinement reads the segment fails its read; the session
+/// answers `changed`, not the read's error, whichever request sees it.
+#[test]
+fn a_file_cut_before_refinement_reads_it_answers_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let s = sessions();
+    let hold = RefineHold::new(&a);
+    let session = open(&s, &a, &b);
+    rewrite(&a, b"line 1\n");
+    drop(hold);
+
+    let began = Instant::now();
+    let state = loop {
+        match session.hunk_state(1) {
+            Ok(HunkState::Pending) if began.elapsed() < Duration::from_secs(10) => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            other => break other,
+        }
+    };
+    assert_eq!(
+        state.as_ref().err().map(Error::code),
+        Some(CHANGED),
+        "{state:?}"
+    );
+    let excerpt = session.excerpt(&ExcerptRequest::new(At::Segment(1)));
+    assert_eq!(
+        excerpt.as_ref().err().map(Error::code),
+        Some(CHANGED),
+        "{excerpt:?}"
+    );
+    assert_eq!(session.state(), SessionState::Failed);
 }

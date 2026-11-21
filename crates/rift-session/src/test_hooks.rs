@@ -50,6 +50,63 @@ pub(crate) fn wait(a: &str) {
     }
 }
 
+/// Live [`RefineHold`]s, so a read looks for a hold file only while one
+/// exists.
+static REFINE_HOLDS: AtomicU64 = AtomicU64::new(0);
+/// Reads a [`RefineHold`] is holding now.
+static HELD_READS: AtomicU64 = AtomicU64::new(0);
+
+/// While alive, holds every read that a refinement worker makes of the file
+/// opened by the path given, so a test can change the file after the scan
+/// and before refinement reads it.
+#[derive(Debug)]
+pub struct RefineHold(String);
+
+impl RefineHold {
+    /// Holds refinement's reads of `path`.
+    ///
+    /// # Panics
+    ///
+    /// If the hold file next to `path` cannot be written.
+    #[must_use]
+    pub fn new(path: &str) -> Self {
+        let hold = format!("{path}.refine-hold");
+        std::fs::write(&hold, b"").expect("the hold file is writable");
+        REFINE_HOLDS.fetch_add(1, Ordering::SeqCst);
+        Self(hold)
+    }
+
+    /// Whether a refinement read waits on a hold now: the scan has ended
+    /// and refinement has begun. Counts the reads of every live hold.
+    #[must_use]
+    pub fn holding(&self) -> bool {
+        HELD_READS.load(Ordering::SeqCst) > 0
+    }
+}
+
+impl Drop for RefineHold {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        REFINE_HOLDS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Blocks a refinement worker's read of `path` while a [`RefineHold`] on
+/// it is alive.
+pub(crate) fn refine_read(path: &str) {
+    if REFINE_HOLDS.load(Ordering::SeqCst) == 0
+        || std::thread::current().name() != Some("rift-sched")
+    {
+        return;
+    }
+    let hold = format!("{path}.refine-hold");
+    HELD_READS.fetch_add(1, Ordering::SeqCst);
+    while Path::new(&hold).exists() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    HELD_READS.fetch_sub(1, Ordering::SeqCst);
+}
+
 static READS: AtomicU64 = AtomicU64::new(0);
 static READ_BYTES: AtomicU64 = AtomicU64::new(0);
 
