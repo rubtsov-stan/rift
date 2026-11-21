@@ -60,6 +60,10 @@ fn check(len: usize) {
 
 #[test]
 fn heap_stays_within_the_reservation() {
+    // The scan starts rayon's global pool on first use, and its threads go
+    // on allocating and freeing while they start, which the measurement
+    // would count. Started here, they are idle before it begins.
+    rayon::broadcast(|_| ());
     // Blocks of whole lines just under the readers' buffer, and lines
     // compared in pieces.
     check(4000);
