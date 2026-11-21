@@ -49,7 +49,9 @@ fn script(diff: &Diff<FileSource, FileSource>, i: usize) -> Result<Arc<rift_core
     diff.set_visible(LineNo(start)..LineNo(seg.a.end.0.max(start + 1)));
     let began = Instant::now();
     loop {
-        match diff.hunk(i) {
+        // `hunk` panics on a failed refinement; a file cut since the open
+        // fails it, and the caller's file check turns that into `changed`.
+        match diff.try_hunk(i).map_err(|e| e.to_string())? {
             HunkState::Ready(h) | HunkState::Approx(h) => return Ok(h),
             HunkState::Pending if began.elapsed() > HUNK_WAIT => {
                 return Err("the hunk was not computed in time".into());
