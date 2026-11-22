@@ -278,4 +278,121 @@ case $out in
 esac
 called=not-called; [ ! -e "$t/sudo-called" ] || called=called
 check "$called|$(govs "$t/s1")" "not-called|powersave schedutil " "dry run calls no sudo and changes no governor"
+
+# --suite none, --disk-cmds, --bin and ab-disk.sh, against a fake time, fake
+# rift binaries and the fake sudo and cpufreq tree.
+ab=$root/bench/ab-disk.sh
+# GNU time -v writes its report to the -o file.
+cat > "$t/faketime" <<'SH'
+#!/bin/sh
+shift
+f=$2; shift 2
+"$@"
+printf '\tExit status: %s\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.50\n\tUser time (seconds): 0.1\n\tSystem time (seconds): 0.1\n\tMaximum resident set size (kbytes): 100\n' "$?" > "$f"
+SH
+chmod +x "$t/faketime"
+# sudo -v with and without -n, and commands.
+# shellcheck disable=SC2016
+printf '#!/bin/sh\n[ "$1" = -n ] && shift\n[ "$1" = -v ] && exit 0\nexec "$@"\n' > "$t/sudo-any"
+chmod +x "$t/sudo-any"
+# fakebin DIR OUTPUT LABEL: a rift that logs LABEL and prints OUTPUT.
+fakebin() {
+  mkdir -p "$1"
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\n[ "$1" = --version ] && { echo "rift 9.9.9 test"; exit 0; }\necho "%s" >> "$RIFT_TEST_LOG"\necho "peak heap 1.0 MiB of 256 MiB (1048576 bytes)" >&2\necho "%s"\nexit 1\n' "$3" "$2" > "$1/rift"
+  printf '#!/bin/sh\nexit 0\n' > "$1/rift-gen"
+  chmod +x "$1/rift" "$1/rift-gen"
+}
+fakebin "$t/binA" same base
+fakebin "$t/binB" same head
+fakebin "$t/binC" other head
+tree "$t/s20" powersave schedutil
+mkdir -p "$t/rw" "$t/work2" "$t/work3" "$t/disk"
+echo a > "$t/rw/a"; echo b > "$t/rw/b"
+stub() {
+  env RIFT_BENCH_TESTING=1 RIFT_BENCH_MEMINFO="$t/meminfo" RIFT_BENCH_SHM="$t/shm" RIFT_BENCH_TIME="$t/faketime" \
+    RIFT_BENCH_LIMITER=none RIFT_SYSFS_CPU="$t/s20" RIFT_DROP_CACHES="$t/drop20" RIFT_SUDO="$t/sudo-any" \
+    RIFT_SUDO_KEEPALIVE=1 RIFT_TEST_LOG="$t/rift.log" "$@"
+}
+report() { tar -xzOf "$(find "$1" -name 'rift-bench-*.tar.gz' | head -n 1)" report.md 2>/dev/null || true; }
+entries() { find "$1" -mindepth 1 -maxdepth 1 | sed 's|.*/||' | sort | tr '\n' ' '; }
+rows() { printf '%s\n' "$1" | grep -c -e "$2" || true; }
+
+# --suite none --disk-cmds --bin: only the listed commands run on the read-only
+# pair, no tmpfs group, and the report names the binaries.
+: > "$t/rift.log"
+rc=0; (cd "$t/work2" && stub "$script" --yes --cold --reps 2 --suite none --bin "$t/binA" --read-only-pair "$t/rw" \
+  --disk-cmds '--stats --mem 256M,cat') > "$t/work2/console" 2>&1 || rc=$?
+rep=$(report "$t/work2")
+check "$rc:$(rows "$rep" '^| [0-9]* | ')" "0:4" "--suite none --disk-cmds runs 2 commands twice and no tmpfs group"
+check "$(rows "$rep" '^| [0-9]* | read-only-pair | existing | [0-9.]* [A-Za-z]* | \(rift --stats --mem 256M\|cat a b | wc -c\) |')" 4 \
+  "--disk-cmds runs the listed commands on the read-only pair"
+check "$(rows "$rep" '^| [0-9]* | .*\(--summary\|--mem 64M\)')" 0 "--disk-cmds leaves out the commands it does not list"
+check "$(wc -l < "$t/rift.log" | tr -d ' ')" 2 "the listed rift command ran once per repetition"
+sum=$(sha256sum "$t/binA/rift" | cut -d' ' -f1)
+case $rep in
+  *"- prebuilt_rift: sha256 $sum; rift 9.9.9 test"*"- rift_ref: prebuilt (--bin)"*) echo "ok: --bin records the binary's sha256 and --version" ;;
+  *) echo "FAIL: the report lacks the prebuilt binary's hash and version" >&2; fails=1 ;;
+esac
+case $rep in
+  *"- cold_cache: dropped 4 times"*) echo "ok: --cold dropped before each run of the on-disk group" ;;
+  *) echo "FAIL: cold_cache line: $(printf '%s\n' "$rep" | grep cold_cache)" >&2; fails=1 ;;
+esac
+
+# Without the new options the read-only pair gets today's five commands.
+rm -f "$t/work2"/rift-bench-*.tar.gz
+rc=0; (cd "$t/work2" && stub "$script" --yes --cold --reps 1 --suite none --bin "$t/binA" --read-only-pair "$t/rw") > "$t/work2/console" 2>&1 || rc=$?
+check "$rc:$(report "$t/work2" | grep '^| [0-9]* | read-only-pair ' | sed 's/^| [0-9]* | read-only-pair | existing | [0-9.]* [A-Za-z]* | //; s/ | all | .*//' | tr '\n' ';')" \
+  "0:cat a b | wc -c;rift --summary --mem 256M;rift --stats --mem 256M;rift --stats --mem 64M;rift --stats --mem 1G;" \
+  "the default set on the read-only pair is unchanged"
+
+# Refusals.
+for v in "--suite none|nothing else would run" "--disk-cmds --stats|needs --read-only-pair" \
+         "--bin $t/binA --ref main --read-only-pair $t/rw --suite none|exclude each other" \
+         "--bin $t/nope --read-only-pair $t/rw --suite none|must hold executable" \
+         "--read-only-pair $t/rw --disk-cmds summary|neither cat nor rift arguments"; do
+  rc=0
+  # shellcheck disable=SC2086
+  err=$(cd "$t/work2" && stub "$script" --dry-run ${v%%|*} 2>&1) || rc=$?
+  case $err in *"${v#*|}"*) check "$rc" 1 "refused: ${v#*|}" ;; *) echo "FAIL: ${v%%|*}: $err" >&2; fails=1 ;; esac
+done
+
+# ab-disk.sh: the plan alternates base and head, round by round.
+RIFT_AB_SIZE_MIB=1 stub "$ab" --dry-run "$t/binA" "$t/binB" "$t/disk" 3 > "$t/ab.plan" 2>&1 || true
+check "$(grep -E '^    [0-9]+\. ' "$t/ab.plan" | awk '{printf "%s%s ", $1, $2}')" "1.base 1.head 2.base 2.head 3.base 3.head " \
+  "ab-disk.sh --dry-run alternates base and head"
+check "$(grep -c -- "--cold --reps 1 --suite none .*--disk-cmds '--stats --mem 256M'" "$t/ab.plan")" 6 "ab-disk.sh plans the default command for every run"
+check "$(entries "$t/disk")" "" "ab-disk.sh --dry-run creates nothing"
+
+# ab-disk.sh end to end on stand-ins: the identity check, then base, head,
+# base, head; --keep leaves the pair, the default removes it.
+mkdir "$t/disk/rift-ab-pair"; echo a > "$t/disk/rift-ab-pair/a"; echo b > "$t/disk/rift-ab-pair/b"
+: > "$t/rift.log"
+rc=0; (cd "$t/work3" && RIFT_AB_SIZE_MIB=1 stub "$ab" --keep "$t/binA" "$t/binB" "$t/disk" 2) > "$t/ab.out" 2> "$t/ab.err" || rc=$?
+check "$rc:$(tr '\n' ' ' < "$t/rift.log")" "0:base head base head base head " "ab-disk.sh: identity check, then base and head alternate"
+check "$(grep -c '^base: median 1.5 s\|^head: median 1.5 s' "$t/ab.out"):$(grep -c '^[12]	\(base\|head\)	1.5	1	' "$t/ab.out")" "2:4" \
+  "ab-disk.sh summary has both medians and the per-run rows"
+check "$(find "$t/work3" -name 'rift-ab-disk-*.tar.gz' | wc -l | tr -d ' '):$(entries "$t/disk")" "1:rift-ab-pair " \
+  "ab-disk.sh packs a tarball, removes its work directory and keeps the pair with --keep"
+rc=0; (cd "$t/work3" && RIFT_AB_SIZE_MIB=1 stub "$ab" "$t/binA" "$t/binB" "$t/disk" 1) > /dev/null 2>&1 || rc=$?
+check "$rc:$(entries "$t/disk")" "0:" "ab-disk.sh deletes the pair without --keep"
+mkdir "$t/disk/rift-ab-pair"; echo a > "$t/disk/rift-ab-pair/a"; echo b > "$t/disk/rift-ab-pair/b"
+: > "$t/rift.log"
+rc=0; err=$(cd "$t/work3" && RIFT_AB_SIZE_MIB=1 stub "$ab" "$t/binA" "$t/binC" "$t/disk" 2 2>&1) || rc=$?
+case $err in
+  *"stdout differs"*) check "$rc:$(wc -l < "$t/rift.log" | tr -d ' ')" "1:2" "ab-disk.sh stops before timing when the outputs differ" ;;
+  *) echo "FAIL: differing outputs did not stop ab-disk.sh: $err" >&2; fails=1 ;;
+esac
+# Two builds that print nothing are not a match, and an unknown BASE is refused
+# even when HEAD resolves.
+mkdir -p "$t/binE"
+printf '#!/bin/sh\nexit 2\n' > "$t/binE/rift"; cp "$t/binE/rift" "$t/binE/rift-gen"; chmod +x "$t/binE/rift" "$t/binE/rift-gen"
+mkdir "$t/disk/rift-ab-pair"; echo a > "$t/disk/rift-ab-pair/a"; echo b > "$t/disk/rift-ab-pair/b"
+rc=0; err=$(cd "$t/work3" && RIFT_AB_SIZE_MIB=1 stub "$ab" "$t/binE" "$t/binE" "$t/disk" 1 2>&1) || rc=$?
+case $err in
+  *"printed nothing"*) check "$rc" 1 "ab-disk.sh does not take two empty outputs for a match" ;;
+  *) echo "FAIL: empty outputs passed the identity check: $err" >&2; fails=1 ;;
+esac
+rc=0; (cd "$t/work3" && RIFT_AB_SIZE_MIB=1 stub "$ab" --dry-run no-such-ref-here "$t/binB" "$t/disk" 1) > /dev/null 2>&1 || rc=$?
+check "$rc" 1 "ab-disk.sh refuses an unknown BASE when HEAD resolves"
 exit "$fails"

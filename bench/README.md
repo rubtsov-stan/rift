@@ -1,6 +1,6 @@
 # Benchmarks
 
-`run.sh`, `data.sh`, `compare.sh` and `ci-mem.sh` are the macOS and CI tools. `linux-safe.sh` is the one to run on a Linux machine you care about.
+`run.sh`, `data.sh`, `compare.sh` and `ci-mem.sh` are the macOS and CI tools. `linux-safe.sh` is the one to run on a Linux machine you care about; `ab-disk.sh` builds on it for a cold-disk comparison of two refs.
 
 ## compare.sh
 
@@ -40,7 +40,7 @@ bench/linux-safe.sh --yes         # no wait
 bench/linux-safe.sh --disk-dir DIR --dry-run   # plan with the 50 GiB on-disk pair
 ```
 
-Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`, `--suite standard|le|tools|all` (default `standard`; `le` runs only the low-entropy runs below, `tools` only the comparison with other tools below, `all` runs standard and le), `--reps N` (repetitions of each repeated run, 1 to 20, default 3).
+Options: `--ref REF` (tag, branch or commit; default `v0.2.0`), `--repo URL`, `--read-only-pair DIR`, `--disk-dir DIR`, `--suite standard|le|tools|all|none` (default `standard`; `le` runs only the low-entropy runs below, `tools` only the comparison with other tools below, `all` runs standard and le, `none` only the on-disk pairs), `--reps N` (repetitions of each repeated run, 1 to 20, default 3), `--disk-cmds LIST`, `--bin DIR` (see "Shorter disk runs").
 
 The result is `rift-bench-linux-<cpu>-<date>.tar.gz`, labelled by CPU model and date, not by hostname, in the current directory: `report.md` (tables), `results.json` (every run, `schema_version` 4) and `raw/` (the `time -v` output, stderr and logs of every run). The first line of the report says the files were in RAM, so the numbers show CPU, memory and the algorithm, not the disk.
 
@@ -135,6 +135,32 @@ bench/linux-safe.sh --cold --disk-dir /path/on/real/disk
 - From after the build to the end of the runs, every CPU's cpufreq governor is `performance`. Each CPU's own governor is saved first and restored afterwards, on normal exit, error, Ctrl-C, termination and hangup (`SIGHUP`, an SSH drop). The hangup trap is armed for every run, with or without `--cold`: a hangup now runs the cleanup and removes the scratch directory instead of leaving it. On intel_pstate and amd_pstate hosts the governor change can also change `cpufreq/energy_performance_preference`; where that file exists it is saved and restored per CPU too. A CPU whose governor cannot be read is left alone and noted. A signal during the restore itself does not strand the remaining CPUs: an entry is dropped from the saved list only after its write was attempted, so the exit trap finishes the rest. If the host has no cpufreq files (a VM, for example), the governor is left alone, the report says so, and only the cache drops happen.
 - Only `sudo -n` is used, never a prompt. At the start it runs `sudo -n sh -c :` (the command the drops and writes use): if that fails, because the credential is missing or sudoers does not allow `sh`, the script exits with "run sudo -v first", before it changes anything. It then proves the writes work: one write to `drop_caches` (a drop, no other effect) and each CPU's current governor written back to itself. A read-only `/proc/sys` or a sysfs that rejects writes stops the run there, not after the runs. While the run lasts, a background loop runs `sudo -n -v` every 60 s to keep the credential from expiring during the build or the restore; it is stopped on exit, error and signals. If a refresh fails, the next `sudo -n` fails the run, so warm numbers are never recorded as cold. `--dry-run` does not check or call sudo and starts no loop.
 - The report's Host section records `cpu_governor` (read after the change, so it is what the runs used), `cold_cache` (the number of drops that happened, or "no on-disk group ran, no drop"; `--dry-run` and the start of a real run warn when `--cold` has no on-disk group, that is without `--read-only-pair` and without `--disk-dir` outside `--suite tools`), `cold_governor` (what ran, and the governors and preferences before) and `cold_governor_restored` (what the files held after the restore). If a restore write failed, `cold_governor_restored` ends with `NOT RESTORED:` and each CPU, file and the value it was left on, and a note says the same. The drop is only before each run, so a pair that fits in RAM (`2 x size` below `MemTotal`) can still be read from the page cache by a later pass within the same run; the report's note on the on-disk pair says so, and those are not fully cold numbers. `bench/cold-test.sh` checks the save, set and restore logic, the checks at the start and the keep-alive against a fake cpufreq tree and a fake sudo, and CI runs it.
+
+### Shorter disk runs (`--suite none`, `--disk-cmds`, `--bin`)
+
+Three options for runs that only read an on-disk pair. Without them nothing changes.
+
+- `--suite none` skips every tmpfs run (no generated pairs, no thread scaling) and needs `--read-only-pair` or `--disk-dir`. It still needs 3 GiB of tmpfs for its scratch directory.
+- `--disk-cmds LIST` replaces the commands timed on the `--read-only-pair` and `--disk-dir` pairs. LIST is comma-separated: `cat`, or rift arguments before the pair, such as `--stats --mem 256M`. Each item runs `--reps` times on the read-only pair and once on the `--disk-dir` pair, under the usual 1 GiB cap, so keep `--mem` below it. The default is the set described above.
+- `--bin DIR` uses `DIR/rift` and `DIR/rift-gen` instead of cloning and building, and excludes `--ref` and `--repo`. The Host section of the report gets `prebuilt_rift` and `prebuilt_rift_gen`: the sha256 of each copy, and `rift --version` (`rift-gen` has none); `rift_commit` and `rustc` say the binaries were prebuilt.
+
+### Two builds on one disk pair (`ab-disk.sh`)
+
+```sh
+bench/ab-disk.sh [--dry-run] [--keep] BASE HEAD DISKDIR [ROUNDS [ARGS]]
+```
+
+Times two builds against each other with the page cache dropped before every run, base and head alternating for ROUNDS rounds (default 3). ARGS are the rift arguments timed (default `--stats --mem 256M`). It builds each ref once from `git archive` of the current checkout (`cargo build --release --locked -p rift-diff -p rift-gen`; a directory holding `rift` and `rift-gen` is used as it is), generates the 50 GiB pair into `DISKDIR/rift-ab-pair` if it is missing (BASE's `rift-gen --seed 7 --profile sql --change-ratio 0.001`), checks that `DISKDIR` is not tmpfs and has 110 GiB free for that, runs `sudo -v` once and keeps the credential alive, and checks that the two builds print the same stdout (sha256, untimed) before timing anything. Each timed run is `linux-safe.sh --yes --cold --reps 1 --suite none --bin <build> --read-only-pair <pair> --disk-cmds ARGS`.
+
+The result is a summary on stdout and `rift-ab-disk-<base>-<head>.tar.gz` in the current directory: the summary (both binaries' sha256 and version, one row per run with wall time, exit code, peak heap, load and governor, the median and range of each side and the head's difference to the base median) and every run's `rift-bench-*.tar.gz` and console log. Which side is slower is then read by the rule under compare.sh. The pair, the builds and the work directory are deleted on exit, error and interrupt; `--keep` leaves the pair for another run. `--dry-run` checks the disk and prints the plan, the order of the runs included.
+
+P3 (#102), on the SATA SSD host: 3 rounds of `rift --stats --mem 256M` on the 50 GiB sql pair.
+
+```sh
+git fetch origin perf/read-ahead && bench/ab-disk.sh 903b2d00827ad4d7e5db41420fa0e2f4df787146 d5760f94e7cac36eb4ff76cdb69966a8eee88b6d /path/on/the/ssd 3
+```
+
+Nothing else heavy should run on the host meanwhile. `bench/cold-test.sh` covers the options and `ab-disk.sh` on stand-in binaries; CI runs it.
 
 ### What it does not do
 
