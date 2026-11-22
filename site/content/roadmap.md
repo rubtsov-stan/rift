@@ -1,6 +1,6 @@
 +++
 title = "Rift roadmap: what is next, and what is not planned"
-description = "What comes after Rift 0.4.1: a 0.4.2 with cold-disk read-ahead and faster byte checks, then Source Control and directory diff in VS Code. No dates."
+description = "What comes after Rift 0.4.2: Source Control and directory diff in VS Code. No dates."
 weight = 5
 [extra]
 nav = "Roadmap"
@@ -10,6 +10,7 @@ lead = "What comes after the current release. Nothing here has a date."
 
 ## Shipped
 
+- **0.4.2.** Refinement tells the OS which byte range it reads next, which makes a cold-cache run 3.8% faster on a SATA SSD and 25% faster on an Apple M1 with a pair larger than the page cache, and checks the bytes of matched lines in larger blocks, which makes the periodic benchmark pairs (lines that repeat every 1,000 lines) 5 to 10% faster on an Apple M1 with a warm cache. `rift serve` and `rift-mcp` answer `changed` when a refinement read fails on a file that was cut after the open. See the [changelog](https://github.com/rubtsov-stan/rift/blob/main/CHANGELOG.md).
 - **0.4.1.** The scan reads with eight threads at any `--mem` a full diff runs under, where up to `--mem 64M` it used one, and the peak heap is lower on the reference pairs from `--mem 16M` to `1G`. Refinement hashes a segment where it read it, which makes a file of a few repeated lines 9 to 13% faster on two reference pairs. A key mode run that takes several passes starts its first pass from the share of keys the tables hold, which reads the files fewer times but may print the changes in another order; the order still depends only on the files and `--mem`. `rift serve` reads the bytes behind a hunk request once, and answers `changed` when a file was written over after it was opened, where a hunk could show wrong lines; the VS Code extension then compares the pair again. A directory run names the side that failed, `--show-fields` shows a change after the first 64 bytes of a value, and a refused `--mem` advises at least `10475K`. See the [changelog](https://github.com/rubtsov-stan/rift/blob/main/CHANGELOG.md).
 - **0.4.0.** `rift old/ new/` compares two directory trees under one `--mem`, as `diff -r` prints them, and finds renamed files by content. See the [guide](@/guide/directories.md). In [key mode](@/guide/key-mode.md), `--show-fields` lists the fields that differ under a changed key (`price: 10 -> 12`), `--fields` compares only the fields you name, a `pg_dump` key prints with its table, and a file with duplicate keys always stops with the duplicate-key error, never a `--mem` refusal. `rift-mcp` compares CSV, NDJSON and `pg_dump` records by key. Each `.deb`, VSIX and `.mcpb` in a release has a `.sha256` file next to it.
 - **0.3.4.** `rift-mcp` waits up to 5 seconds for room when four diffs are alive, and a busy answer says when to retry. Each release carries an MCP bundle, `rift-mcp-<version>.mcpb`, and `rift-mcp` is in the MCP Registry. See the [MCP guide](@/guide/mcp.md).
@@ -19,13 +20,6 @@ lead = "What comes after the current release. Nothing here has a date."
 - **VS Code extension.** Compares two huge files from VS Code and opens each difference in VS Code's own diff editor. See the [VS Code guide](@/guide/vscode.md).
 - **`rift serve`.** Rift's protocol for editors: JSON-RPC 2.0 on standard input and output, with a size bound on every answer. The extension runs it; [Clients and protocol](@/design/clients.md) explains how it works.
 - **`rift git-diff`.** Git's external diff for files git calls binary, with Git LFS pointers resolved. See the [git guide](@/guide/git.md).
-
-## Next: 0.4.2
-
-- **Faster, same answers.** Each change ships only if it is measurably faster on real data. None of these changes alters the memory limit, and the output stays the same.
-  - On a cold disk, Rift will ask the OS to read ahead the parts it is about to diff ([#50](https://github.com/rubtsov-stan/rift/issues/50)).
-  - A larger `--mem` that runs slower will be looked at ([#45](https://github.com/rubtsov-stan/rift/issues/45)).
-  - The byte check after a refined segment will read larger blocks without copying each line ([#104](https://github.com/rubtsov-stan/rift/issues/104)).
 
 ## Later: 0.4.x
 

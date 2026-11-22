@@ -28,4 +28,4 @@ moved    193 blocks, 33051 lines
   a 767948..768364  b 771051..771467
   ... and 183 more
 peak heap 18.4 MiB of 64.0 MiB (19339968 bytes)
-time 0.30 s
+time 0.26 s
