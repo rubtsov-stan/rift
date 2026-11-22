@@ -37,4 +37,4 @@ Row order in a `pg_dump` can change between runs without any row changing. If it
 
 ## Memory
 
-The default limit is 256 MiB. On a 1 GiB pair the heap peaked at 83.6 MiB, and the resident set at 113 MiB, in the [benchmarks](@/benchmarks.md). Raise the limit with `--mem` if you want a finer diff: see [the memory guide](@/guide/memory.md).
+The default limit is 256 MiB. On a 1 GiB pair the heap peaked at 73.7 MiB, and the resident set at 105.6 MiB (Apple M1, main at `d758ed9`; see the [memory guide](@/guide/memory.md)). Raise the limit with `--mem` if you want a finer diff: see [the memory guide](@/guide/memory.md).

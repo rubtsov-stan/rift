@@ -37,7 +37,7 @@ The largest pair measured so far is 50 GiB, read from a SATA SSD. No pair above 
 
 GNU `diff` was capped at 3 GiB of memory, and the cap killed it on the 1 GiB pair. `git diff --no-index` took 42.55 to 43.77 s on that pair and printed no diff: it treats the files as binary, and its output was 201 bytes.
 
-The two extra rows for each size show what `--mem` does. On the 1 GiB pair, `--mem 64M` took a heap of 19.0 MiB and `--mem 1G` took 328.5 MiB. A larger budget is not always faster; see [Memory](@/guide/memory.md). The report also has the CSV pairs and the thread scaling: `rift --summary` on the 1 GiB SQL pair took 1.04 s on one CPU, 0.62 s on two, 0.47 s on four and 0.46 s on all twelve.
+The two extra rows for each size show what `--mem` does. On the 1 GiB pair, `--mem 64M` took a heap of 19.0 MiB and `--mem 1G` took 328.5 MiB in this report. Later changes lowered both: main at `d758ed9` peaked at 18.4 MiB and 294.2 MiB on the same pair profile (`rift --stats`, eight threads, median of five runs, Apple M1, warm cache). A larger budget is not always faster; see [Memory](@/guide/memory.md). The report also has the CSV pairs and the thread scaling: `rift --summary` on the 1 GiB SQL pair took 1.04 s on one CPU, 0.62 s on two, 0.47 s on four and 0.46 s on all twelve.
 
 The previous run, on 2026-11-06 with Rift at `v0.1.0`, is in `bench/results/linux-intel-core-i5-10600-2026-11-06/`.
 

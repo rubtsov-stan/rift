@@ -25,7 +25,7 @@ On a 1 GiB pair of generated SQL dumps, with the limit at 64 MiB, Rift counted 1
 
 {{ term(name="big-summary", kind="summary", title="a 1 GiB pair at --mem 64M") }}
 
-A smaller budget means a thinner sample of lines, so more segments are coarse and more work happens when a region is refined. A larger budget keeps more detail. In the benchmark runs on a 1 GiB pair, `--mem 64M` peaked at 21.0 MiB of heap and `--mem 1G` at 329.2 MiB, against 83.6 MiB at the default.
+A smaller budget means a thinner sample of lines, so more segments are coarse and more work happens when a region is refined. A larger budget keeps more detail. On a 1 GiB pair, `--mem 64M` peaked at 18.4 MiB of heap and `--mem 1G` at 294.2 MiB, against 73.7 MiB at the default (Apple M1, main at `d758ed9`, 8 threads). The peak heap changes by at most 0.03 MiB between 1 and 12 threads, and the [Linux and Apple M1 benchmarks](@/benchmarks.md), both taken before 0.4.1, report the same 79.4 MiB at the default limit.
 
 A larger budget is not always faster. It samples more lines, which finds more moved blocks and a slightly shorter diff, but building that larger sample takes time: on a 1 GiB SQL pair, `--mem 1G` took 1.11 s against 0.80 s at `256M` (median of 10 interleaved runs, Apple M1), with 891 moved blocks against 428. The default of `256M` is a good choice; see [#45](https://github.com/rubtsov-stan/rift/issues/45).
 
@@ -49,6 +49,6 @@ A run that finishes can still mark regions approximate for lack of budget. The p
 
 ## What the limit does not cover
 
-Only the heap is bounded by `--mem`. The resident set also holds the binary, thread stacks and whatever page cache the kernel counts against the process. On the 1 GiB pair the resident set peaked at 113 MiB with the heap at 83.6 MiB, both at the default limit: see the [benchmarks](@/benchmarks.md).
+Only the heap is bounded by `--mem`. The resident set also holds the binary, thread stacks and whatever page cache the kernel counts against the process. On a 1 GiB pair at the default limit the resident set peaked at 105.6 MiB with the heap at 73.7 MiB (Apple M1, `/usr/bin/time -l`, median of five runs). The resident set depends on the platform and the thread count; the Linux benchmark measured 109 MiB with a heap of 79.4 MiB before 0.4.1. See the [benchmarks](@/benchmarks.md).
 
 In [key mode](@/guide/key-mode.md) a larger limit means fewer passes over the files.
