@@ -204,7 +204,8 @@ runs in the background.
   diff still shows a moved block as a deletion and an insertion.
 - Windows is out of scope. The only system call required is `pread`;
   sequential-read hints (`posix_fadvise` on Linux, `F_RDAHEAD` on macOS)
-  are optional.
+  and the hint for the byte range a refinement reads next
+  (`POSIX_FADV_WILLNEED` on Linux, `F_RDADVISE` on macOS) are optional.
 
 ## Blind spots
 
