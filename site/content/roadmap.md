@@ -1,6 +1,6 @@
 +++
 title = "Rift roadmap: what is next, and what is not planned"
-description = "What comes after Rift 0.4.1: a 0.4.2 with cold-disk read-ahead and tuned builds, then Source Control and directory diff in VS Code. No dates."
+description = "What comes after Rift 0.4.1: a 0.4.2 with cold-disk read-ahead and faster byte checks, then Source Control and directory diff in VS Code. No dates."
 weight = 5
 [extra]
 nav = "Roadmap"
@@ -26,7 +26,6 @@ lead = "What comes after the current release. Nothing here has a date."
   - On a cold disk, Rift will ask the OS to read ahead the parts it is about to diff ([#50](https://github.com/rubtsov-stan/rift/issues/50)).
   - A larger `--mem` that runs slower will be looked at ([#45](https://github.com/rubtsov-stan/rift/issues/45)).
   - The byte check after a refined segment will read larger blocks without copying each line ([#104](https://github.com/rubtsov-stan/rift/issues/104)).
-  - Release builds already use link-time optimisation. Profile-guided optimisation will be added where it is measurably faster ([#117](https://github.com/rubtsov-stan/rift/issues/117)).
 
 ## Later: 0.4.x
 

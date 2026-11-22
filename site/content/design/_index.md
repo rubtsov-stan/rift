@@ -21,7 +21,7 @@ The benchmark run on Linux shows the rule from both sides. On generated SQL dump
 
 Sources: `bench/results/linux-intel-core-i5-10600-2026-11-06/report.md`, runs 025, 083 and 030; `site/data/bench-mac.json`, from the README benchmark table.
 
-The budget also changes the result, within limits. A larger `--mem` buys a finer map and a smaller diff, and costs time: on the same 1 GiB Linux pair, `--mem 64M` peaked at 21.0 MiB of heap in 0.54 s and `--mem 1G` at 329.2 MiB in 1.2 s (runs 028 and 029). Both outputs are correct edit scripts.
+The budget also changes the result, within limits. A larger `--mem` buys a finer map and a smaller diff, and costs time: on a 1 GiB pair, `--mem 64M` peaked at 18.4 MiB of heap and `--mem 1G` at 294.2 MiB (Apple M1, main at `d758ed9`). Both outputs are correct edit scripts.
 
 ## From two files to a diff
 
