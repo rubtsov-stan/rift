@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   M1 with NVMe, where the 8 GiB-per-side pair is larger than the page
   cache (ten runs per side). No gain is claimed for a warm cache or other
   disks.
+- Refinement checks the bytes of matched lines where it read them, in
+  reads of up to 64 KiB, instead of copying them 64 lines at a time. The
+  output and peak heap are the same. On the `periodic --period 1000`
+  pairs, where every line is refined, `rift --stats` is 8 to 10% faster
+  at `--mem 256M` and 5 to 8% faster at `--mem 1G` (256 MiB and 1 GiB,
+  `rift-gen --seed 7 --change-ratio 0.001`, Apple M1, warm cache, ten
+  runs per side). Other reference pairs are unchanged.
 
 ### Fixed
 
