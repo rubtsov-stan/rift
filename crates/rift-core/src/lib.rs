@@ -33,7 +33,7 @@ pub mod unified;
 pub use budget::{Budget, BudgetExceeded, Half, Reservation};
 pub use edit::{ApproxReason, Edit, Hunk};
 pub use error::{Error, Result};
-pub use lines::{LineAccess, LineBuf, MemLines};
+pub use lines::{LineAccess, LineBuf, MemLines, SourceLines};
 pub use sample::Sample;
 pub use segment::{Segment, SegmentStatus};
 pub use source::Source;

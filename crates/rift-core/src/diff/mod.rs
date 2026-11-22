@@ -19,7 +19,11 @@
 //! comparison buffers (see [`Moves`]), then the scheduler, which takes what
 //! is left for its row table, its hunk cache and the jobs' working sets. A
 //! job hashes its segment through a read block of up to 64 KiB taken from
-//! its own working set, before the refiner's workspace exists. Line
+//! its own working set, before the refiner's workspace exists, and
+//! verifies its matches through two blocks of up to 64 KiB taken from the
+//! workspace's scratch once alignment is done. A segment too small for
+//! them uses the refiner's two 4 KiB blocks, held in two of the worker's
+//! four line-buffer shares. Line
 //! buffers are bounded because a reader returns a line whole only when it
 //! fits its buffer; longer lines travel in pieces of 64 KiB.
 

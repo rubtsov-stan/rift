@@ -6,8 +6,8 @@
 //! minimal there; one with shared but no unique lines goes to Myers with a
 //! middle-snake search and a cost cutoff. Tiny gaps use quadratic DP. The result is two flag arrays,
 //! `removed` over A and `added` over B; the unflagged lines of both sides
-//! pair up in order and are then confirmed byte by byte through
-//! [`LineAccess`], since a hash match is not equality.
+//! pair up in order and are then confirmed byte by byte, read forward
+//! through [`SourceLines`], since a hash match is not equality.
 //!
 //! Time is `O((N+M)·min(D, cutoff))` per gap plus `O((N+M) log (N+M))` per
 //! patience level; memory is [`work_estimate`], 17 bytes per line of A plus
@@ -15,16 +15,18 @@
 //! line of A plus B, reserved by the caller from the refine half of the
 //! budget.
 
+mod forward;
 mod myers;
 #[cfg(test)]
 mod tests;
 
 use std::ops::Range;
 
+use self::forward::{Forward, same_next};
 use crate::budget::Reservation;
 use crate::edit::{ApproxReason, Edit, Hunk};
 use crate::error::{Error, Result};
-use crate::lines::{LineAccess, LineBuf};
+use crate::lines::{LineAccess, LineBuf, SourceLines};
 use crate::script::PIECE;
 use crate::segment::Segment;
 use crate::types::{Bytes, LineHash, LineNo};
@@ -44,10 +46,17 @@ pub const DP_MAX: usize = 12;
 /// on adversarial input.
 const MAX_DEPTH: usize = 32;
 
-/// Lines per side read in one `read_lines` call while verifying matches.
-/// The line buffers hold one block, so this times the longest line a
-/// reader returns whole bounds them.
+/// Lines per side read in one `read_lines` call while an equal segment is
+/// confirmed. The line buffers hold one block, so this times the longest
+/// line a reader returns whole bounds them.
 pub(crate) const VERIFY_LINES: usize = 64;
+
+/// Most bytes per side that verification reads at once.
+const VERIFY_BLOCK: usize = 64 << 10;
+
+/// Bytes per side of the refiner's own verification blocks, used when the
+/// workspace's scratch has no room for larger ones.
+const SMALL_BLOCK: usize = 4 << 10;
 
 /// Not reached, in `u32` index arrays.
 const NONE: u32 = u32::MAX;
@@ -75,23 +84,24 @@ fn scratch_words(s: u64) -> u64 {
     (4 * s + 8).max(DP_CELLS)
 }
 
-/// Per-worker state: the cost cutoff and the line buffers reused across
-/// segments.
+/// Per-worker state: the cost cutoff and two 4 KiB read blocks reused
+/// across segments.
 ///
-/// The line buffers hold up to `VERIFY_LINES` (64) lines per side while a
-/// match is verified and are not part of [`work_estimate`]: their size
-/// follows line length, which the estimate does not know. The caller
-/// accounts for them once per worker, like its read buffers. A line the
-/// reader cannot return whole is compared in pieces of
-/// 64 KiB.
+/// Matches are verified through a block per side. A segment whose
+/// workspace scratch holds more than two of the refiner's blocks frees the
+/// scratch after alignment and reads through blocks of up to 64 KiB taken
+/// from that room, inside [`work_estimate`]. Smaller segments use the
+/// refiner's blocks, which are not part of the estimate: the caller
+/// accounts for them once per worker, like its read buffers. A line longer
+/// than the block is compared block by block.
 #[derive(Debug)]
 pub struct Refiner {
     cutoff: u64,
     // Fixed outside tests, which switch patience off and sweep the DP size.
     dp_max: usize,
     patience: bool,
-    buf_a: LineBuf,
-    buf_b: LineBuf,
+    /// Both sides' small blocks, allocated on first use.
+    small: Vec<u8>,
 }
 
 impl Refiner {
@@ -107,8 +117,7 @@ impl Refiner {
             cutoff,
             dp_max: DP_MAX,
             patience: true,
-            buf_a: LineBuf::new(),
-            buf_b: LineBuf::new(),
+            small: Vec::new(),
         }
     }
 
@@ -117,6 +126,7 @@ impl Refiner {
     /// `a` and `b` are the hashes of the segment's lines, `lines_a` and
     /// `lines_b` give their bytes for verification, and `reservation` should
     /// hold [`work_estimate`] of the two lengths: a smaller one is grown.
+    /// Verification reads each side forward from the first line it checks.
     ///
     /// # Errors
     ///
@@ -127,7 +137,7 @@ impl Refiner {
     ///
     /// Panics if the slice lengths do not match the segment ranges or a
     /// side has `u32::MAX` lines or more.
-    pub fn refine<L: LineAccess + ?Sized, M: LineAccess + ?Sized>(
+    pub fn refine<L: SourceLines + ?Sized, M: SourceLines + ?Sized>(
         &mut self,
         seg: &Segment,
         a: &[LineHash],
@@ -174,14 +184,22 @@ impl Refiner {
             "workspace must not grow while solving"
         );
 
-        verify(
-            &mut ws,
-            seg,
-            lines_a,
-            lines_b,
-            &mut self.buf_a,
-            &mut self.buf_b,
-        )?;
+        // The scratch is dead once the flags are set. The two blocks take
+        // its room, in the refine half, so the peak stays within the
+        // estimate: its bytes (4 per u32 word), split between the sides.
+        let room = (ws.scratch.capacity() * 4 / 2).min(VERIFY_BLOCK);
+        ws.scratch = Vec::new();
+        let mut large;
+        let (block_a, block_b) = if room > SMALL_BLOCK {
+            large = filled(2 * room, 0u8)?;
+            large.split_at_mut(room)
+        } else {
+            if self.small.is_empty() {
+                self.small = filled(2 * SMALL_BLOCK, 0)?;
+            }
+            self.small.split_at_mut(SMALL_BLOCK)
+        };
+        verify(&mut ws, seg, lines_a, lines_b, block_a, block_b)?;
         let edits = build_edits(&ws, seg)?;
         Ok(Hunk { edits, approx })
     }
@@ -445,84 +463,50 @@ enum Anchors {
 /// bytes differ as a one-line replacement. That leaves the script valid
 /// and possibly not minimal without `approx`, which means cost: a 64-bit
 /// hash collision is a `2^-64` event.
-fn verify<L: LineAccess + ?Sized, M: LineAccess + ?Sized>(
+fn verify<L: SourceLines + ?Sized, M: SourceLines + ?Sized>(
     ws: &mut Workspace,
     seg: &Segment,
     lines_a: &L,
     lines_b: &M,
-    buf_a: &mut LineBuf,
-    buf_b: &mut LineBuf,
+    block_a: &mut [u8],
+    block_b: &mut [u8],
 ) -> Result<()> {
     let (removed, added) = (&mut ws.removed, &mut ws.added);
-    let (n, m) = (removed.len(), added.len());
-    let (mut i, mut j) = (0, 0);
+    let next =
+        |flags: &[bool], from: usize| flags[from..].iter().position(|&f| !f).map(|k| from + k);
+    let pair_up = |i: Option<usize>, j: Option<usize>| {
+        debug_assert!(
+            i.is_none() && j.is_none(),
+            "unflagged lines must pair up exactly"
+        );
+    };
+    let (mut i, mut j) = match (next(removed, 0), next(added, 0)) {
+        (Some(i), Some(j)) => (i, j),
+        (i, j) => {
+            pair_up(i, j);
+            return Ok(());
+        }
+    };
+    let (source_a, at_a) = lines_a.start_of(seg.a.start + i as u64)?;
+    let (source_b, at_b) = lines_b.start_of(seg.b.start + j as u64)?;
+    let mut a = Forward::new(source_a, at_a, block_a);
+    let mut b = Forward::new(source_b, at_b, block_b);
     loop {
-        while i < n && removed[i] {
-            i += 1;
+        if !same_next(&mut a, &mut b)? {
+            removed[i] = true;
+            added[j] = true;
         }
-        while j < m && added[j] {
-            j += 1;
-        }
-        if i >= n || j >= m {
-            break;
-        }
-        // The block ends before the first pair that would push either side
-        // past VERIFY_LINES, so every line is read once.
-        let (i0, j0) = (i, j);
-        let (mut ie, mut je) = (i, j);
-        let (mut ci, mut cj) = (i, j);
-        loop {
-            while ci < n && removed[ci] {
-                ci += 1;
+        match (next(removed, i + 1), next(added, j + 1)) {
+            (Some(ni), Some(nj)) => {
+                a.skip(ni - i - 1)?;
+                b.skip(nj - j - 1)?;
+                (i, j) = (ni, nj);
             }
-            while cj < m && added[cj] {
-                cj += 1;
-            }
-            if ci >= n || cj >= m || ci - i0 >= VERIFY_LINES || cj - j0 >= VERIFY_LINES {
-                break;
-            }
-            (ie, je) = (ci + 1, cj + 1);
-            (ci, cj) = (ci + 1, cj + 1);
-        }
-        let whole = read_block(lines_a, seg.a.start + i0 as u64, ie - i0, buf_a)?
-            && read_block(lines_b, seg.b.start + j0 as u64, je - j0, buf_b)?;
-        while i < ie && j < je {
-            if removed[i] {
-                i += 1;
-            } else if added[j] {
-                j += 1;
-            } else {
-                let same = if whole {
-                    buf_a.line(i - i0) == buf_b.line(j - j0)
-                } else {
-                    let (at_a, at_b) = (seg.a.start + i as u64, seg.b.start + j as u64);
-                    same_line(lines_a, at_a, lines_b, at_b, buf_a, buf_b)?
-                };
-                if !same {
-                    removed[i] = true;
-                    added[j] = true;
-                }
-                i += 1;
-                j += 1;
+            (ni, nj) => {
+                pair_up(ni, nj);
+                return Ok(());
             }
         }
-    }
-    debug_assert!(i >= n && j >= m, "unflagged lines must pair up exactly");
-    Ok(())
-}
-
-/// Reads `len` lines from `start` into `buf`; false when one of them is too
-/// long for the reader, and the block must be compared line by line.
-fn read_block<L: LineAccess + ?Sized>(
-    lines: &L,
-    start: LineNo,
-    len: usize,
-    buf: &mut LineBuf,
-) -> Result<bool> {
-    match lines.read_lines(start..start + len as u64, buf) {
-        Ok(()) => Ok(true),
-        Err(Error::LineTooLong { .. }) => Ok(false),
-        Err(e) => Err(e),
     }
 }
 
