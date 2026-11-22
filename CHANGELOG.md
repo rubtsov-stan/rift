@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `rift` tells the OS which byte range a refinement reads next
+  (`posix_fadvise` on Linux, `F_RDADVISE` on macOS), so the read can
+  start before the worker gets to it. Measured with
+  `rift --stats --mem 256M` on generated sql pairs, output byte-identical
+  and peak heap unchanged: -3.8% from a cold cache on a SATA SSD (Linux,
+  i5-10600, 50 GiB per side, three runs per side), and -25% on an Apple
+  M1 with NVMe, where the 8 GiB-per-side pair is larger than the page
+  cache (ten runs per side). No gain is claimed for a warm cache or other
+  disks.
+
 ### Fixed
 
 - `rift serve` answers `changed` instead of `io` for a hunk whose
