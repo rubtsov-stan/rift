@@ -15,7 +15,7 @@ use memchr::memchr_iter;
 
 use crate::budget::{Budget, Half, Reservation};
 use crate::error::{Error, Result};
-use crate::lines::{LineAccess, LineBuf};
+use crate::lines::{LineAccess, LineBuf, SourceLines};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineNo};
 
@@ -473,6 +473,22 @@ impl<S: Source, I: Borrow<LineIndex> + Sync> LineAccess for IndexedLines<S, I> {
             });
         }
         Ok(end.is_some())
+    }
+}
+
+impl<S: Source, I: Borrow<LineIndex>> SourceLines for IndexedLines<S, I> {
+    type Source = S;
+
+    fn start_of(&self, line: LineNo) -> Result<(&S, ByteOffset)> {
+        let count = self.index.borrow().line_count();
+        if line.0 >= count {
+            return Err(Error::LineOutOfRange { line, count });
+        }
+        let mut scratch = self.scratch.lock().unwrap_or_else(PoisonError::into_inner);
+        // The scan reads through the buffer the held bytes are in.
+        scratch.held = None;
+        let at = self.line_start(line, &mut scratch)?;
+        Ok((&self.source, ByteOffset(at)))
     }
 }
 

@@ -465,12 +465,12 @@ impl Source for Counted {
     }
 }
 
-/// Hashing a segment reads it in blocks larger than the worker's read
-/// buffer when the job's reservation has room for one; verification
-/// still reads through the reader. Before, both passes read 4 KiB at a
-/// time, about twice the reads this allows.
+/// Hashing a segment and verifying its matches both read it in blocks
+/// larger than the worker's read buffer when the job's reservation has
+/// room for them. Before, verification read through the reader 4 KiB at
+/// a time, about four times the reads this allows.
 #[test]
-fn refining_a_segment_hashes_it_in_large_blocks() {
+fn refining_a_segment_reads_it_in_large_blocks() {
     let a = rows(8_000, |i| format!("row {i} of the segment, padded\n"));
     let b = rows(8_000, |i| match i % 500 {
         7 => format!("changed {i}\n"),
@@ -524,7 +524,7 @@ fn refining_a_segment_hashes_it_in_large_blocks() {
     let reads = reads() - before;
     let per_pass = bytes / WORKER_SCRATCH.0;
     assert!(
-        reads <= per_pass * 3 / 2,
+        reads <= per_pass / 4,
         "{reads} reads for {bytes} bytes, {per_pass} per pass of 4 KiB reads"
     );
 }

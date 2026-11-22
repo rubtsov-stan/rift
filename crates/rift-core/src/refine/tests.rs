@@ -224,10 +224,10 @@ fn runs_use_absolute_line_numbers() {
 }
 
 #[test]
-fn verification_spans_several_read_blocks() {
-    // 3 000 lines, 40 edits, colliding hashes: pairs cross the
-    // VERIFY_LINES boundary and flips happen in every block. Miri: 300
-    // lines (about five blocks of 64) and 12 edits.
+fn verification_flips_collisions_across_a_long_segment() {
+    // 3 000 lines, 40 edits, colliding hashes: flips happen all along the
+    // segment. Miri: 300 lines and 12 edits. Both fit one verification
+    // block; block edges are covered by the forward reader's own tests.
     let (lines, edits) = if cfg!(miri) { (300, 12) } else { (3_000, 40) };
     let mut rng = Rng(9);
     let a: Vec<u8> = (0..lines).map(|_| rng.below(200) as u8).collect();

@@ -3,7 +3,8 @@
 use std::ops::Range;
 
 use crate::error::{Error, Result};
-use crate::types::{Bytes, LineNo};
+use crate::source::Source;
+use crate::types::{ByteOffset, Bytes, LineNo};
 
 /// A reusable buffer holding the bytes of consecutive lines.
 ///
@@ -193,6 +194,21 @@ impl<L: LineAccess + ?Sized> LineAccess for &L {
     }
 }
 
+/// Lines stored one after another in a [`Source`], so a caller can read
+/// forward from the start of any of them through a buffer of its own.
+pub trait SourceLines {
+    /// Where the lines are stored.
+    type Source: Source + ?Sized;
+
+    /// The source and the byte offset where `line` starts in it.
+    ///
+    /// # Errors
+    ///
+    /// `LineOutOfRange` if `line` is not below the line count, `Io` on a read
+    /// failure.
+    fn start_of(&self, line: LineNo) -> Result<(&Self::Source, ByteOffset)>;
+}
+
 /// In-memory lines with precomputed starts, for tests and small inputs.
 #[derive(Debug)]
 pub struct MemLines<'a> {
@@ -285,6 +301,19 @@ impl LineAccess for MemLines<'_> {
         buf.clear();
         buf.push(&bytes[start..end])?;
         Ok(end == bytes.len())
+    }
+}
+
+impl SourceLines for MemLines<'_> {
+    type Source = [u8];
+
+    fn start_of(&self, line: LineNo) -> Result<(&[u8], ByteOffset)> {
+        let count = self.line_count();
+        if line.0 >= count {
+            return Err(Error::LineOutOfRange { line, count });
+        }
+        let i = usize::try_from(line.0).expect("below line_count");
+        Ok((self.data, ByteOffset(self.starts[i] as u64)))
     }
 }
 
