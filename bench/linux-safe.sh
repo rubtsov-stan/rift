@@ -4,7 +4,8 @@
 #
 #   bench/linux-safe.sh [--dry-run] [--yes] [--ref REF] [--repo URL]
 #                       [--read-only-pair DIR] [--disk-dir DIR]
-#                       [--suite standard|le|tools|all] [--reps N] [--cold]
+#                       [--suite standard|le|tools|all|none] [--reps N] [--cold]
+#                       [--disk-cmds LIST] [--bin DIR]
 #
 #   --dry-run            print the plan and exit
 #   --yes                skip the 10 second wait before the run starts
@@ -20,8 +21,19 @@
 #                        has the distinct profile; all: both; tools: rift
 #                        against other diff and CSV tools (difftastic,
 #                        DuckDB, csvdiff, qsv, daff, each if installed) on
-#                        256 MiB, 1 GiB and, with --disk-dir, 4 GiB pairs
+#                        256 MiB, 1 GiB and, with --disk-dir, 4 GiB pairs;
+#                        none: no tmpfs runs, only --read-only-pair and
+#                        --disk-dir (one of them is required)
 #   --reps N             repetitions of each repeated run, 1 to 20 (default 3)
+#   --disk-cmds LIST     what to time on the --read-only-pair and --disk-dir
+#                        pairs, comma-separated: cat, or rift arguments such
+#                        as "--stats --mem 256M" (the pair is appended).
+#                        Default: the usual set (cat, --summary and --stats
+#                        at --mem 256M, and for --read-only-pair also --mem
+#                        64M and 1G). Keep --mem within the 1 GiB cap.
+#   --bin DIR            use DIR/rift and DIR/rift-gen instead of cloning and
+#                        building; the report gets each file's sha256 and
+#                        rift --version. --ref and --repo do not apply.
 #   --cold               the one option that uses root: before each timed run
 #                        of an on-disk group (--disk-dir, --read-only-pair)
 #                        drop the page cache, and hold every CPU's governor at
@@ -54,6 +66,7 @@ set -eu
 GIB=1073741824
 schema=4
 repo=https://github.com/rubtsov-stan/rift ref=v0.2.0 yes=0 dry=0 suite=standard reps=3 ropair='' cold=0
+refset=0 bindir='' diskcmds=''
 diskdir=
 diskroot=
 testing=${RIFT_BENCH_TESTING:-0}
@@ -197,13 +210,15 @@ while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) dry=1; shift ;;
     --yes) yes=1; shift ;;
-    --ref) [ $# -ge 2 ] || usage; ref=$2; shift 2 ;;
-    --repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
+    --ref) [ $# -ge 2 ] || usage; ref=$2 refset=1; shift 2 ;;
+    --repo) [ $# -ge 2 ] || usage; repo=$2 refset=1; shift 2 ;;
     --read-only-pair) [ $# -ge 2 ] || usage; ropair=$2; shift 2 ;;
     --disk-dir) [ $# -ge 2 ] || usage; diskdir=$2; shift 2 ;;
     --suite) [ $# -ge 2 ] || usage; suite=$2; shift 2 ;;
     --reps) [ $# -ge 2 ] || usage; reps=$2; shift 2 ;;
     --cold) cold=1; shift ;;
+    --disk-cmds) [ $# -ge 2 ] || usage; diskcmds=$2; shift 2 ;;
+    --bin) [ $# -ge 2 ] || usage; bindir=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -216,9 +231,15 @@ if [ "$testing" != 1 ]; then
   "$timebin" -v true >/dev/null 2>&1 || die "GNU time not found at $timebin (package: time)"
 fi
 [ "$cold" = 0 ] || [ "$dry" = 1 ] || cold_check
-command -v cargo >/dev/null 2>&1 ||
-  die "cargo not found. Install a Rust toolchain with rustup first; this script does not install one."
-command -v git >/dev/null 2>&1 || die "git not found"
+if [ -n "$bindir" ]; then
+  [ "$refset" = 0 ] || die "--bin and --ref or --repo exclude each other: the binaries are not built"
+  [ -x "$bindir/rift" ] && [ -x "$bindir/rift-gen" ] || die "--bin $bindir must hold executable rift and rift-gen"
+  command -v sha256sum >/dev/null 2>&1 || die "sha256sum not found (coreutils); --bin records the binaries' hashes"
+else
+  command -v cargo >/dev/null 2>&1 ||
+    die "cargo not found. Install a Rust toolchain with rustup first; this script does not install one."
+  command -v git >/dev/null 2>&1 || die "git not found"
+fi
 if [ -n "$ropair" ]; then
   [ -f "$ropair/a" ] && [ -f "$ropair/b" ] || die "$ropair must hold files a and b"
 fi
@@ -228,16 +249,28 @@ esac
 [ "$reps" -ge 1 ] && [ "$reps" -le 20 ] || usage
 case $suite in
   standard) ;;
+  none)
+    [ -n "$ropair" ] || [ -n "$diskdir" ] || die "--suite none needs --read-only-pair or --disk-dir: nothing else would run" ;;
   tools)
     for t in timeout cmp sort comm; do
       command -v "$t" >/dev/null 2>&1 || die "$t not found (coreutils, diffutils); the tools suite needs it"
     done ;;
   le|all)
+    [ -z "$bindir" ] || die "--bin cannot run the low-entropy suite: it needs the spike example built from a ref"
     command -v timeout >/dev/null 2>&1 || die "timeout not found (coreutils); the low-entropy runs need it"
     command -v patch >/dev/null 2>&1 || die "patch not found; the low-entropy runs need it"
     command -v cmp >/dev/null 2>&1 || die "cmp not found (diffutils); the low-entropy runs need it" ;;
   *) usage ;;
 esac
+if [ -n "$diskcmds" ]; then
+  [ -n "$ropair" ] || [ -n "$diskdir" ] || die "--disk-cmds needs --read-only-pair or --disk-dir"
+  case $diskcmds in ,*|*,|*,,*) usage ;; esac
+  oldifs=$IFS; IFS=,
+  for c in $diskcmds; do
+    case $c in cat|-*) ;; *) IFS=$oldifs; die "--disk-cmds: '$c' is neither cat nor rift arguments starting with -" ;; esac
+  done
+  IFS=$oldifs
+fi
 
 disksize=$((50 * GIB))
 [ "$testing" != 1 ] || disksize=${RIFT_BENCH_DISK_SIZE:-$disksize}
@@ -311,7 +344,7 @@ maxg=0
 for g in 1 2 4 8 16; do
   if fits $((g * GIB)) "$GIB"; then maxg=$g; fi
 done
-[ "$maxg" -gt 0 ] || [ "$suite" = le ] || die "refusing to start: a 1 GiB pair needs $(( (2 * GIB + GIB + 2 * GIB) * 100 / 60 / 1048576 )) MiB of MemAvailable (60% rule), this host has $((avail / 1048576)) MiB"
+[ "$maxg" -gt 0 ] || [ "$suite" = le ] || [ "$suite" = none ] || die "refusing to start: a 1 GiB pair needs $(( (2 * GIB + GIB + 2 * GIB) * 100 / 60 / 1048576 )) MiB of MemAvailable (60% rule), this host has $((avail / 1048576)) MiB"
 
 sizes=$GIB
 [ "$maxg" -gt 1 ] && sizes="$sizes $((maxg * GIB))"
@@ -344,7 +377,7 @@ for s in $((GIB / 16)) $((GIB / 4)) "$GIB"; do
 done
 [ "$testing" != 1 ] || le_sizes=${RIFT_BENCH_LE_SIZES:-$le_sizes}
 le_sizes=${le_sizes# }
-case $suite in standard|tools) true ;; *) false ;; esac || [ -n "$le_sizes" ] ||
+case $suite in standard|tools|none) true ;; *) false ;; esac || [ -n "$le_sizes" ] ||
   die "refusing to start: not even a 64 MiB low-entropy pair fits within 60% of MemAvailable"
 le_points="distinct-1 distinct-2 distinct-10 distinct-100 distinct-10000 distinct-1000000 periodic-1000 runs alternating empty"
 le_small=${le_sizes%% *} le_diffcap=$((2 * GIB)) le_tmo=600
@@ -414,7 +447,11 @@ plan() {
   echo "Plan"
   echo "  MemAvailable      $(gib "$avail") of $(gib "$mem_total"); 60% budget $(gib "$limit")"
   echo "  scratch           tmpfs $base ($(gib "$tmpfs_free") free)"
-  echo "  source            $repo at $ref"
+  if [ -n "$bindir" ]; then
+    echo "  source            prebuilt rift and rift-gen (--bin), sha256 and version in the report"
+  else
+    echo "  source            $repo at $ref"
+  fi
   echo "  suite             $suite"
   echo "  repetitions       $reps of each repeated run"
   case $limiter in
@@ -426,10 +463,15 @@ plan() {
   case $suite in standard|all) plan_standard ;; tools) plan_tools ;; esac
   case $suite in le|all) plan_le ;; esac
   [ -z "$ropair" ] || echo "  read-only pair    $ropair (only read)"
+  [ -z "$ropair" ] || [ -z "$diskcmds" ] || echo "  read-only runs    $diskcmds, $reps of each, cap 1 GiB"
   if [ -n "$diskdir" ] && [ "$suite" != tools ]; then
     echo "  on-disk pair      $(gib "$disksize") each of A and B (profile sql, seed 7, 0.1% changes) in $diskroot ($disk_fstype on $disk_dev, $disk_model, $disk_rot)"
     echo "  disk use          $(gib $((2 * disksize))) written, $(gib "$disk_free") free, $(gib "$diskneed") required (pair plus $(gib "$diskmargin") margin); deleted afterwards"
-    echo "  disk runs         cat a b | wc -c, rift --summary, rift --stats, all --mem 256M, one run each, cap 1 GiB; diff and git diff skipped: they need several times the pair in memory"
+    if [ -n "$diskcmds" ]; then
+      echo "  disk runs         $diskcmds, one run each, cap 1 GiB"
+    else
+      echo "  disk runs         cat a b | wc -c, rift --summary, rift --stats, all --mem 256M, one run each, cap 1 GiB; diff and git diff skipped: they need several times the pair in memory"
+    fi
     echo "  disk time         about $(awk -v b="$((2 * disksize))" 'BEGIN { printf "%d to %d minutes", b * 4 / 500e6 / 60, b * 4 / 100e6 / 60 }') (four passes over the pair at 500 to 100 MB/s, plus the build and the other runs)"
   fi
   if [ "$cold" = 1 ]; then
@@ -546,29 +588,34 @@ loadavg() { cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo n/a; }
 
 # ---- build -----------------------------------------------------------------
 
-git clone -q "$repo" "$scratch/src" || die "clone of $repo failed"
-git -C "$scratch/src" checkout -q "$ref" || die "ref $ref not found in $repo"
-commit=$(git -C "$scratch/src" rev-parse HEAD)
+if [ -n "$bindir" ]; then
+  cp "$bindir/rift" "$bindir/rift-gen" "$scratch/bin/"
+  ref='prebuilt (--bin)' commit='unknown: prebuilt binaries' rustc_v='n/a: prebuilt binaries'
+else
+  git clone -q "$repo" "$scratch/src" || die "clone of $repo failed"
+  git -C "$scratch/src" checkout -q "$ref" || die "ref $ref not found in $repo"
+  commit=$(git -C "$scratch/src" rev-parse HEAD)
 
-# Everything cargo writes goes to the scratch directory. Keep rustup's
-# toolchains where they are and forbid installing one.
-RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
-export CARGO_HOME="$scratch/cargo" CARGO_TARGET_DIR="$scratch/target" RUSTUP_HOME RUSTUP_AUTO_INSTALL=0
-locked=
-[ -f "$scratch/src/Cargo.lock" ] && locked=--locked
-rustc_v=$(cd "$scratch/src" && rustc -V) || die "no usable rustc for $ref (a pinned toolchain that is not installed is never fetched)"
-echo "Building $ref ($commit) with $rustc_v" >&2
-# shellcheck disable=SC2086
-(cd "$scratch/src" && $niceio cargo build --release $locked -p rift-diff -p rift-gen) >"$raw/build.log" 2>&1 ||
-  { tail -n 20 "$raw/build.log" >&2; die "build failed"; }
-cp "$scratch/target/release/rift" "$scratch/target/release/rift-gen" "$scratch/bin/"
-if { [ "$suite" = le ] || [ "$suite" = all ]; } && [ "$bglok" = 1 ]; then
+  # Everything cargo writes goes to the scratch directory. Keep rustup's
+  # toolchains where they are and forbid installing one.
+  RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
+  export CARGO_HOME="$scratch/cargo" CARGO_TARGET_DIR="$scratch/target" RUSTUP_HOME RUSTUP_AUTO_INSTALL=0
+  locked=
+  [ -f "$scratch/src/Cargo.lock" ] && locked=--locked
+  rustc_v=$(cd "$scratch/src" && rustc -V) || die "no usable rustc for $ref (a pinned toolchain that is not installed is never fetched)"
+  echo "Building $ref ($commit) with $rustc_v" >&2
   # shellcheck disable=SC2086
-  (cd "$scratch/src" && $niceio cargo build --release $locked -p rift-core --example spike) >>"$raw/build.log" 2>&1 ||
-    { tail -n 20 "$raw/build.log" >&2; die "build of the spike example failed"; }
-  cp "$scratch/target/release/examples/spike" "$scratch/bin/"
+  (cd "$scratch/src" && $niceio cargo build --release $locked -p rift-diff -p rift-gen) >"$raw/build.log" 2>&1 ||
+    { tail -n 20 "$raw/build.log" >&2; die "build failed"; }
+  cp "$scratch/target/release/rift" "$scratch/target/release/rift-gen" "$scratch/bin/"
+  if { [ "$suite" = le ] || [ "$suite" = all ]; } && [ "$bglok" = 1 ]; then
+    # shellcheck disable=SC2086
+    (cd "$scratch/src" && $niceio cargo build --release $locked -p rift-core --example spike) >>"$raw/build.log" 2>&1 ||
+      { tail -n 20 "$raw/build.log" >&2; die "build of the spike example failed"; }
+    cp "$scratch/target/release/examples/spike" "$scratch/bin/"
+  fi
+  rm -rf "$scratch/target" "$scratch/cargo" "$scratch/src"
 fi
-rm -rf "$scratch/target" "$scratch/cargo" "$scratch/src"
 rift=$scratch/bin/rift gen=$scratch/bin/rift-gen spike=$scratch/bin/spike
 if [ "$suite" = le ] || [ "$suite" = all ]; then
   "$gen" --help | grep -q -- --distinct || die "rift-gen at $ref has no low-entropy profiles; pass a --ref that has them"
@@ -578,7 +625,9 @@ fi
 
 lscpu_get() { lscpu 2>/dev/null | awk -F': +' -v k="$1" '$1 == k {print $2; exit}'; }
 fact tool "bench/linux-safe.sh schema $schema"
-fact note "Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
+tmpnote="Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
+[ "$suite" != none ] || tmpnote="No tmpfs runs: every run reads a pair from disk (groups read-only-pair and disk)."
+fact note "$tmpnote"
 fact host "$label"
 fact date "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fact cpu_model "$cpu_model"
@@ -592,6 +641,10 @@ fact kernel "$(uname -r)"
 fact distro "$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}" || echo unknown)"
 fact virt "$(systemd-detect-virt 2>/dev/null || echo unknown)"
 fact rustc "$rustc_v"
+if [ -n "$bindir" ]; then
+  fact prebuilt_rift "sha256 $(sha256sum "$rift" | cut -d' ' -f1); $("$rift" --version 2>&1 | head -n1)"
+  fact prebuilt_rift_gen "sha256 $(sha256sum "$gen" | cut -d' ' -f1); no --version"
+fi
 fact suite "$suite"
 fact reps "$reps"
 fact rift_ref "$ref"
@@ -793,6 +846,29 @@ gen_pair() {
   prep $((2 * gs + GIB)) "$gen" --seed 7 --size "$gs" "$@" --change-ratio 0.001 --out "$pair" > "$glog" 2>&1 ||
     gen_failed $? "$glog"
   cp "$pair/manifest.tsv" "$raw/manifest-$gl-$gs.tsv" 2>/dev/null || true
+}
+
+# disk_cmds GROUP PROFILE SIZE REPS A B: each --disk-cmds item, REPS times.
+disk_cmds() {
+  dg=$1 dp=$2 dz=$3 dr=$4 da=$5 db=$6
+  oldifs=$IFS; IFS=,
+  set -f
+  # shellcheck disable=SC2086
+  set -- $diskcmds
+  set +f
+  IFS=$oldifs
+  for dc in "$@"; do
+    for r in $(seq "$dr"); do
+      if [ "$dc" = cat ]; then
+        run_one "$dg" "$dp" "$dz" "cat a b | wc -c" all "$GIB" "$r" count cat "$da" "$db"
+      else
+        dm=count
+        case $dc in *--summary*) dm="file" ;; esac
+        # shellcheck disable=SC2086
+        run_one "$dg" "$dp" "$dz" "rift $dc" all "$GIB" "$r" "$dm" "$rift" $dc "$da" "$db"
+      fi
+    done
+  done
 }
 
 # ---- standard runs ---------------------------------------------------------
@@ -1110,7 +1186,11 @@ fi
 
 if [ -n "$ropair" ]; then
   rsz=$(wc -c < "$ropair/a" | tr -d ' ')
-  core_runs read-only-pair existing "$rsz" "$ropair/a" "$ropair/b"
+  if [ -n "$diskcmds" ]; then
+    disk_cmds read-only-pair existing "$rsz" "$reps" "$ropair/a" "$ropair/b"
+  else
+    core_runs read-only-pair existing "$rsz" "$ropair/a" "$ropair/b"
+  fi
 fi
 
 # ---- on-disk pair (--disk-dir) ---------------------------------------------
@@ -1134,9 +1214,13 @@ if [ -n "$diskdir" ] && [ "$suite" != tools ]; then
   if $dgen "$gen" --seed 7 --size "$disksize" --profile sql --change-ratio 0.001 --out "$dpair" > "$dlog" 2>&1; then
     cp "$dpair/manifest.tsv" "$raw/manifest-disk-sql-$disksize.tsv" 2>/dev/null || true
     # One run per tool: at this size a repetition costs minutes to hours.
-    run_one disk sql "$disksize" "cat a b | wc -c" all "$GIB" 1 count cat "$dpair/a" "$dpair/b"
-    run_one disk sql "$disksize" "rift --summary --mem 256M" all "$GIB" 1 file "$rift" --summary --mem 256M "$dpair/a" "$dpair/b"
-    run_one disk sql "$disksize" "rift --stats --mem 256M" all "$GIB" 1 count "$rift" --stats --mem 256M "$dpair/a" "$dpair/b"
+    if [ -n "$diskcmds" ]; then
+      disk_cmds disk sql "$disksize" 1 "$dpair/a" "$dpair/b"
+    else
+      run_one disk sql "$disksize" "cat a b | wc -c" all "$GIB" 1 count cat "$dpair/a" "$dpair/b"
+      run_one disk sql "$disksize" "rift --summary --mem 256M" all "$GIB" 1 file "$rift" --summary --mem 256M "$dpair/a" "$dpair/b"
+      run_one disk sql "$disksize" "rift --stats --mem 256M" all "$GIB" 1 count "$rift" --stats --mem 256M "$dpair/a" "$dpair/b"
+    fi
   else
     tail -n 20 "$dlog" >&2
     note "on-disk pair not run: rift-gen failed in $diskroot (log in raw/)"
@@ -1183,8 +1267,8 @@ END {
 }' > "$pkg/results.json"
 
 {
-  echo "Files sit in tmpfs (RAM): this run measures CPU, memory and the algorithm, not the SSD."
-  [ -z "$diskdir" ] || [ "$suite" = tools ] || echo "Exception: the group \`disk\` ran on a pair stored on disk ($disk_fstype); see the notes."
+  echo "$tmpnote"
+  [ -z "$diskdir" ] || [ "$suite" = none ] || [ "$suite" = tools ] || echo "Exception: the group \`disk\` ran on a pair stored on disk ($disk_fstype); see the notes."
   echo
   echo "## Host"
   echo
