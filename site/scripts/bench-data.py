@@ -8,8 +8,10 @@ of the same command and size, SQL profile.
 import glob, json, os, statistics, sys
 
 root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
-src = sorted(glob.glob(os.path.join(root, 'bench', 'results', '*', 'results.json')))[-1]
-d = json.load(open(src))
+# The site's tables come from the standard suite; a tools-suite run has other
+# commands and would leave the landing page without its rows.
+runs = [(f, json.load(open(f))) for f in sorted(glob.glob(os.path.join(root, 'bench', 'results', '*', 'results.json')))]
+src, d = [r for r in runs if r[1]['host'].get('suite') != 'tools'][-1]
 h = d['host']
 MIB = 1024 * 1024
 SIZES = {268435456: '256 MiB', 1073741824: '1 GiB', 2147483648: '2 GiB'}
