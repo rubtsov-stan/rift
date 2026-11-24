@@ -41,6 +41,30 @@ The two extra rows for each size show what `--mem` does. On the 1 GiB pair, `--m
 
 The previous run, on 2026-11-06 with Rift at `v0.1.0`, is in `bench/results/linux-intel-core-i5-10600-2026-11-06/`.
 
+## Intel Core i5-10600, other tools, 256 MiB and 1 GiB
+
+This run puts Rift 0.3.4 next to other diff and CSV tools on the same pairs. It is not a measurement of the current release.
+
+- **Hardware and system:** as above, governor `powersave` (intel_pstate). Files in tmpfs.
+- **Date and version:** 2026-11-18, Rift at `v0.3.4` (`0608c57`), built with rustc 1.99.1. GNU diff 3.12, git 2.53.0, Difftastic 0.72.0, DuckDB v2.0.0, csvdiff 1.4.0, qsv 29.0.0, daff 1.4.2, uutils sort 0.10.0.
+- **Data:** `rift-gen` seed 7, 0.1% of lines changed; profiles `sql` and `csv` for the line tools, shuffled CSV rows keyed by `id` for the key tools.
+- **Command:** `bench/linux-safe.sh --suite tools --reps 5 --ref v0.3.4`. Each time is the median of five runs. Every run had a memory cap: 5.4 GiB on the 256 MiB pairs, 3.9 GiB on the 1 GiB pairs. `diff` and `difft` run on one thread; Rift, DuckDB and qsv use every CPU. The load average was 1.79 before the run and 4.94 after.
+- **Source:** `bench/results/linux-intel-core-i5-10600-2026-11-18-tools/report.md` and `results.json`. The report has every run, the fastest and slowest of each command and the counts each tool reported.
+
+| 1 GiB pair | Tool | Time | Peak memory |
+|---|---|---|---|
+| SQL | `rift --stats --mem 256M` | 0.55 s | 109.5 MiB |
+| SQL | GNU `diff` | 7.67 s | 3.0 GiB |
+| SQL | `git diff --no-index` | 42.58 s, no diff (binary) | 7.8 MiB |
+| SQL | `difft` | killed at the 3.9 GiB cap | |
+| SQL | `sort` both, `comm -3` | 8.42 s | 1.8 GiB |
+| CSV by key | `rift --key csv:id` | 1.49 s | 208.2 MiB |
+| CSV by key | DuckDB `FULL OUTER JOIN` | 3.15 s | 3.3 GiB |
+| CSV by key | `qsv diff -k 0` | 4.91 s | 378.8 MiB |
+| CSV by key | `csvdiff -p 0` | killed at the 3.9 GiB cap | |
+
+Peak memory is the resident set. Rift and DuckDB reported the same added, removed and changed keys. With `memory_limit` at 256MB, DuckDB's join exited with an error on the 256 MiB pair. `daff` was killed at the cap on the 256 MiB pair, and `difft` took 11.80 s and 3.6 GiB there. `sort | comm` compares lines as sets, so a moved block does not count as a change.
+
 ## Intel Core i5-10600, 50 GiB pair on a SATA SSD
 
 This run is disk-bound: the pair is 100 GiB against 16 GB of RAM, so almost every byte comes from the SSD, and the time to read both files once sets the floor.
@@ -64,6 +88,6 @@ This run is disk-bound: the pair is 100 GiB against 16 GB of RAM, so almost ever
 
 - Disk speed on the 256 MiB to 2 GiB runs: those files were in RAM. Only the 50 GiB run reads from a disk, a SATA SSD; an NVMe drive or a spinning disk would give other times.
 - A cold start: no run on this page began with the page cache dropped.
-- Other tools than GNU `diff` and `git diff`.
+- Tools other than those named here, or the other tools on a pair above 1 GiB.
 - A run above 50 GiB.
 - Different machines side by side. Compare the memory between the tables, not the times.
