@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `rift-mcp` answers `resources/list` and `prompts/list` with error
+  -32601 (method not found) instead of empty lists, since it advertises
+  only tools. This comes with rmcp 3.11.
+
 ## [0.4.2] - 2026-11-23
 
 ### Changed
