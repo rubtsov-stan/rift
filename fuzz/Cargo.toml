@@ -14,8 +14,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
-rift-core = { path = "../crates/rift-core", features = ["counting-alloc"] }
-rift-tui = { path = "../crates/rift-tui" }
+rift-core = { path = "../crates/rift-core", package = "rift-diff-core", features = ["counting-alloc"] }
+rift-tui = { path = "../crates/rift-tui", package = "rift-diff-tui" }
 rift-mcp = { path = "../crates/rift-mcp" }
 ratatui = "0.30.2"
 crossterm = "0.29.0"

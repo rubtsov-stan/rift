@@ -30,7 +30,7 @@ jobs:
       # Miri's isolation refuses; with isolation off, a few cases each.
       # alloc_small installs the counting allocator, rift-core's only unsafe
       # code, on a few KiB.
-      - run: 'cargo +nightly miri test -p rift-core --lib --test alloc_small -- --skip scan:: --skip sched:: --skip skeleton:: --skip diff:: --skip moves:: --skip keyed:: --skip anchors::tests::many_samples --skip budget::tests::pool_threads_counts_what_rayon_starts'
+      - run: 'cargo +nightly miri test -p rift-diff-core --lib --test alloc_small -- --skip scan:: --skip sched:: --skip skeleton:: --skip diff:: --skip moves:: --skip keyed:: --skip anchors::tests::many_samples --skip budget::tests::pool_threads_counts_what_rayon_starts'
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
           PROPTEST_CASES: 8
@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal --component miri
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: 'cargo +nightly miri test -p rift-core --lib -- ${{ matrix.filter }}'
+      - run: 'cargo +nightly miri test -p rift-diff-core --lib -- ${{ matrix.filter }}'
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-tree-borrows -Zmiri-ignore-leaks
           PROPTEST_CASES: 8

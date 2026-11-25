@@ -1,15 +1,22 @@
 [package]
-name = "rift-tui"
+name = "rift-diff-tui"
 description = "Terminal interface for Rift"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["diff", "tui", "terminal", "ratatui", "large-files"]
+categories = ["command-line-interface", "text-processing"]
 authors.workspace = true
 
+[lib]
+name = "rift_tui"
+
 [dependencies]
-rift-core = { path = "../rift-core" }
+rift-core.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 

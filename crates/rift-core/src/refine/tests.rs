@@ -483,7 +483,7 @@ fn time_refine(r: &mut Refiner, a: &[u8], b: &[u8]) -> (f64, Hunk) {
     (t.elapsed().as_secs_f64(), hunk)
 }
 
-/// Run with `cargo test -p rift-core --release -- --ignored throughput --nocapture`.
+/// Run with `cargo test -p rift-diff-core --release -- --ignored throughput --nocapture`.
 #[test]
 #[ignore = "benchmark: 1M-line segment with 0.1% changes"]
 fn throughput_1m_lines() {
@@ -504,7 +504,7 @@ fn throughput_1m_lines() {
     );
 }
 
-/// Run with `cargo test -p rift-core --release -- --ignored dp_threshold --nocapture`.
+/// Run with `cargo test -p rift-diff-core --release -- --ignored dp_threshold --nocapture`.
 #[test]
 #[ignore = "benchmark: DP threshold sweep"]
 fn dp_threshold() {

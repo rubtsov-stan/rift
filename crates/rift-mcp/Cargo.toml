@@ -1,17 +1,20 @@
 [package]
 name = "rift-mcp"
 description = "MCP server for exploring a Rift diff"
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mcp", "diff", "large-files", "csv", "ndjson"]
+categories = ["command-line-utilities", "development-tools"]
 authors.workspace = true
 
 [dependencies]
-rift-core = { path = "../rift-core" }
-rift-session = { path = "../rift-session" }
+rift-core.workspace = true
+rift-session.workspace = true
 rmcp.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
@@ -19,11 +22,11 @@ serde.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
-rift-core = { path = "../rift-core", features = ["counting-alloc"] }
+rift-core = { workspace = true, features = ["counting-alloc"] }
 rmcp = { workspace = true, features = ["client"] }
 serde_json.workspace = true
 tempfile.workspace = true
-rift-session = { path = "../rift-session", features = ["test-hooks"] }
+rift-session = { workspace = true, features = ["test-hooks"] }
 
 [lints]
 workspace = true

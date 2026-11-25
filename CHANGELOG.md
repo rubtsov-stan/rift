@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `rift-mcp` answers `resources/list` and `prompts/list` with error
   -32601 (method not found) instead of empty lists, since it advertises
   only tools. This comes with rmcp 3.11.
+- The library crates are renamed for crates.io, where `rift-core` is
+  another project's name: `rift-diff-core`, `rift-diff-session` and
+  `rift-diff-tui`. In code they are still `rift_core`, `rift_session` and
+  `rift_tui`; `cargo -p` takes the new names. `rift-diff` and `rift-mcp`
+  keep theirs. Each published crate now has a README, keywords,
+  categories and both license files, and the internal dependencies are
+  pinned to the workspace version.
 
 ## [0.4.2] - 2026-11-23
 

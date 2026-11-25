@@ -1,7 +1,7 @@
 //! Try the interface on a generated diff.
 //!
-//! `cargo run -p rift-tui --example mock`          interactive, hunks refine in the background
-//! `cargo run --release -p rift-tui --example mock -- --bench [keys]`
+//! `cargo run -p rift-diff-tui --example mock`          interactive, hunks refine in the background
+//! `cargo run --release -p rift-diff-tui --example mock -- --bench [keys]`
 //!                                                  key-to-frame latency, p50 and p99
 #![allow(missing_docs, clippy::many_single_char_names)]
 

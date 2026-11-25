@@ -1709,7 +1709,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "rift-core"
+name = "rift-diff"
+version = "0.4.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "libc",
+ "memchr",
+ "ratatui",
+ "rift-diff-core",
+ "rift-diff-session",
+ "rift-diff-tui",
+ "rift-gen",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "rift-diff-core"
 version = "0.4.2"
 dependencies = [
  "bumpalo",
@@ -1720,28 +1739,29 @@ dependencies = [
  "memchr",
  "proptest",
  "rayon",
- "rift-core",
+ "rift-diff-core",
  "thiserror 2.0.21",
  "xxhash-rust",
 ]
 
 [[package]]
-name = "rift-diff"
+name = "rift-diff-session"
 version = "0.4.2"
 dependencies = [
- "anyhow",
- "clap",
- "libc",
- "memchr",
- "ratatui",
- "rift-core",
- "rift-gen",
- "rift-session",
- "rift-tui",
- "serde",
- "serde_json",
+ "rift-diff-core",
+ "rift-diff-session",
+ "rustix",
  "tempfile",
- "xxhash-rust",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rift-diff-tui"
+version = "0.4.2"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "rift-diff-core",
 ]
 
 [[package]]
@@ -1750,7 +1770,7 @@ version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
- "rift-core",
+ "rift-diff-core",
  "serde_json",
 ]
 
@@ -1759,34 +1779,14 @@ name = "rift-mcp"
 version = "0.4.2"
 dependencies = [
  "anyhow",
- "rift-core",
- "rift-session",
+ "rift-diff-core",
+ "rift-diff-session",
  "rmcp",
  "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "rift-session"
-version = "0.4.2"
-dependencies = [
- "rift-core",
- "rift-session",
- "rustix",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "rift-tui"
-version = "0.4.2"
-dependencies = [
- "crossterm",
- "ratatui",
- "rift-core",
 ]
 
 [[package]]

@@ -1423,7 +1423,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "rift-core"
+name = "rift-diff-core"
 version = "0.4.2"
 dependencies = [
  "bumpalo",
@@ -1436,15 +1436,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rift-diff-session"
+version = "0.4.2"
+dependencies = [
+ "rift-diff-core",
+ "rustix",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rift-diff-tui"
+version = "0.4.2"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "rift-diff-core",
+]
+
+[[package]]
 name = "rift-fuzz"
 version = "0.0.0"
 dependencies = [
  "crossterm",
  "libfuzzer-sys",
  "ratatui",
- "rift-core",
+ "rift-diff-core",
+ "rift-diff-tui",
  "rift-mcp",
- "rift-tui",
  "rmcp",
  "serde_json",
  "tokio",
@@ -1455,30 +1473,12 @@ name = "rift-mcp"
 version = "0.4.2"
 dependencies = [
  "anyhow",
- "rift-core",
- "rift-session",
+ "rift-diff-core",
+ "rift-diff-session",
  "rmcp",
  "schemars",
  "serde",
  "tokio",
-]
-
-[[package]]
-name = "rift-session"
-version = "0.4.2"
-dependencies = [
- "rift-core",
- "rustix",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "rift-tui"
-version = "0.4.2"
-dependencies = [
- "crossterm",
- "ratatui",
- "rift-core",
 ]
 
 [[package]]
