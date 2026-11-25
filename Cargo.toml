@@ -8,10 +8,17 @@ edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rubtsov-stan/rift"
-homepage = "https://github.com/rubtsov-stan/rift"
+homepage = "https://rubtsov-stan.github.io/rift/"
 authors = ["Stanislav"]
 
 [workspace.dependencies]
+# The crates published from this workspace, pinned to the workspace version:
+# they are released together, and the release commit bumps these with
+# [workspace.package] (CI's versions job checks it). Each keeps its old
+# dependency name, so the code still says rift_core, rift_session, rift_tui.
+rift-core = { path = "crates/rift-core", version = "=0.4.2", package = "rift-diff-core" }
+rift-session = { path = "crates/rift-session", version = "=0.4.2", package = "rift-diff-session" }
+rift-tui = { path = "crates/rift-tui", version = "=0.4.2", package = "rift-diff-tui" }
 memchr = "2.8.3"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 rayon = "1.12.0"

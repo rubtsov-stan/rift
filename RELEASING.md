@@ -6,7 +6,8 @@
    `editors/vscode/README.md` and `CHANGELOG.md` first: the README is
    packaged into the VSIX files and becomes the store page.
 
-   The release commit sets the version in `Cargo.toml` (`[workspace.package]`),
+   The release commit sets the version in `Cargo.toml` (`[workspace.package]`
+   and the three `version = "=X.Y.Z"` pins in `[workspace.dependencies]`),
    `Cargo.lock` and `fuzz/Cargo.lock` (`cargo metadata` updates both),
    `editors/vscode/package.json` and `package-lock.json`
    (`npm version X.Y.Z --no-git-tag-version`), the client version in
@@ -96,7 +97,42 @@
    Run the MCP Registry workflow with `publish=true` only when the registry
    does not list that version yet.
 
-5. If the `host` job still gets 403, push the release branch at the tagged
+5. Publish the crates to crates.io from the tagged commit, once the release
+   page checks out. A crates.io version can never be replaced, only yanked,
+   so check first:
+
+   ```sh
+   git switch --detach vX.Y.Z
+   cargo publish --workspace --dry-run
+   cargo publish --workspace
+   git switch main
+   ```
+
+   `cargo publish --workspace` uploads the crates in dependency order and
+   waits for each to reach the index before the next. It needs a token from
+   `cargo login` with the `publish-update` scope (`publish-new` too for the
+   first release of a crate). The order, if you publish one at a time:
+
+   ```sh
+   cargo publish -p rift-diff-core
+   cargo publish -p rift-diff-session
+   cargo publish -p rift-diff-tui
+   cargo publish -p rift-diff
+   cargo publish -p rift-mcp
+   ```
+
+   `rift-gen`, `xtask` and `rift-fuzz` are not published. If an upload
+   fails halfway, the crates before it are on crates.io and refuse a second
+   upload of this version: publish the rest one at a time with `-p`, in the
+   order above. Check the result:
+
+   ```sh
+   for c in rift-diff-core rift-diff-session rift-diff-tui rift-diff rift-mcp; do
+     curl -s -A release-check "https://crates.io/api/v1/crates/$c" | jq -r '.crate | "\(.name) \(.max_version)"'
+   done
+   ```
+
+6. If the `host` job still gets 403, push the release branch at the tagged
    commit and rerun the failed jobs:
 
    ```sh
@@ -104,7 +140,7 @@
    gh run rerun <run-id> --failed
    ```
 
-6. Delete the release branch:
+7. Delete the release branch:
 
    ```sh
    git push origin --delete release/vX.Y.Z

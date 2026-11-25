@@ -610,7 +610,7 @@ else
   cp "$scratch/target/release/rift" "$scratch/target/release/rift-gen" "$scratch/bin/"
   if { [ "$suite" = le ] || [ "$suite" = all ]; } && [ "$bglok" = 1 ]; then
     # shellcheck disable=SC2086
-    (cd "$scratch/src" && $niceio cargo build --release $locked -p rift-core --example spike) >>"$raw/build.log" 2>&1 ||
+    (cd "$scratch/src" && $niceio cargo build --release $locked --example spike) >>"$raw/build.log" 2>&1 ||
       { tail -n 20 "$raw/build.log" >&2; die "build of the spike example failed"; }
     cp "$scratch/target/release/examples/spike" "$scratch/bin/"
   fi

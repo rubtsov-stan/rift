@@ -8,7 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-rift-core = { path = "../rift-core" }
+rift-core.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 
@@ -16,7 +16,7 @@ anyhow.workspace = true
 workspace = true
 
 [dev-dependencies]
-rift-core = { path = "../rift-core", features = ["counting-alloc"] }
+rift-core = { workspace = true, features = ["counting-alloc"] }
 serde_json.workspace = true
 
 # libtest runs its own thread beside the test and may allocate there, and

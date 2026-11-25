@@ -19,7 +19,7 @@ gen="$root/target/release/rift-gen"
 spike="$root/target/release/examples/spike"
 
 cargo build --release --manifest-path "$root/Cargo.toml" -p rift-gen
-cargo build --release --manifest-path "$root/Cargo.toml" -p rift-core --example spike
+cargo build --release --manifest-path "$root/Cargo.toml" --example spike
 
 mkdir -p "$dir/real"
 

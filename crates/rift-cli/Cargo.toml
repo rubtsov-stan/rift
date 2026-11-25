@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "../../README.md"
+keywords = ["diff", "large-files", "memory-limit", "patience-diff", "cli"]
+categories = ["command-line-utilities", "text-processing"]
 authors.workspace = true
 
 [[bin]]
@@ -19,14 +22,14 @@ default = ["tui"]
 tui = ["dep:rift-tui", "dep:ratatui"]
 
 [dependencies]
-rift-core = { path = "../rift-core", features = ["counting-alloc"] }
-rift-tui = { path = "../rift-tui", optional = true }
+rift-core = { workspace = true, features = ["counting-alloc"] }
+rift-tui = { workspace = true, optional = true }
 ratatui = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 libc.workspace = true
 memchr.workspace = true
-rift-session = { path = "../rift-session" }
+rift-session.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 xxhash-rust.workspace = true
@@ -34,7 +37,7 @@ xxhash-rust.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 rift-gen = { path = "../rift-gen" }
-rift-session = { path = "../rift-session", features = ["test-hooks"] }
+rift-session = { workspace = true, features = ["test-hooks"] }
 
 [lints]
 workspace = true

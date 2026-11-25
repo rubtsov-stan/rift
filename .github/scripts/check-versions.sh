@@ -19,6 +19,12 @@ for f in Cargo.lock fuzz/Cargo.lock; do
   [ -z "$out" ] || { printf '%s\n' "$out" | sed "s|^|check-versions: $f: |;s|\$|, Cargo.toml says $v|" >&2; bad=1; }
 done
 
+# The published crates pin each other at exactly this version in
+# [workspace.dependencies]; crates.io resolves those pins, not the paths.
+pins=$(sed -n 's/^\(rift-[a-z]*\) = { path = "crates\/[^"]*", version = "=\([^"]*\)".*/\1 \2/p' Cargo.toml)
+[ "$(printf '%s\n' "$pins" | grep -c .)" = 3 ] || { echo "check-versions: expected 3 pinned crates in [workspace.dependencies], found: ${pins:-none}" >&2; bad=1; }
+printf '%s\n' "$pins" | awk -v v="$v" 'NF && $2 != v { print "check-versions: Cargo.toml [workspace.dependencies] " $1 " pins =" $2 ", Cargo.toml says " v > "/dev/stderr"; b = 1 } END { exit b }' || bad=1
+
 p=$(jq -r .version editors/vscode/package.json)
 [ "$p" = "$v" ] || fail editors/vscode/package.json "$p"
 for q in .version '.packages[""].version'; do

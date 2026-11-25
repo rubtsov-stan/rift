@@ -1,13 +1,19 @@
 [package]
-name = "rift-session"
+name = "rift-diff-session"
 description = "Live Rift diffs of file pairs, shared by rift serve and rift-mcp"
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["diff", "large-files", "session"]
+categories = ["text-processing"]
 authors.workspace = true
+
+[lib]
+name = "rift_session"
 
 [features]
 ## `test_hooks`: holds scans for tests. Only dev-dependencies enable it, so
@@ -15,13 +21,13 @@ authors.workspace = true
 test-hooks = []
 
 [dependencies]
-rift-core = { path = "../rift-core" }
+rift-core.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-rift-core = { path = "../rift-core", features = ["counting-alloc"] }
-rift-session = { path = ".", features = ["test-hooks"] }
+rift-core = { workspace = true, features = ["counting-alloc"] }
+rift-session = { path = ".", package = "rift-diff-session", features = ["test-hooks"] }
 tempfile.workspace = true
 
 [lints]

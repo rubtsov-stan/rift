@@ -1,12 +1,19 @@
 [package]
-name = "rift-core"
+name = "rift-diff-core"
 description = "Memory-bounded line diff engine for very large files"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["diff", "large-files", "patience-diff", "memory-limit", "text"]
+categories = ["algorithms", "text-processing"]
 authors.workspace = true
+
+[lib]
+name = "rift_core"
 
 [features]
 ## Install-able global allocator that tracks current and peak heap.
@@ -22,7 +29,7 @@ itoa.workspace = true
 crossbeam-utils.workspace = true
 
 [dev-dependencies]
-rift-core = { path = ".", features = ["counting-alloc"] }
+rift-core = { path = ".", package = "rift-diff-core", features = ["counting-alloc"] }
 proptest.workspace = true
 divan.workspace = true
 imara-diff.workspace = true
