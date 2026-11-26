@@ -52,6 +52,10 @@ pub enum Error {
     /// Key mode could not compare the files.
     #[error(transparent)]
     Keyed(#[from] crate::keyed::KeyError),
+    /// A saved result could not be read: not a result, incomplete,
+    /// corrupt, or written by a newer Rift.
+    #[error("{0}")]
+    Saved(String),
     /// The scan was stopped through its [`Watch`](crate::scan::Watch).
     #[error("the scan was cancelled")]
     Cancelled,

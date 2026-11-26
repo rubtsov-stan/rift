@@ -33,6 +33,14 @@
 //! A [`Watch`] follows the scan from another thread: before every read the
 //! workers check whether it was cancelled, and after every chunk they count
 //! the chunk's bytes in it.
+//!
+//! When a result is being saved, the scan also hashes every fixed-size
+//! hash chunk of the file with xxh3-64 and writes each hash at its slot of
+//! the result's chunk table (see [`ChunkTable`]). The worker whose chunk
+//! holds the start of a hash chunk hashes all of it, reading past its own
+//! chunk's end when the hash chunk crosses it, so the table does not
+//! depend on the chunk size or the thread count. The hashes take no heap:
+//! each is written as soon as its chunk is done.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -46,6 +54,7 @@ use crate::budget::{Budget, BudgetExceeded, Half, MAX_THREADS, Reservation};
 use crate::error::{Error, Result};
 use crate::index::{Checkpoint, LineIndex, read_retrying};
 use crate::sample::Sample;
+use crate::saved::ChunkTable;
 use crate::source::Source;
 use crate::strata;
 use crate::types::{ByteOffset, Bytes, LineNo};
@@ -227,6 +236,8 @@ pub(crate) struct Meter<'w> {
     watch: &'w Watch,
     base: u64,
     local: AtomicU64,
+    /// Where the chunk hashes go, when a result is being saved.
+    chunks: Option<ChunkTable<'w>>,
 }
 
 impl<'w> Meter<'w> {
@@ -235,6 +246,15 @@ impl<'w> Meter<'w> {
             watch,
             base,
             local: AtomicU64::new(0),
+            chunks: None,
+        }
+    }
+
+    /// [`new`](Self::new) for a scan that also fills `table`.
+    pub(crate) fn hashing(watch: &'w Watch, base: u64, table: Option<ChunkTable<'w>>) -> Self {
+        Self {
+            chunks: table,
+            ..Self::new(watch, base)
         }
     }
 
@@ -577,6 +597,11 @@ struct Worker<'a> {
     checkpoints: Vec<Checkpoint>,
     /// Streaming hash of a line longer than the buffer, between reads.
     long: Option<Xxh3>,
+    /// Hash of the current hash chunk, when a result is being saved.
+    chunk_hash: Xxh3,
+    /// The next byte to hash, and the end of what this chunk hashes.
+    hash_at: u64,
+    hash_end: u64,
 }
 
 impl<'a> Worker<'a> {
@@ -588,6 +613,9 @@ impl<'a> Worker<'a> {
             samples: Vec::with_capacity(STAGING_SAMPLES),
             checkpoints: Vec::with_capacity(STAGING_CHECKPOINTS),
             long: None,
+            chunk_hash: Xxh3::new(),
+            hash_at: 0,
+            hash_end: 0,
         }
     }
 
@@ -602,7 +630,10 @@ impl<'a> Worker<'a> {
             if i >= chunks {
                 break self.flush();
             }
-            match self.scan_chunk(source, &mut buf, i) {
+            let scanned = self
+                .scan_chunk(source, &mut buf, i)
+                .and_then(|lines| self.hash_rest(source, &mut buf).map(|()| lines));
+            match scanned {
                 Ok(lines) => {
                     self.shared.counts[to_usize(i)].store(lines, Ordering::Relaxed);
                     let start = i * self.shared.chunk;
@@ -677,6 +708,7 @@ impl<'a> Worker<'a> {
         let nominal_end = (nominal_start + self.shared.chunk).min(self.shared.len);
         let mut skipping = i > 0;
         self.next_block = 0;
+        self.hash_range(nominal_start, nominal_end);
         // `pos` is the file offset of `buf[0]`; `line_start` that of the
         // current line, which may lie before `pos` while streaming.
         let mut pos = nominal_start.saturating_sub(1);
@@ -695,6 +727,7 @@ impl<'a> Worker<'a> {
                     .min(filled.saturating_add(usize::try_from(want).unwrap_or(usize::MAX))),
             };
             let n = read_retrying(source, &mut buf[filled..room], ByteOffset(at))?;
+            self.hash(at, &buf[filled..filled + n])?;
             if n == 0 {
                 // A pending streaming hash is a line too, even with an
                 // empty tail: its length was a multiple of the buffer.
@@ -736,6 +769,75 @@ impl<'a> Worker<'a> {
                 pos += start as u64;
             }
         }
+    }
+
+    /// Sets the hash chunks of the scan chunk `start..end`: those that
+    /// start in it, whole. None when no result is being saved.
+    fn hash_range(&mut self, start: u64, end: u64) {
+        let Some(t) = self.shared.meter.chunks else {
+            return;
+        };
+        let size = 1u64 << t.shift;
+        self.hash_at = start.next_multiple_of(size);
+        self.hash_end = if self.hash_at < end {
+            end.next_multiple_of(size).min(self.shared.len)
+        } else {
+            self.hash_at
+        };
+        self.chunk_hash.reset();
+    }
+
+    /// Hashes the part of `bytes`, read at `at`, that this chunk hashes,
+    /// writing each hash chunk's hash once it is complete. Reads within a
+    /// chunk are contiguous, so `at` never lies past `hash_at`.
+    fn hash(&mut self, at: u64, bytes: &[u8]) -> Result<()> {
+        let end = at + bytes.len() as u64;
+        if self.hash_at >= self.hash_end || end <= self.hash_at {
+            return Ok(());
+        }
+        let t = self
+            .shared
+            .meter
+            .chunks
+            .expect("a hash range implies a table");
+        debug_assert!(at <= self.hash_at, "reads are contiguous");
+        let stop = end.min(self.hash_end);
+        while self.hash_at < stop {
+            let chunk_end = (self.hash_at + 1)
+                .next_multiple_of(1 << t.shift)
+                .min(self.shared.len);
+            let piece = chunk_end.min(stop);
+            let from = usize::try_from(self.hash_at - at).expect("inside the buffer");
+            let to = usize::try_from(piece - at).expect("inside the buffer");
+            self.chunk_hash.update(&bytes[from..to]);
+            self.hash_at = piece;
+            if piece == chunk_end {
+                t.put((chunk_end - 1) >> t.shift, self.chunk_hash.digest())?;
+                self.chunk_hash.reset();
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads and hashes what the scan of the chunk left of its hash
+    /// chunks: the end of the last one, past the scan chunk's end.
+    fn hash_rest<S: Source + ?Sized>(&mut self, source: &S, buf: &mut [u8]) -> Result<()> {
+        while self.hash_at < self.hash_end {
+            self.shared.meter.check()?;
+            let at = self.hash_at;
+            let want = usize::try_from(self.hash_end - at)
+                .unwrap_or(usize::MAX)
+                .min(buf.len());
+            let n = read_retrying(source, &mut buf[..want], ByteOffset(at))?;
+            if n == 0 {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "source ended before its length",
+                )));
+            }
+            self.hash(at, &buf[..n])?;
+        }
+        Ok(())
     }
 }
 

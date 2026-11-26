@@ -200,6 +200,7 @@ impl Failure {
             },
             Self::Error(Error::InvalidScript(s)) => Error::InvalidScript(s.clone()),
             Self::Error(Error::Keyed(k)) => Error::Keyed(k.clone()),
+            Self::Error(Error::Saved(s)) => Error::Saved(s.clone()),
             Self::Error(Error::Cancelled) => Error::Cancelled,
         }
     }

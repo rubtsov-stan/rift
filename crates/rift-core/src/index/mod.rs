@@ -238,6 +238,16 @@ fn back_from<S: Source>(
 }
 
 impl<S: Source, I: Borrow<LineIndex>> IndexedLines<S, I> {
+    /// The source lines are read from.
+    pub fn source(&self) -> &S {
+        &self.source
+    }
+
+    /// The index lines are found with.
+    pub fn index(&self) -> &LineIndex {
+        self.index.borrow()
+    }
+
     /// Passes [`Source::advise`] on to the source.
     pub fn advise(&self, offset: ByteOffset, len: Bytes) {
         self.source.advise(offset, len);

@@ -23,6 +23,7 @@ pub mod index;
 pub mod keyed;
 pub mod moves;
 pub mod refine;
+pub mod saved;
 pub mod scan;
 pub mod sched;
 pub mod script;
