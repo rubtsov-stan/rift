@@ -441,7 +441,7 @@ async fn a_budget_refusal_names_a_mem_to_rerun_with() {
         let mut mem = String::from("100K");
         let mut m = m;
         for _ in 0..8 {
-            let Some((_, advice)) = m.rsplit_once("; rerun with --mem ") else {
+            let Some((_, advice)) = m.rsplit_once("; call again with mem ") else {
                 panic!("{m}");
             };
             mem = advice.to_owned();

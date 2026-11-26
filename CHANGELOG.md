@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   categories and both license files, and the internal dependencies are
   pinned to the workspace version.
 
+### Fixed
+
+- Key mode with `csv:NAME` no longer counts the header row as a record:
+  `keyed_summary` and `rift --key csv:...` report the data rows.
+- `rift-mcp` `hunks_at` prints `\ No newline at end of file` after a
+  last line that has no final newline, as `rift` does.
+- A budget refusal from `rift-mcp` names the `mem` parameter to call
+  again with, not the `--mem` flag. `summary` gives the figure too.
+
 ## [0.4.2] - 2026-11-23
 
 ### Changed

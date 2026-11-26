@@ -614,3 +614,32 @@ async fn a_rewrite_of_the_same_length_during_a_call_fails_it() {
 async fn a_rewrite_of_another_length_during_a_call_fails_it() {
     a_rewrite_during_a_call_fails_it("a longer line 500").await;
 }
+
+#[tokio::test]
+async fn hunks_at_marks_a_last_line_without_a_newline() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    std::fs::write(&a, "x\ny\nz").unwrap();
+    std::fs::write(&b, "x\ny\nz\n").unwrap();
+    let c = connect(&Server::default()).await;
+    let h = ok(&c, "hunks_at", json!({"a": a, "b": b, "line": 1})).await;
+    assert_eq!(
+        h["text"],
+        "@@ -1,3 +1,3 @@\n x\n y\n-z\n\\ No newline at end of file\n+z\n"
+    );
+}
+
+#[tokio::test]
+async fn a_summary_refused_for_memory_names_the_mem_to_call_again_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = pair(dir.path());
+    let client = connect(&Server::default()).await;
+    let r = call(&client, "summary", json!({"a": a, "b": b, "mem": "64K"})).await;
+    assert_eq!(r.is_error, Some(true), "{r:?}");
+    let msg = serde_json::to_value(&r.content[0]).unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(msg.contains("; call again with mem "), "{msg}");
+}

@@ -199,8 +199,8 @@ struct Run<'s> {
 
 impl Run<'_> {
     /// The message a client gets for `err`: the CLI's wording, with the
-    /// file named next to its side and, for a budget refusal, the `--mem`
-    /// to rerun with.
+    /// file named next to its side and, for a budget refusal, the `mem`
+    /// to call again with.
     fn describe(&self, err: &Error) -> String {
         let path = |side: Side| &self.paths[usize::from(side == Side::B)];
         let msg = match err {
@@ -220,7 +220,7 @@ impl Run<'_> {
         if let Error::Budget(b) = err
             && let Some(m) = b.mem_advice(self.lease.mem())
         {
-            return format!("{msg}; rerun with --mem {}", m.to_mem_arg());
+            return format!("{msg}; call again with mem {}", m.to_mem_arg());
         }
         msg
     }
