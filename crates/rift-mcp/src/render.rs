@@ -177,6 +177,9 @@ impl Out<'_> {
             let _ = write!(self.text, "{mark}{}", String::from_utf8_lossy(body));
             if full.0 > raw.len() as u64 {
                 let _ = write!(self.text, " [+{} bytes]", full.0 - raw.len() as u64);
+            } else if !raw.ends_with(b"\n") {
+                // Whole line with no newline: only the file's last line.
+                self.text.push_str("\n\\ No newline at end of file");
             }
             self.text.push('\n');
             self.shown += 1;

@@ -231,7 +231,10 @@ fn message(e: &rift_session::Error) -> String {
         rift_session::Error::Changed { side } => {
             format!("{side}: file changed since it was opened; call again")
         }
-        e => e.to_string(),
+        e => match e.suggested_mem() {
+            Some(m) => format!("{e}; call again with mem {}", m.to_mem_arg()),
+            None => e.to_string(),
+        },
     }
 }
 
