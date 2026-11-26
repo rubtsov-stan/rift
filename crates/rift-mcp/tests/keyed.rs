@@ -84,8 +84,8 @@ async fn the_summary_counts_keys_and_lists_the_first_of_each_kind() {
     let s = ok(&c, "keyed_summary", csv(dir.path())).await;
     assert_eq!(
         (s["a_records"].as_u64(), s["b_records"].as_u64()),
-        (Some(4), Some(4)),
-        "the header row counts as a record"
+        (Some(3), Some(3)),
+        "the header row is not a record"
     );
     assert_eq!(
         (
@@ -395,6 +395,38 @@ async fn duplicate_keys_fail_the_call_and_name_their_table() {
     )
     .await;
     assert_eq!(m, "duplicate keys: 7");
+}
+
+#[tokio::test]
+async fn the_csv_header_is_not_a_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = "id,name\n1,a\n2,b\n3,c\n4,d\n";
+    let b = "id,name\n1,a\n2,B\n3,c\n4,d\n";
+    let args =
+        json!({"a": write(dir.path(), "a", a), "b": write(dir.path(), "b", b), "key": "csv:id"});
+    let c = connect(&Server::default()).await;
+    let s = ok(&c, "keyed_summary", args).await;
+    assert_eq!(
+        (s["a_records"].as_u64(), s["b_records"].as_u64()),
+        (Some(4), Some(4))
+    );
+    assert_eq!(s["changed"], 1);
+}
+
+#[tokio::test]
+async fn every_row_of_a_headerless_csv_is_a_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = "1,a\n2,b\n3,c\n4,d\n";
+    let b = "1,a\n2,B\n3,c\n4,d\n";
+    let args =
+        json!({"a": write(dir.path(), "a", a), "b": write(dir.path(), "b", b), "key": "csv:1"});
+    let c = connect(&Server::default()).await;
+    let s = ok(&c, "keyed_summary", args).await;
+    assert_eq!(
+        (s["a_records"].as_u64(), s["b_records"].as_u64()),
+        (Some(4), Some(4))
+    );
+    assert_eq!(s["changed"], 1);
 }
 
 #[tokio::test]

@@ -55,7 +55,12 @@ fn read(data: &[u8], spec: &KeySpec, window: usize, chunks: usize, hi: u64) -> R
         }
         assert_eq!(r.consumed(), data.len() as u64, "reader stopped early");
         if hi == u64::MAX {
-            assert_eq!(r.records(), got.len() as u64, "record count");
+            // A CSV header is kept but not counted.
+            let header = u64::from(
+                matches!(spec, KeySpec::Csv(rift_core::keyed::CsvColumn::Header(_)))
+                    && !got.is_empty(),
+            );
+            assert_eq!(r.records(), got.len() as u64 - header, "record count");
         }
         runs.push(got);
     }

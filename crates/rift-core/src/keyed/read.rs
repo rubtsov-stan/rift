@@ -791,10 +791,12 @@ impl<'s, S: Source + ?Sized> Reader<'s, S> {
         self.blocks
     }
 
-    /// Records since the last rewind.
+    /// Records since the last rewind. A header row that names the key is read as a record
+    /// but is not counted, whether or not a pass has reached it yet.
     #[must_use]
     pub fn records(&self) -> u64 {
-        self.records
+        let header = matches!(self.kind, Kind::Csv { name: Some(_) });
+        self.records.saturating_sub(u64::from(header))
     }
 
     /// Records since the last rewind whose key hash lies at or above the
@@ -1526,7 +1528,11 @@ mod tests {
                     }
                 }
                 assert_eq!(r.consumed(), data.len() as u64);
-                assert_eq!(r.records(), got.len() as u64);
+                // A CSV header is kept but not counted.
+                let header = u64::from(
+                    matches!(spec, KeySpec::Csv(CsvColumn::Header(_))) && !got.is_empty(),
+                );
+                assert_eq!(r.records(), got.len() as u64 - header);
                 runs.push(got);
             }
             assert_eq!(runs[0], runs[1]);
