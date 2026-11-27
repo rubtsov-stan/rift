@@ -34,6 +34,20 @@ trees: it compares the link's target as bytes, so a link cannot lead the
 walk out of the tree or into a loop. It never opens a FIFO, socket or
 device inside the trees. The two operands themselves are followed.
 
+## Saved results
+
+A `.riftdiff` can come from anyone. Its reader checks every length and
+count against the file before it reserves memory, so no input makes it
+allocate more than the file holds or the `--mem` given, and it refuses
+on any inconsistency instead of panicking; a fuzz target (`riftdiff`)
+drives it. `rift open` and `rift info` look at the paths a result names:
+only regular files, never a symbolic link, unless `--a` or `--b` names
+the file. Their answers (missing, stale, unverified) still tell whether
+such a path exists and how large it is. Every read of text is checked
+against the result's xxh3 chunk hashes, which catch a file that changed,
+not one made to collide; a crafted result can only show text from the
+files it names, which the user opens with it.
+
 ## Unsafe code
 
 `rift-gen`, `rift-mcp`, `rift-session` and `rift-tui` forbid `unsafe_code`. `rift-cli`
