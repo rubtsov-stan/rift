@@ -358,8 +358,17 @@ fn script(start: (u64, u64), la: u64, lb: u64, raw: &[(u8, u64)]) -> Vec<Edit> {
     out
 }
 
-/// Writes `segs` and returns the result with the segments and scripts.
-fn written(segs: &[Drawn]) -> (Vec<u8>, Vec<Segment>, Vec<Option<Hunk>>, Meta) {
+/// A result with the segments, their byte starts and scripts, and meta.
+type Written = (
+    Vec<u8>,
+    Vec<Segment>,
+    Vec<[ByteOffset; 2]>,
+    Vec<Option<Hunk>>,
+    Meta,
+);
+
+/// Writes `segs` and returns the result with what it holds.
+fn written(segs: &[Drawn]) -> Written {
     let budget = Budget::new(Bytes::mib(8));
     let sink = MemSink::default();
     let (mut la, mut lb, mut ba, mut bb) = (0, 0, 0, 0);
@@ -385,11 +394,11 @@ fn written(segs: &[Drawn]) -> (Vec<u8>, Vec<Segment>, Vec<Option<Hunk>>, Meta) {
             edits: script((la, lb), *x, *y, raw),
             approx: reason.map(|r| ApproxReason::ALL[r as usize]),
         });
+        plan.push((seg, bytes, hunk, [ByteOffset(ba), ByteOffset(bb)]));
         (la, lb, ba, bb) = (la + x, lb + y, ba + bytes[0], bb + bytes[1]);
-        plan.push((seg, bytes, hunk));
     }
     let mut w = Writer::new(&sink, [Bytes(ba), Bytes(bb)], &budget).unwrap();
-    for (seg, bytes, hunk) in &plan {
+    for (seg, bytes, hunk, _) in &plan {
         w.push(seg, *bytes, hunk.as_ref()).unwrap();
     }
     let index = |lines: u64| {
@@ -423,7 +432,7 @@ fn written(segs: &[Drawn]) -> (Vec<u8>, Vec<Segment>, Vec<Option<Hunk>>, Meta) {
         lines: [la, lb],
         ..Meta::default()
     };
-    for (seg, _, hunk) in &plan {
+    for (seg, _, hunk, _) in &plan {
         meta.segments[seg.status as usize] += 1;
         if let Some(h) = hunk.as_ref().filter(|_| seg.status != SegmentStatus::Equal) {
             meta.refined += 1;
@@ -434,11 +443,13 @@ fn written(segs: &[Drawn]) -> (Vec<u8>, Vec<Segment>, Vec<Option<Hunk>>, Meta) {
     }
     let hunks = plan
         .iter()
-        .map(|(s, _, h)| h.clone().filter(|_| s.status != SegmentStatus::Equal))
+        .map(|(s, _, h, _)| h.clone().filter(|_| s.status != SegmentStatus::Equal))
         .collect();
+    let starts = plan.iter().map(|p| p.3).collect();
     (
         sink.bytes(),
         plan.into_iter().map(|p| p.0).collect(),
+        starts,
         hunks,
         meta,
     )
@@ -449,12 +460,13 @@ proptest! {
 
     #[test]
     fn write_then_read_gives_back_the_map_scripts_and_meta(segs in proptest::collection::vec(segment(), 0..300)) {
-        let (result, segments, hunks, meta) = written(&segs);
+        let (result, segments, starts, hunks, meta) = written(&segs);
         let budget = Budget::new(Bytes::mib(8));
         let file = SavedFile::open(&result[..], &budget).unwrap();
         prop_assert_eq!(file.meta(), &meta);
         let map = file.map(&budget).unwrap();
         prop_assert_eq!(&map.segments, &segments);
+        prop_assert_eq!(&map.starts, &starts);
         let mut buf = vec![0; usize::try_from(map.max_block).unwrap()];
         let mut got = Vec::new();
         for j in 0..map.blocks.len() {

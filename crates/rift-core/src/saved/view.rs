@@ -142,7 +142,8 @@ type Lines<S> = IndexedLines<Verified<S>, LineIndex>;
 /// A saved result opened for a front end: [`DiffView`] over the decoded
 /// map, with line text from the original files through [`Verified`].
 ///
-/// Memory. Skeleton half: the segment map at 40 bytes per segment, the
+/// Memory. Skeleton half: the segment map at 56 bytes per segment (the
+/// segment and its byte starts, as the live diff holds them), the
 /// block index at 32 bytes per block, both line indexes at 16 bytes per
 /// checkpoint. A result written under the same `--mem` fits: the live
 /// diff held the map, its byte starts and both indexes in that half.

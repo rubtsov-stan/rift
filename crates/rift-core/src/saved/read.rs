@@ -27,8 +27,9 @@ const MAX_ENTRIES: u64 = 64;
 const MAX_META: u64 = 1 << 20;
 /// Fewest bytes a segment record takes: tag, length, byte length.
 const MIN_RECORD: u64 = 3;
-/// Bytes a decoded segment takes in the map.
-const SEGMENT_BYTES: u64 = size_of::<Segment>() as u64;
+/// Bytes a decoded segment takes in the map: the segment and where it
+/// starts in both files, as the live diff holds it.
+const SEGMENT_BYTES: u64 = (size_of::<Segment>() + size_of::<[ByteOffset; 2]>()) as u64;
 
 /// One entry of the section table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +79,8 @@ pub struct SavedFile<R> {
 pub struct Map {
     /// Segments in file order; in the Skeleton half.
     pub segments: Vec<Segment>,
+    /// Where each segment starts in A and in B; in the Skeleton half.
+    pub starts: Vec<[ByteOffset; 2]>,
     /// The block index; in the Skeleton half.
     pub blocks: Vec<BlockEntry>,
     /// Longest block, in bytes.
@@ -364,8 +367,75 @@ impl<R: Source> SavedFile<R> {
         if !ix.length.is_multiple_of(BLOCK_ENTRY_BYTES) {
             return Err(corrupt("block index length"));
         }
+        let (blocks, held) = self.block_index(&ix, &seg_section, total, budget)?;
+        let max_block = blocks.iter().map(|b| b.len).max().unwrap_or(0);
+        let buf_held = budget.try_reserve(Half::Refine, Bytes(max_block))?;
+        let mut buf = vec![0u8; usize::try_from(max_block).map_err(|_| corrupt("block too long"))?];
+        let mut segments = Vec::with_capacity(total as usize);
+        let mut starts = Vec::with_capacity(total as usize);
+        let mut section = Xxh3::new();
+        let mut state = [0u64; 5];
+        let mut tally = Tally::default();
+        let mut max_decoded = 0;
+        for (j, b) in blocks.iter().enumerate() {
+            let count = blocks.get(j + 1).map_or(total, |n| n.first) - b.first;
+            let bytes = &mut buf[..b.len as usize];
+            self.src.read_exact_at(bytes, ByteOffset(b.offset))?;
+            section.update(bytes);
+            let mut decoded = 16 + 8 * count;
+            state = walk_block(bytes, b, count, Some(state), |seg, start, script| {
+                if let Some((approx, edits)) = script {
+                    decoded += HUNK_OVERHEAD.0 + edits * size_of::<Edit>() as u64;
+                    tally.refined += 1;
+                    if let Some(r) = approx {
+                        tally.approx[r as usize] += 1;
+                        tally.approx_lines.segments += 1;
+                        tally.approx_lines.a_lines += seg.len_a();
+                        tally.approx_lines.b_lines += seg.len_b();
+                    }
+                }
+                tally.status[seg.status as usize] += 1;
+                segments.push(seg);
+                starts.push(start.map(ByteOffset));
+                Ok(())
+            })?;
+            max_decoded = max_decoded.max(decoded);
+        }
+        drop((buf, buf_held));
+        if !sum_ok(section.digest(), seg_section.hash) {
+            return Err(corrupt("checksum of the segment section"));
+        }
+        let [_, la, lb, ba, bb] = state;
+        if [la, lb] != meta.lines
+            || [ba, bb] != [meta.files[0].size, meta.files[1].size]
+            || tally.status != meta.segments
+            || tally.approx != meta.approx
+            || tally.refined != meta.refined
+        {
+            return Err(corrupt("the map does not match its summary"));
+        }
+        Ok(Map {
+            segments,
+            starts,
+            blocks,
+            max_block,
+            max_decoded,
+            approx: tally.approx_lines,
+            _held: held,
+        })
+    }
+
+    /// The block index, checked against the segment section and the
+    /// segment count, held in the Skeleton half with room for the map.
+    fn block_index(
+        &self,
+        ix: &Section,
+        seg_section: &Section,
+        total: u64,
+        budget: &Budget,
+    ) -> Result<(Vec<BlockEntry>, Reservation)> {
         let n_blocks = ix.length / BLOCK_ENTRY_BYTES;
-        let (raw, raw_held) = self.load(&ix, budget, Half::Skeleton)?;
+        let (raw, raw_held) = self.load(ix, budget, Half::Skeleton)?;
         let held = budget.try_reserve(
             Half::Skeleton,
             Bytes(n_blocks * size_of::<BlockEntry>() as u64 + total * SEGMENT_BYTES),
@@ -408,58 +478,7 @@ impl<R: Source> SavedFile<R> {
             return Err(corrupt("block index"));
         }
         drop((raw, raw_held));
-        let max_block = blocks.iter().map(|b| b.len).max().unwrap_or(0);
-        let buf_held = budget.try_reserve(Half::Refine, Bytes(max_block))?;
-        let mut buf = vec![0u8; usize::try_from(max_block).map_err(|_| corrupt("block too long"))?];
-        let mut segments = Vec::with_capacity(total as usize);
-        let mut section = Xxh3::new();
-        let mut state = [0u64; 5];
-        let mut tally = Tally::default();
-        let mut max_decoded = 0;
-        for (j, b) in blocks.iter().enumerate() {
-            let count = blocks.get(j + 1).map_or(total, |n| n.first) - b.first;
-            let bytes = &mut buf[..b.len as usize];
-            self.src.read_exact_at(bytes, ByteOffset(b.offset))?;
-            section.update(bytes);
-            let mut decoded = 16 + 8 * count;
-            state = walk_block(bytes, b, count, Some(state), |seg, script| {
-                if let Some((approx, edits)) = script {
-                    decoded += HUNK_OVERHEAD.0 + edits * size_of::<Edit>() as u64;
-                    tally.refined += 1;
-                    if let Some(r) = approx {
-                        tally.approx[r as usize] += 1;
-                        tally.approx_lines.segments += 1;
-                        tally.approx_lines.a_lines += seg.len_a();
-                        tally.approx_lines.b_lines += seg.len_b();
-                    }
-                }
-                tally.status[seg.status as usize] += 1;
-                segments.push(seg);
-                Ok(())
-            })?;
-            max_decoded = max_decoded.max(decoded);
-        }
-        drop((buf, buf_held));
-        if !sum_ok(section.digest(), seg_section.hash) {
-            return Err(corrupt("checksum of the segment section"));
-        }
-        let [_, la, lb, ba, bb] = state;
-        if [la, lb] != meta.lines
-            || [ba, bb] != [meta.files[0].size, meta.files[1].size]
-            || tally.status != meta.segments
-            || tally.approx != meta.approx
-            || tally.refined != meta.refined
-        {
-            return Err(corrupt("the map does not match its summary"));
-        }
-        Ok(Map {
-            segments,
-            blocks,
-            max_block,
-            max_decoded,
-            approx: tally.approx_lines,
-            _held: held,
-        })
+        Ok((blocks, held))
     }
 
     /// The scripts of block `j` of `map`, one per segment of the block:
@@ -584,7 +603,8 @@ struct Tally {
 type ScriptInfo = Option<(Option<ApproxReason>, u64)>;
 
 /// Walks the `count` records of `block`, listed as `entry`, checking its
-/// checksum and its structure, and calls `f` for each segment. With
+/// checksum and its structure, and calls `f` for each segment with where
+/// it starts in A and in B. With
 /// `state`, the running segment number, lines and bytes, checks the block
 /// header against it. Returns the state after the block.
 fn walk_block(
@@ -592,10 +612,10 @@ fn walk_block(
     entry: &BlockEntry,
     count: u64,
     state: Option<[u64; 5]>,
-    mut f: impl FnMut(Segment, ScriptInfo) -> Result<()>,
+    mut f: impl FnMut(Segment, [u64; 2], ScriptInfo) -> Result<()>,
 ) -> Result<[u64; 5]> {
-    walk(block, entry, count, state, false, |seg, info, _| {
-        f(seg, info)
+    walk(block, entry, count, state, false, |seg, start, info, _| {
+        f(seg, start, info)
     })
 }
 
@@ -606,7 +626,9 @@ fn walk_collect(
     count: u64,
     mut f: impl FnMut(Segment, Option<Hunk>) -> Result<()>,
 ) -> Result<[u64; 5]> {
-    walk(block, entry, count, None, true, |seg, _, hunk| f(seg, hunk))
+    walk(block, entry, count, None, true, |seg, _, _, hunk| {
+        f(seg, hunk)
+    })
 }
 
 fn walk(
@@ -615,7 +637,7 @@ fn walk(
     count: u64,
     state: Option<[u64; 5]>,
     collect: bool,
-    mut f: impl FnMut(Segment, ScriptInfo, Option<Hunk>) -> Result<()>,
+    mut f: impl FnMut(Segment, [u64; 2], ScriptInfo, Option<Hunk>) -> Result<()>,
 ) -> Result<[u64; 5]> {
     let bad = || corrupt("segment block");
     let Some(body_len) = block.len().checked_sub(8) else {
@@ -672,60 +694,74 @@ fn walk(
         };
         let (mut info, mut hunk) = (None, None);
         if refined {
-            let edits = c.uvar()?;
-            if edits > c.left() as u64 {
-                return Err(bad());
-            }
-            let mut out = collect.then(|| Vec::with_capacity(edits as usize));
-            let (mut a, mut b) = (la, lb);
-            for _ in 0..edits {
-                let v = c.uvar()?;
-                let len = v >> 2;
-                let e = match v & 3 {
-                    0 => {
-                        let e = Edit::Equal {
-                            a: LineNo(a),
-                            b: LineNo(b),
-                            len,
-                        };
-                        a = add(a, len)?;
-                        b = add(b, len)?;
-                        e
-                    }
-                    1 => {
-                        let e = Edit::Delete { a: LineNo(a), len };
-                        a = add(a, len)?;
-                        e
-                    }
-                    2 => {
-                        let e = Edit::Insert { b: LineNo(b), len };
-                        b = add(b, len)?;
-                        e
-                    }
-                    _ => return Err(bad()),
-                };
-                if let Some(out) = &mut out {
-                    out.push(e);
-                }
-            }
-            if a != seg.a.end.0 || b != seg.b.end.0 {
-                return Err(bad());
-            }
+            let (edits, out) = decode_edits(&mut c, &seg, collect)?;
             info = Some((reason, edits));
             hunk = out.map(|edits| Hunk {
                 edits,
                 approx: reason,
             });
         }
+        let start = [ba, bb];
         (la, lb) = (seg.a.end.0, seg.b.end.0);
         (ba, bb) = (add(ba, bytes_a)?, add(bb, bytes_b)?);
         n += 1;
-        f(seg, info, hunk)?;
+        f(seg, start, info, hunk)?;
     }
     if c.left() != 0 {
         return Err(bad());
     }
     Ok([n, la, lb, ba, bb])
+}
+
+/// The `edits` of a script for `seg`, read from `c` and checked to cover
+/// it exactly; built only when `collect` is set.
+fn decode_edits(
+    c: &mut Cursor<'_>,
+    seg: &Segment,
+    collect: bool,
+) -> Result<(u64, Option<Vec<Edit>>)> {
+    let bad = || corrupt("segment block");
+    let add = |x: u64, y: u64| x.checked_add(y).ok_or_else(bad);
+    let edits = c.uvar()?;
+    if edits > c.left() as u64 {
+        return Err(bad());
+    }
+    let mut out = collect.then(|| Vec::with_capacity(edits as usize));
+    let (mut a, mut b) = (seg.a.start.0, seg.b.start.0);
+    for _ in 0..edits {
+        let v = c.uvar()?;
+        let len = v >> 2;
+        let e = match v & 3 {
+            0 => {
+                let e = Edit::Equal {
+                    a: LineNo(a),
+                    b: LineNo(b),
+                    len,
+                };
+                a = add(a, len)?;
+                b = add(b, len)?;
+                e
+            }
+            1 => {
+                let e = Edit::Delete { a: LineNo(a), len };
+                a = add(a, len)?;
+                e
+            }
+            2 => {
+                let e = Edit::Insert { b: LineNo(b), len };
+                b = add(b, len)?;
+                e
+            }
+            _ => return Err(bad()),
+        };
+        if let Some(out) = &mut out {
+            out.push(e);
+        }
+    }
+    if a != seg.a.end.0 || b != seg.b.end.0 {
+        return Err(bad());
+    }
+    Ok((edits, out))
 }
 
 fn decode_meta(bytes: &[u8]) -> Result<Meta> {
