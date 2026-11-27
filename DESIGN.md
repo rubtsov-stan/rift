@@ -1045,3 +1045,58 @@ list of differences is only as fresh as the identity check says.
 Not yet: opening a `--summary` result (its segments would need the
 scheduler), `rift verify`, export, filters, search, the protocol, VS Code
 and `rift-mcp`.
+
+## Incremental re-diff (experimental)
+
+`rift_core::incremental` diffs A against a new version B' of B, guided
+by the map of an earlier diff of A and B, and gives the same segments,
+hunks and unified output as a fresh diff of A and B'. The command line
+reaches it through the hidden `--experimental-from FILE`, FILE a result
+saved by `--save`; nothing in the default path changes. It cannot yet be
+combined with `--save`: A is not scanned, so its chunk table would be
+missing.
+
+A fresh diff reads both files twice: the scan hashes every line, and
+the skeleton then compares the equal stretches between its anchors. The
+guided run takes the `Equal` ranges of the earlier map as a guide and
+reads A once:
+
+1. B' is scanned as a fresh diff scans it.
+2. Each guide range that starts and ends at a line start on both sides
+   is compared byte by byte, A against B', on up to `MAX_THREADS`
+   lanes, counting line starts on the way.
+3. Where a range matched, A's lines are B''s lines, so A's samples are
+   B''s moved to A's numbering, and A's index comes from the counted line
+   starts. The rest of A is scanned directly. The result has the samples,
+   stratum and index a scan of A would have, since all three depend only
+   on A's bytes and the configuration.
+4. The skeleton is built from both scans. A gap inside a compared range,
+   on its diagonal, is not read again: its verdict is known.
+5. Refinement and output are a fresh diff's.
+
+The output is the fresh diff's because the skeleton and the refinement
+see the same inputs and both halves hold the same bytes when the
+skeleton starts. One condition is checked first: a fresh diff scans A,
+then B' while A's samples are held. If the Skeleton half could refuse
+either scan, the stratum would depend on the refusal, so the run falls
+back to a fresh diff. It also falls back when its own working set does
+not fit.
+
+A wrong guide costs time, never correctness: a range whose bytes differ
+is scanned in A like a range outside the guide. When B' is B with lines
+appended, every range lies at the same offsets. After an insertion in B',
+the ranges behind it can be moved through content-defined chunk tables
+of B and B' (`incremental::cdc`): line `i` starts a chunk when the high
+32 bits of its xxh3 are below `round(2^32 / n)`, `n = max(1, 0.75 *
+target / mean line length)`, with starts closer than `target / 4`
+ignored and a cut forced at `4 * target`; chunks carry an xxh3-128 of
+their bytes. Matching walks both tables in order with a lookahead of 64
+old chunks and a sparse table of every 64th one. A chunk match is only a
+guide: the ranges it moves are compared byte by byte like any other.
+
+Memory: A's samples and index come from the Skeleton half, reserved at
+the most a scan of A keeps and trimmed as a scan trims them. The guide
+(24 bytes per range), the comparison units, their checkpoint slots and
+two comparison buffers per lane come from the Refine half, which a
+fresh diff leaves empty until its skeleton is built; all of it but the
+guide is released before the skeleton, and the guide right after it.
