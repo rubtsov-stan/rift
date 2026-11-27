@@ -113,6 +113,13 @@ pub struct Args {
     /// Implies --show-fields.
     #[arg(long, requires = "key", value_name = "NAMES", value_delimiter = ',')]
     pub fields: Option<Vec<String>>,
+    /// Experimental: also save the result to FILE, for `rift open` and
+    /// `rift info`. It holds the segment map, the edit scripts (none with
+    /// --summary), the moved blocks and an xxh3 hash of every MiB of both
+    /// files, not their text; the output does not change. Written to
+    /// FILE.tmp, then renamed. The format may change before Rift 1.0.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["interactive", "key"])]
+    pub save: Option<PathBuf>,
 }
 
 /// What Rift runs instead of a diff of two files.
@@ -123,6 +130,42 @@ pub enum Command {
     /// The command git runs for an external diff: `diff.<driver>.command`.
     #[command(name = "git-diff")]
     GitDiff(GitDiffArgs),
+    /// Experimental: browse a result saved with --save in the terminal,
+    /// without diffing again. Text comes from the two files, and every
+    /// read is checked against the hashes saved for them: a file whose
+    /// size changed is refused, and nothing from a file whose bytes
+    /// changed is shown. xxh3 catches changed files, not files made to
+    /// collide.
+    Open(OpenArgs),
+    /// Experimental: print what a saved result holds: the files and
+    /// whether they changed, the parameters and the summary.
+    Info(InfoArgs),
+}
+
+/// Arguments of `rift open`.
+#[derive(Debug, clap::Args)]
+pub struct OpenArgs {
+    /// The saved result.
+    pub file: PathBuf,
+    /// First file, when it is not where the result says: by default its
+    /// canonical path, then its path as given, relative to the result's
+    /// directory and then to the current one.
+    #[arg(long, value_name = "PATH")]
+    pub a: Option<PathBuf>,
+    /// Second file, as for --a.
+    #[arg(long, value_name = "PATH")]
+    pub b: Option<PathBuf>,
+    /// Heap limit, as for a diff. The map, the line indexes and the
+    /// buffers that check reads must fit it.
+    #[arg(long, default_value = "256M", value_parser = parse_mem)]
+    pub mem: Bytes,
+}
+
+/// Arguments of `rift info`.
+#[derive(Debug, clap::Args)]
+pub struct InfoArgs {
+    /// The saved result.
+    pub file: PathBuf,
 }
 
 /// Arguments of `rift serve`.

@@ -10,9 +10,11 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Context;
 use rift_core::diff::{Config, Diff};
+use rift_core::saved::Writer;
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict, quote_diff_name};
-use rift_core::{ApproxReason, Budget, Bytes};
+use rift_core::{ApproxReason, Budget, Bytes, Source};
 
+use crate::saved::Save;
 use crate::source::FileSource;
 use crate::summary::{peak_heap, print_moves};
 
@@ -43,18 +45,42 @@ pub fn build(
         Arc::clone(&files.b),
         budget,
         threads(mem),
-        Config {
-            moves: files.moves,
-            ..Config::default()
-        },
+        config(files),
     )?)
+}
+
+fn config(files: &Files<'_>) -> Config {
+    Config {
+        moves: files.moves,
+        ..Config::default()
+    }
 }
 
 /// Writes the unified diff to standard output. Exit code 0 when the files
 /// are identical, 1 when they differ.
-pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<ExitCode> {
+pub fn unified(
+    files: &Files<'_>,
+    mem: Bytes,
+    stats: bool,
+    save: Option<&Save>,
+) -> anyhow::Result<ExitCode> {
     let start = Instant::now();
-    let diff = build(files, &crate::budget(mem, true), mem)?;
+    let budget = crate::budget(mem, true);
+    // Before the diff, whose scheduler takes what the Refine half has left.
+    let writer = save
+        .map(|s| Writer::new(s, [files.a.len(), files.b.len()], &budget))
+        .transpose()?;
+    let diff = match &writer {
+        Some(w) => Diff::with_chunk_tables(
+            Arc::clone(&files.a),
+            Arc::clone(&files.b),
+            &budget,
+            threads(mem),
+            config(files),
+            w.chunk_tables(),
+        )?,
+        None => build(files, &budget, mem)?,
+    };
     let (old_name, old_time) = label(files.path_a)?;
     let (new_name, new_time) = label(files.path_b)?;
     let opts = Options {
@@ -68,7 +94,12 @@ pub fn unified(files: &Files<'_>, mem: Bytes, stats: bool) -> anyhow::Result<Exi
             mtime: Some(new_time),
         },
     };
-    let written = diff.write_unified(&opts, io::stdout().lock())?;
+    let written = match (writer, save) {
+        (Some(w), Some(s)) => {
+            rift_core::saved::write_diff(&diff, w, s.ids(), mem, &opts, io::stdout().lock())?
+        }
+        _ => diff.write_unified(&opts, io::stdout().lock())?,
+    };
     if stats {
         eprintln!("{}", peak_heap(mem));
         eprintln!("time {:.2} s", start.elapsed().as_secs_f64());

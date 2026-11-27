@@ -64,6 +64,13 @@ impl FileSource {
     }
 }
 
+impl FileSource {
+    /// The file's metadata now, from the open descriptor.
+    pub fn metadata(&self) -> io::Result<std::fs::Metadata> {
+        self.file.metadata()
+    }
+}
+
 impl Source for FileSource {
     fn len(&self) -> Bytes {
         Bytes(self.len)
