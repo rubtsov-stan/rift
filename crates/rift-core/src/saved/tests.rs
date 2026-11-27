@@ -176,6 +176,40 @@ fn chunk_tables_hash_every_mebibyte_of_both_files() {
 }
 
 #[test]
+fn chunk_hashes_do_not_depend_on_scan_chunks_or_threads() {
+    use crate::scan::{Meter, ScanConfig, Watch, scan_metered};
+    let data = lines(5000, |i| format!("line {i} {}\n", "x".repeat(i % 37)));
+    let want: Vec<u8> = data
+        .chunks(4096)
+        .flat_map(|c| xxh3_64(c).to_le_bytes())
+        .collect();
+    // Scan chunks of 3000, 7777 and 1 MiB bytes against hash chunks of
+    // 4 KiB: most hash chunks cross a scan chunk's end.
+    for (chunk, interval, threads) in [
+        (3000, 1000, 1),
+        (3000, 1000, 4),
+        (7777, 1111, 3),
+        (1 << 20, 1024, 2),
+    ] {
+        let sink = MemSink::default();
+        sink.write_at(&vec![0; want.len()], ByteOffset(0)).unwrap();
+        let cfg = ScanConfig {
+            level: 0,
+            sample_cap: 1 << 20,
+            checkpoint_interval: Bytes(interval),
+            checkpoint_cap: 1 << 20,
+            chunk: Bytes(chunk),
+            buffer: Bytes(512),
+            threads,
+        };
+        let watch = Watch::new();
+        let meter = Meter::hashing(&watch, 0, Some(ChunkTable::new(&sink, 0, 12)));
+        scan_metered(&data[..], &Budget::new(Bytes::mib(64)), &cfg, &meter).unwrap();
+        assert!(sink.bytes() == want, "chunk {chunk}, {threads} threads");
+    }
+}
+
+#[test]
 fn a_read_from_a_changed_file_fails_and_keeps_failing() {
     let a = lines(100, |i| format!("a {i}\n"));
     let b = lines(100, |i| format!("b {i}\n"));
