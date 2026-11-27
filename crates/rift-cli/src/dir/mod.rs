@@ -405,6 +405,7 @@ impl Print<'_, '_> {
             path_a: os(at.a),
             path_b: os(at.b),
             moves: self.opts.moves,
+            from: None,
         };
         let diff = full::build(&files, self.budget, self.mem)?;
         let (old_name, old_time) = full::label(files.path_a)?;

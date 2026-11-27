@@ -199,6 +199,7 @@ fn run(cli: &GitDiffArgs) -> anyhow::Result<()> {
         path_a: &old,
         path_b: &new,
         moves: true,
+        from: None,
     };
     // Built before anything is printed, so a refusal leaves no half header.
     let diff = full::build(&files, &crate::budget(cli.mem, true), cli.mem)?;

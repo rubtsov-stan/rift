@@ -131,6 +131,7 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
         path_a,
         path_b,
         moves: !args.no_moves,
+        from: args.experimental_from.as_deref(),
     };
     if args.interactive {
         full::interactive(&files, args.mem)

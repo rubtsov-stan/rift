@@ -120,6 +120,15 @@ pub struct Args {
     /// FILE.tmp, then renamed. The format may change before Rift 1.0.
     #[arg(long, value_name = "FILE", conflicts_with_all = ["interactive", "key"])]
     pub save: Option<PathBuf>,
+    /// Experimental: diff A against B guided by FILE, a saved result of A
+    /// and an earlier version of B. The output is the same as without it.
+    #[arg(
+        long,
+        hide = true,
+        value_name = "FILE",
+        conflicts_with_all = ["summary", "key", "save"]
+    )]
+    pub experimental_from: Option<PathBuf>,
 }
 
 /// What Rift runs instead of a diff of two files.

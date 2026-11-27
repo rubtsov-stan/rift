@@ -10,7 +10,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Context;
 use rift_core::diff::{Config, Diff};
-use rift_core::saved::Writer;
+use rift_core::saved::{SavedFile, Writer};
 use rift_core::unified::{DEFAULT_CONTEXT, Label, Options, Timestamp, Verdict, quote_diff_name};
 use rift_core::{ApproxReason, Budget, Bytes, Source};
 
@@ -26,6 +26,8 @@ pub struct Files<'p> {
     pub path_b: &'p Path,
     /// Look for moved blocks.
     pub moves: bool,
+    /// A saved result of A and an earlier B to guide the diff.
+    pub from: Option<&'p Path>,
 }
 
 /// Refinement workers to start under `--mem mem`: what it allows, at most
@@ -40,6 +42,9 @@ pub fn build(
     budget: &Budget,
     mem: Bytes,
 ) -> anyhow::Result<Diff<FileSource, FileSource>> {
+    if let Some(from) = files.from {
+        return guided(files, from, budget, mem, config(files));
+    }
     Ok(Diff::with_config(
         Arc::clone(&files.a),
         Arc::clone(&files.b),
@@ -54,6 +59,52 @@ fn config(files: &Files<'_>) -> Config {
         moves: files.moves,
         ..Config::default()
     }
+}
+
+/// The diff guided by the saved result `from`. The result's map is read
+/// into the Skeleton half and dropped once the guide is taken from it, so
+/// the diff starts with the budget a fresh one has.
+fn guided(
+    files: &Files<'_>,
+    from: &Path,
+    budget: &Budget,
+    mem: Bytes,
+    config: Config,
+) -> anyhow::Result<Diff<FileSource, FileSource>> {
+    use rift_core::incremental::{self, Guide, Path as Taken, Previous};
+    let shown = || crate::source::shown(from);
+    let guide = {
+        let saved = SavedFile::open(
+            FileSource::open(from).with_context(|| format!("open {}", shown()))?,
+            budget,
+        )
+        .with_context(shown)?;
+        let map = saved.map(budget).with_context(shown)?;
+        let sizes = &saved.meta().files;
+        let prev = Previous {
+            segments: &map.segments,
+            starts: &map.starts,
+            len_a: Bytes(sizes[0].size),
+            len_b: Bytes(sizes[1].size),
+        };
+        Guide::new(&*files.a, &*files.b, &prev, budget)?
+    };
+    let (diff, taken) = incremental::diff(
+        Arc::clone(&files.a),
+        Arc::clone(&files.b),
+        guide,
+        budget,
+        threads(mem),
+        config,
+        &rift_core::scan::Watch::new(),
+    )?;
+    if let Taken::Full(_) = taken {
+        eprintln!(
+            "rift: {}: ran a fresh diff, --mem is too small to follow it",
+            shown()
+        );
+    }
+    Ok(diff)
 }
 
 /// Writes the unified diff to standard output. Exit code 0 when the files
