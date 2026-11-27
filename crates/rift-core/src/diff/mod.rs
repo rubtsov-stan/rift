@@ -46,11 +46,11 @@ use crate::lines::{LineAccess, LineBuf};
 use crate::moves::{MovedBlock, Moves};
 use crate::refine::{Refiner, VERIFY_LINES, filled, work_estimate};
 use crate::saved::ChunkTable;
-use crate::scan::Watch;
+use crate::scan::{Scanned, Watch};
 use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler, least_bytes};
 use crate::script::{LINES_PER_READ, PIECE};
 use crate::segment::{Segment, SegmentStatus};
-use crate::skeleton::{OffChain, build_pair_hashing};
+use crate::skeleton::{OffChain, Skeleton, build_pair_hashing};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 use crate::unified::{Options, Verdict, write_diff};
@@ -233,7 +233,21 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         if watch.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let (scan_a, scan_b, skeleton) = build_pair_hashing(&*a, &*b, budget, watch, tables)?;
+        let parts = build_pair_hashing(&*a, &*b, budget, watch, tables)?;
+        Self::from_parts(a, b, parts, budget, threads, config, watch)
+    }
+
+    /// The rest of [`Diff::with_watch`] once both files are scanned and
+    /// their map is built.
+    pub(crate) fn from_parts(
+        a: Arc<A>,
+        b: Arc<B>,
+        (scan_a, scan_b, skeleton): (Scanned, Scanned, Skeleton),
+        budget: &Budget,
+        threads: usize,
+        config: Config,
+        watch: &Watch,
+    ) -> Result<Self> {
         let (level, anchors) = (skeleton.level(), skeleton.anchors());
         let (index_a, held_a) = scan_a.into_index();
         let (index_b, held_b) = scan_b.into_index();
