@@ -22,6 +22,7 @@ pub mod keyed_reader;
 pub mod mcp;
 pub mod mcp_tools;
 pub mod pipeline;
+pub mod riftdiff;
 pub mod sanitize;
 pub mod scan;
 pub mod tui;
@@ -208,7 +209,7 @@ mod tests {
     #[test]
     fn corpora_and_regressions_pass() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let targets: [(&str, Check); 11] = [
+        let targets: [(&str, Check); 12] = [
             ("scan", scan::check),
             ("keyed_csv", keyed::csv),
             ("keyed_ndjson", keyed::ndjson),
@@ -220,6 +221,7 @@ mod tests {
             ("sanitize", sanitize::check),
             ("mcp_request", mcp::check),
             ("mcp_tools", mcp_tools::check),
+            ("riftdiff", riftdiff::check),
         ];
         for (name, check) in targets {
             for dir in ["corpus", "regressions"] {

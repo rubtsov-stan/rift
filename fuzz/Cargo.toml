@@ -109,3 +109,10 @@ path = "fuzz_targets/mcp_tools.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "riftdiff"
+path = "fuzz_targets/riftdiff.rs"
+test = false
+doc = false
+bench = false
