@@ -375,6 +375,30 @@ idle. \fB\-\-stats\fR prints the peak heap to standard error on exit.
 .PP
 The server exits with status 0 when standard input closes, and 2 when
 it cannot start.
+.SH SAVED RESULTS
+Experimental, not yet released; the format may change before 1.0.
+\fBrift\fR \fIA B\fR \fB\-\-save\fR \fIFILE\fR prints the diff as usual
+and also writes the result to \fIFILE\fR: the segment map, the edit
+scripts, the moved blocks, both line indexes and an xxh3 hash of every
+MiB of both files, not their text. With \fB\-\-summary\fR it saves the
+map without scripts. The output is the same with or without
+\fB\-\-save\fR. The result is written to \fIFILE\fR.tmp, synced and
+renamed; if either file changed while Rift read it, nothing is saved and
+the exit status is 2.
+.PP
+\fBrift open\fR \fIFILE\fR [\fB\-\-a\fR \fIPATH\fR] [\fB\-\-b\fR \fIPATH\fR]
+[\fB\-\-mem\fR \fISIZE\fR] opens the terminal view on a saved result
+without diffing again. It finds each file by its canonical path, then
+by its path as given, relative to the result's directory and then to
+the current one; \fB\-\-a\fR and \fB\-\-b\fR name them instead. A file
+whose size changed is refused. One whose time, device or inode changed
+opens as unverified. Every read of text is checked against the saved
+hashes, and nothing more is shown from a file once a check fails. xxh3
+catches changed files, not files made to collide. A \fB\-\-summary\fR
+result does not open yet.
+.PP
+\fBrift info\fR \fIFILE\fR prints the files and whether they changed,
+the parameters and the summary of a saved result.
 .SH EXAMPLES
 Write a patch and apply it:
 .PP

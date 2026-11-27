@@ -35,6 +35,7 @@ use crate::anchors::{self, Anchors, Pair};
 use crate::budget::{Budget, BudgetExceeded, Half, Reservation};
 use crate::error::{Error, Result};
 use crate::sample::Sample;
+use crate::saved::ChunkTable;
 use crate::scan::{Meter, ScanConfig, Scanned, Watch, release_slack, scan_metered};
 use crate::segment::{Segment, SegmentStatus};
 use crate::source::Source;
@@ -226,10 +227,33 @@ pub fn build_pair_watched<A: Source + ?Sized, B: Source + ?Sized>(
     budget: &Budget,
     watch: &Watch,
 ) -> Result<(Scanned, Scanned, Skeleton)> {
+    build_pair_hashing(src_a, src_b, budget, watch, None)
+}
+
+/// [`build_pair_watched`] whose scans also fill the chunk tables of a
+/// result being saved, A's then B's. The map is the same either way.
+///
+/// # Errors
+///
+/// As for [`build_pair_watched`], and [`Error::Write`] from the tables'
+/// sink.
+pub fn build_pair_hashing<A: Source + ?Sized, B: Source + ?Sized>(
+    src_a: &A,
+    src_b: &B,
+    budget: &Budget,
+    watch: &Watch,
+    tables: Option<[ChunkTable<'_>; 2]>,
+) -> Result<(Scanned, Scanned, Skeleton)> {
     let (len_a, len_b) = (src_a.len().0, src_b.len().0);
     let (cfg_a, cfg_b) = ScanConfig::for_pair(src_a.len(), src_b.len(), budget);
-    let mut scan_a = scan_metered(src_a, budget, &cfg_a, &Meter::new(watch, 0))?;
-    let mut scan_b = scan_metered(src_b, budget, &cfg_b, &Meter::new(watch, len_a))?;
+    let [table_a, table_b] = tables.map_or([None, None], |t| t.map(Some));
+    let mut scan_a = scan_metered(src_a, budget, &cfg_a, &Meter::hashing(watch, 0, table_a))?;
+    let mut scan_b = scan_metered(
+        src_b,
+        budget,
+        &cfg_b,
+        &Meter::hashing(watch, len_a, table_b),
+    )?;
     let skeleton = build_watched(
         src_a,
         src_b,

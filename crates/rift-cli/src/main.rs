@@ -6,6 +6,7 @@ mod full;
 mod gitdiff;
 mod keyed;
 mod lfs;
+mod saved;
 mod serve;
 mod source;
 mod summary;
@@ -86,8 +87,8 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
             shown(path_b)
         );
         anyhow::ensure!(
-            args.key.is_none() && !args.interactive,
-            "--key and -i compare two files, not directories"
+            args.key.is_none() && !args.interactive && args.save.is_none(),
+            "--key, -i and --save compare two files, not directories"
         );
         let opts = dir::Opts {
             summary: args.summary,
@@ -113,8 +114,16 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
             },
         );
     }
+    let save = match &args.save {
+        Some(p) => Some(saved::Save::create(p, [(path_a, &a), (path_b, &b)])?),
+        None => None,
+    };
     if args.summary {
-        return summary::run(&a, &b, args.mem, !args.no_moves);
+        let out = summary::run(&a, &b, args.mem, !args.no_moves, save.as_ref())?;
+        if let Some(s) = save {
+            s.commit([(path_a, &a), (path_b, &b)])?;
+        }
+        return Ok(out);
     }
     let files = full::Files {
         a: Arc::new(a),
@@ -126,7 +135,11 @@ fn run(args: &Args) -> anyhow::Result<ExitCode> {
     if args.interactive {
         full::interactive(&files, args.mem)
     } else {
-        full::unified(&files, args.mem, args.stats)
+        let out = full::unified(&files, args.mem, args.stats, save.as_ref())?;
+        if let Some(s) = save {
+            s.commit([(path_a, &*files.a), (path_b, &*files.b)])?;
+        }
+        Ok(out)
     }
 }
 
@@ -135,6 +148,8 @@ fn main() -> ExitCode {
     match &args.command {
         Some(Command::Serve(cli)) => return serve::main(cli),
         Some(Command::GitDiff(cli)) => return gitdiff::main(cli),
+        Some(Command::Open(cli)) => return report(saved::open(cli), cli.mem, false),
+        Some(Command::Info(cli)) => return report(saved::info(cli), Bytes::mib(16), false),
         None => {}
     }
     match run(&args) {
@@ -153,6 +168,22 @@ fn main() -> ExitCode {
             }
             if args.stats {
                 eprintln!("{}", summary::peak_heap(args.mem));
+            }
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// The exit code of a subcommand's `res`, with an error printed as the
+/// diff prints one.
+fn report(res: anyhow::Result<ExitCode>, mem: Bytes, global_pool: bool) -> ExitCode {
+    match res {
+        Ok(code) => code,
+        Err(err) if broken_pipe(&err) => ExitCode::from(141),
+        Err(err) => {
+            match mem_advice(&err, mem, global_pool, false) {
+                Some(advice) => eprintln!("rift: {err:#}; {advice}"),
+                None => eprintln!("rift: {err:#}"),
             }
             ExitCode::from(2)
         }

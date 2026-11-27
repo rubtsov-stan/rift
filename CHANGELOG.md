@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Saved results, experimental (#146). `rift A B --save FILE` also writes
+  the result to FILE, a `.riftdiff`: the segment map, the edit scripts,
+  the moved blocks, both line indexes and an xxh3 hash of every MiB of
+  both files. The diff output does not change. `--summary --save` saves
+  the map alone. `rift open FILE` opens the terminal view on it without
+  diffing again; every read of text is checked against the saved hashes,
+  and a file whose size changed is refused. `rift info FILE` prints what
+  a result holds. The format is in `docs/riftdiff.md` and may change
+  before 1.0.
+
 ### Changed
 
 - `rift-mcp` answers `resources/list` and `prompts/list` with error

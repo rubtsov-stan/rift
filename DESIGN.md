@@ -984,3 +984,64 @@ file depend only on the trees and `--mem`, so the same trees and
 `--mem` give the same bytes on any machine and thread count;
 `tests/dir.rs` checks two creation orders and three thread settings.
 
+
+## Saved results (experimental)
+
+`rift A B --save FILE` writes the result of a run to a `.riftdiff` file,
+specified in `docs/riftdiff.md`, and `rift open FILE` shows it in the
+terminal view without diffing again. The module is `rift-core`'s
+`saved`: a `Writer` writes through a `Sink`, positional writes plus
+reads of what was written, and `SavedFile` reads through `Source`, so
+the core still knows no file system.
+
+A result holds structure, not text: the segment map with the byte
+length of every segment, the script of every refined segment as kinds
+and line counts, the moved blocks, both sparse line indexes, and an
+xxh3-64 hash of every 1 MiB chunk of both files. The line index takes
+the place of per-edit byte offsets: any line is one binary search and a
+read of less than one index block away, as in a live diff. The header,
+the section table, every section and every segment block carry an
+xxh3-64. An unknown major is refused; an unknown section is skipped
+unless marked critical.
+
+Writing does not change the diff. The scan hashes the chunks as it
+reads: the worker whose scan chunk holds a hash chunk's start hashes all
+of it, reading past its own end when the hash chunk crosses it, and
+writes the hash at its slot of the table in the result file. Scan chunks
+follow the index interval, which follows `--mem`, so they rarely start
+on a MiB; the extra read, at most 1 MiB per 4 MiB scan chunk, is the
+price of a table that does not depend on `--mem` or the thread count.
+The segments and scripts come from the walk of `Diff::write_unified`, in
+order, as it reaches each one. Before the footer the CLI compares both
+files' identity with the one taken at open and saves nothing if either
+changed; it writes `FILE.tmp`, syncs it and renames it.
+
+Memory of a save. Refine half: one 64 KiB block buffer and the section
+table, reserved before the diff, so the scheduler takes what is left as
+before. Skeleton half: the block index, 32 bytes per block of about
+64 KiB of result, grown as blocks close; the samples have been released
+by then. The chunk tables take no heap. The line indexes and the moved
+blocks are written from what the diff holds.
+
+Memory of an open. Skeleton half: the segment map with each segment's
+byte starts, 56 bytes per segment as in the live diff, the block index
+and both line indexes, which a result written under the same `--mem`
+fits, since the live diff held the same map and indexes there. Refine half: the meta section, both
+chunk tables (8 bytes per MiB), two 1 MiB chunk buffers, two 16 KiB line
+readers, the moved blocks, one buffer for the longest block and a cache
+of decoded blocks, at least the largest decoded block and up to four
+times that or 4 MiB, within half of what the half has free. Opening
+reads every block once to check it and build the map.
+
+Validation. At open the CLI compares each file's size, modification
+time, device and inode with the result: a size that differs refuses it
+as stale; anything else opens it as unverified. Every read of text,
+fresh or unverified, loads the whole chunk it falls in, hashes it and
+serves the text from the same buffer, so a writer cannot change the file
+between the check and the read; one mismatch fails every later read of
+that file. A same-size edit in a region nobody reads is not seen: the
+list of differences is only as fresh as the identity check says.
+
+Not yet: opening a `--summary` result (its segments would need the
+scheduler), `rift verify`, export, filters, search, the protocol, VS Code
+and `rift-mcp`.

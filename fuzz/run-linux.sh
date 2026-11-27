@@ -39,7 +39,7 @@ set -eu
 GIB=1073741824
 MIB=1048576
 schema=3
-targets="scan keyed_csv keyed_ndjson keyed_copy keyed_reader pipeline unified tui_render sanitize mcp_request mcp_tools"
+targets="scan keyed_csv keyed_ndjson keyed_copy keyed_reader pipeline unified tui_render sanitize mcp_request mcp_tools riftdiff"
 # Per fuzzing process: libFuzzer's own RSS limit, and the cap around it.
 # rss_mb is a cap, not a measurement: it sizes the slots, the scope's
 # MemoryMax and -rss_limit_mb alike. Tune it from the memory_peak_bytes

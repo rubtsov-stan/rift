@@ -131,6 +131,17 @@ detected. For `pg_dump -Fd`, dump with `-Z0` (`--compress=0`), or every
 table shows as `Binary files ... differ`; reading the `.gz` files is
 [#73](https://github.com/rubtsov-stan/rift/issues/73).
 
+## Saved results
+
+Experimental, not released yet. `rift A B --save r.riftdiff` prints the
+diff and also saves its structure: the segment map, the edit scripts and
+a hash of every MiB of both files, not their text. `rift open r.riftdiff`
+browses it later in the terminal view without diffing again, reading
+the text from the two files and checking every read against the hashes;
+`rift info r.riftdiff` prints what it holds and whether the files
+changed. The format is in [docs/riftdiff.md](docs/riftdiff.md) and may
+change before 1.0.
+
 ## Documentation
 
 The site has a guide to every mode (the terminal view, `--summary`, key

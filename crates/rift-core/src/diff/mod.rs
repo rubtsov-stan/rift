@@ -45,11 +45,12 @@ use crate::index::{IndexedLines, LineIndex};
 use crate::lines::{LineAccess, LineBuf};
 use crate::moves::{MovedBlock, Moves};
 use crate::refine::{Refiner, VERIFY_LINES, filled, work_estimate};
+use crate::saved::ChunkTable;
 use crate::scan::Watch;
 use crate::sched::{Cancel, HUNK_OVERHEAD, Job, Scheduler, least_bytes};
 use crate::script::{LINES_PER_READ, PIECE};
 use crate::segment::{Segment, SegmentStatus};
-use crate::skeleton::{OffChain, build_pair_watched};
+use crate::skeleton::{OffChain, build_pair_hashing};
 use crate::source::Source;
 use crate::types::{ByteOffset, Bytes, LineHash, LineNo};
 use crate::unified::{Options, Verdict, write_diff};
@@ -181,7 +182,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     }
 
     /// [`Diff::with_config`] whose scan is followed and stopped through
-    /// `watch`, as [`build_pair_watched`] describes. The watch is read once
+    /// `watch`, as [`build_pair_watched`](crate::skeleton::build_pair_watched) describes. The watch is read once
     /// more before the move search, which reads both files; after that the
     /// build cannot be stopped, and cancelling the watch once the map is
     /// built does not stop refinement.
@@ -198,10 +199,41 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         config: Config,
         watch: &Watch,
     ) -> Result<Self> {
+        Self::build(a, b, budget, threads, config, watch, None)
+    }
+
+    /// [`Diff::with_config`] whose scan also fills `tables`, the chunk
+    /// tables of a result being saved (see
+    /// [`Writer::chunk_tables`](crate::saved::Writer::chunk_tables)). The
+    /// diff is the same.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Diff::new`], and [`Error::Write`] from the tables' sink.
+    pub fn with_chunk_tables(
+        a: Arc<A>,
+        b: Arc<B>,
+        budget: &Budget,
+        threads: usize,
+        config: Config,
+        tables: [ChunkTable<'_>; 2],
+    ) -> Result<Self> {
+        Self::build(a, b, budget, threads, config, &Watch::new(), Some(tables))
+    }
+
+    fn build(
+        a: Arc<A>,
+        b: Arc<B>,
+        budget: &Budget,
+        threads: usize,
+        config: Config,
+        watch: &Watch,
+        tables: Option<[ChunkTable<'_>; 2]>,
+    ) -> Result<Self> {
         if watch.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let (scan_a, scan_b, skeleton) = build_pair_watched(&*a, &*b, budget, watch)?;
+        let (scan_a, scan_b, skeleton) = build_pair_hashing(&*a, &*b, budget, watch, tables)?;
         let (level, anchors) = (skeleton.level(), skeleton.anchors());
         let (index_a, held_a) = scan_a.into_index();
         let (index_b, held_b) = scan_b.into_index();
@@ -356,6 +388,18 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
         self.threads
     }
 
+    /// Where each segment starts in A and in B.
+    #[must_use]
+    pub fn starts(&self) -> &[[ByteOffset; 2]] {
+        &self.starts
+    }
+
+    /// The sparse line indexes of A and B.
+    #[must_use]
+    pub fn indexes(&self) -> [&LineIndex; 2] {
+        [self.lines_a.index(), self.lines_b.index()]
+    }
+
     /// [`DiffView::hunk`] that returns a failed refinement as its error,
     /// typed as the job returned it, instead of panicking.
     ///
@@ -392,6 +436,24 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     ///
     /// As for [`write_diff`], including a failed refinement.
     pub fn write_unified(&self, opts: &Options<'_>, out: impl Write) -> Result<Written> {
+        self.write_unified_with(opts, out, |_, _| Ok(()))
+    }
+
+    /// [`write_unified`](Self::write_unified) that also hands every
+    /// segment's script to `each`, once, in segment order, as the writer
+    /// first reaches it. An error from `each` stops the output.
+    ///
+    /// # Errors
+    ///
+    /// As for [`write_unified`](Self::write_unified), and whatever `each`
+    /// returns.
+    pub fn write_unified_with(
+        &self,
+        opts: &Options<'_>,
+        out: impl Write,
+        each: impl FnMut(usize, &Hunk) -> Result<()>,
+    ) -> Result<Written> {
+        let each = std::cell::RefCell::new(each);
         let segs = self.sched.segments();
         let n = segs.len();
         self.sched.set_background(false);
@@ -418,6 +480,9 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
                     .set_visible(LineNo(start)..LineNo(last.a.end.0.max(start + 1)));
             }
             let h = self.sched.wait_hunk(i)?;
+            if first_visit {
+                (each.borrow_mut())(i, &h)?;
+            }
             if first_visit && let Some(reason) = h.approx {
                 let (s, l) = approx.get();
                 approx.set((s + 1, l + segs[i].len_a() + segs[i].len_b()));
