@@ -182,7 +182,7 @@ impl<A: Source + Send + ?Sized + 'static, B: Source + Send + ?Sized + 'static> D
     }
 
     /// [`Diff::with_config`] whose scan is followed and stopped through
-    /// `watch`, as [`build_pair_watched`] describes. The watch is read once
+    /// `watch`, as [`build_pair_watched`](crate::skeleton::build_pair_watched) describes. The watch is read once
     /// more before the move search, which reads both files; after that the
     /// build cannot be stopped, and cancelling the watch once the map is
     /// built does not stop refinement.
