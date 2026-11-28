@@ -19,6 +19,7 @@ mod view;
 
 pub mod anchors;
 pub mod diff;
+pub mod incremental;
 pub mod index;
 pub mod keyed;
 pub mod moves;

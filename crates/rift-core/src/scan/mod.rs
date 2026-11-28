@@ -333,6 +333,22 @@ impl Scanned {
 }
 
 impl Scanned {
+    /// A scan result built elsewhere, from the samples of stratum `level`
+    /// in line order and the index, with `reservation` paying for both.
+    pub(crate) fn from_parts(
+        level: u32,
+        samples: Vec<Sample>,
+        index: LineIndex,
+        reservation: Reservation,
+    ) -> Self {
+        Self {
+            level,
+            samples,
+            index,
+            reservation,
+        }
+    }
+
     /// The index alone, with the reservation shrunk to what it holds. For a
     /// diff that is past the skeleton and only reads lines.
     #[must_use]
@@ -348,6 +364,34 @@ impl Scanned {
         reservation.shrink(Bytes(bytes));
         (index, reservation)
     }
+}
+
+/// Bytes between checkpoints in the index a scan of `len` bytes with
+/// `cfg` builds.
+pub(crate) fn checkpoint_interval(len: u64, cfg: &ScanConfig) -> u64 {
+    cfg.checkpoint_interval
+        .0
+        .max(len.div_ceil(cfg.checkpoint_cap as u64))
+}
+
+/// Skeleton-half bytes a scan of `len` bytes with `cfg` keeps at most
+/// once it ends: the sample vector at its cap and one checkpoint per block.
+pub(crate) fn kept_bytes(len: u64, cfg: &ScanConfig) -> u64 {
+    cfg.sample_cap as u64 * SAMPLE_BYTES
+        + len.div_ceil(checkpoint_interval(len, cfg)) * CHECKPOINT_BYTES
+}
+
+/// Skeleton-half bytes a scan of `len` bytes with `cfg` holds at most
+/// while it runs: what it keeps, the workers' buffers and the chunk
+/// counters. A half with this much free never refuses the scan, so its
+/// stratum depends on the file alone.
+pub(crate) fn peak_bytes(len: u64, cfg: &ScanConfig) -> u64 {
+    let interval = checkpoint_interval(len, cfg);
+    let chunk = cfg.chunk.0.div_ceil(interval).saturating_mul(interval);
+    let chunks = len.div_ceil(chunk);
+    let threads = cfg.threads.clamp(1, to_usize(chunks.max(1))) as u64;
+    let buf_len = cfg.buffer.0.min(len + 1);
+    kept_bytes(len, cfg) + threads * (buf_len + STAGING_BYTES) + chunks * 8
 }
 
 /// Drops spare capacity and gives those bytes back to the reservation.
@@ -394,10 +438,7 @@ pub(crate) fn scan_metered<S: Source + ?Sized>(
     let sample_start = (lines >> cfg.level.min(63))
         .saturating_add(1)
         .min(cfg.sample_cap as u64);
-    let interval = cfg
-        .checkpoint_interval
-        .0
-        .max(len.div_ceil(cfg.checkpoint_cap as u64));
+    let interval = checkpoint_interval(len, cfg);
     let blocks = len.div_ceil(interval);
     let chunk = cfg.chunk.0.div_ceil(interval).saturating_mul(interval);
     let chunks = len.div_ceil(chunk);

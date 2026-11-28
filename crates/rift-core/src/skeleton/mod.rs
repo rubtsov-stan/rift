@@ -261,6 +261,7 @@ pub fn build_pair_hashing<A: Source + ?Sized, B: Source + ?Sized>(
         budget,
         watch,
         len_a + len_b,
+        &[],
     )?;
     Ok((scan_a, scan_b, skeleton))
 }
@@ -286,17 +287,38 @@ pub fn build<A: Source + ?Sized, B: Source + ?Sized>(
     scan_b: &mut Scanned,
     budget: &Budget,
 ) -> Result<Skeleton> {
-    build_watched(src_a, src_b, (scan_a, scan_b), budget, &Watch::new(), 0)
+    build_watched(
+        src_a,
+        src_b,
+        (scan_a, scan_b),
+        budget,
+        &Watch::new(),
+        0,
+        &[],
+    )
 }
 
-/// [`build`] whose comparison counts in `watch` from `base` bytes.
-fn build_watched<A: Source + ?Sized, B: Source + ?Sized>(
+/// Byte ranges already compared and found equal: `len` bytes of A from
+/// `a` equal `len` bytes of B from `b`. Sorted by `a`, and by `b`, without
+/// overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Confirmed {
+    pub(crate) a: u64,
+    pub(crate) b: u64,
+    pub(crate) len: u64,
+}
+
+/// [`build`] whose comparison counts in `watch` from `base` bytes, and
+/// skips the gaps that lie inside one of `confirmed` on its diagonal:
+/// their bytes were compared already, so the verdict is the same.
+pub(crate) fn build_watched<A: Source + ?Sized, B: Source + ?Sized>(
     src_a: &A,
     src_b: &B,
     (scan_a, scan_b): (&mut Scanned, &mut Scanned),
     budget: &Budget,
     watch: &Watch,
     base: u64,
+    confirmed: &[Confirmed],
 ) -> Result<Skeleton> {
     // Thinning can release the samples and nothing else. If even that
     // leaves too little for the map at the coarsest stratum, say so before
@@ -317,7 +339,7 @@ fn build_watched<A: Source + ?Sized, B: Source + ?Sized>(
         scan_b.thin(level);
         let meter = Meter::new(watch, base);
         meter.check()?;
-        match build_at(src_a, src_b, scan_a, scan_b, budget, &meter) {
+        match build_at(src_a, src_b, scan_a, scan_b, budget, &meter, confirmed) {
             Err(Error::Budget(_)) if level < MAX_LEVEL => level += 1,
             other => return other,
         }
@@ -332,6 +354,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
     scan_b: &Scanned,
     budget: &Budget,
     meter: &Meter<'_>,
+    confirmed: &[Confirmed],
 ) -> Result<Skeleton> {
     let mut anchors = anchors::select(scan_a.samples(), scan_b.samples(), budget)?;
     let mut off_chain = OffChain::new(budget)?;
@@ -385,6 +408,7 @@ fn build_at<A: Source + ?Sized, B: Source + ?Sized>(
         usize::try_from(lanes).expect("lanes are at most the thread count"),
         TASK_BYTES,
         meter,
+        confirmed,
     )?;
     work.shrink(Bytes(buffers));
 
@@ -477,6 +501,7 @@ impl Verdicts {
 /// Each task counts in `meter` both sides of every stretch it streams, as
 /// it reads them, and the rest of its gaps, both sides, when it ends; so
 /// the tasks together count both files once.
+#[allow(clippy::too_many_arguments, reason = "one caller and the unit tests")]
 fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     bounds: &Bounds<'_>,
     src_a: &A,
@@ -485,6 +510,7 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
     lanes: usize,
     task_bytes: u64,
     meter: &Meter<'_>,
+    confirmed: &[Confirmed],
 ) -> Result<Verdicts> {
     let gaps = bounds.chain.len() + 1;
     let verdicts = Verdicts {
@@ -522,8 +548,12 @@ fn compare_gaps<A: Source + ?Sized, B: Source + ?Sized>(
                 continue;
             }
             let mut j = i + 1;
-            while j < hi && bounds.aligned(j) {
+            while j < hi && bounds.aligned(j) && !bounds.confirmed(j, confirmed) {
                 j += 1;
+            }
+            if bounds.confirmed(i, confirmed) {
+                i += 1;
+                continue;
             }
             // Gaps i..j have the same shape on both sides, so one stream
             // covers them and a mismatch position names its gap. A stream
@@ -674,6 +704,17 @@ impl Bounds<'_> {
     fn aligned(&self, g: usize) -> bool {
         let ((a0, b0), (a1, b1)) = (self.at(g), self.at(g + 1));
         a1.line - a0.line == b1.line - b0.line && a1.offset - a0.offset == b1.offset - b0.offset
+    }
+
+    /// Whether aligned gap `g` lies inside one of `confirmed`, at the same
+    /// distance from its start on both sides.
+    fn confirmed(&self, g: usize, confirmed: &[Confirmed]) -> bool {
+        let ((a0, b0), (a1, _)) = (self.at(g), self.at(g + 1));
+        let k = confirmed.partition_point(|c| c.a <= a0.offset);
+        k > 0 && {
+            let c = confirmed[k - 1];
+            a1.offset <= c.a + c.len && b0.offset >= c.b && b0.offset - c.b == a0.offset - c.a
+        }
     }
 
     /// The first gap that starts at or after byte `offset` of A.
@@ -1144,7 +1185,7 @@ mod tests {
             Counted(&a, AtomicU64::new(0)),
             Counted(&b, AtomicU64::new(0)),
         );
-        let verdicts = compare_gaps(&bounds, &ca, &cb, 1 << 20, 1, 1 << 20, &meter()).unwrap();
+        let verdicts = compare_gaps(&bounds, &ca, &cb, 1 << 20, 1, 1 << 20, &meter(), &[]).unwrap();
         assert_eq!((0..4000).filter(|&g| verdicts.differs(g)).count(), 400);
         let read = ca.1.load(Ordering::Relaxed);
         assert!(
@@ -1199,8 +1240,8 @@ mod tests {
         assert_ne!(false_anchors, [0; 0]);
         for task_bytes in [1, 3, 64, 100, 1 << 20] {
             for buf in [1, 5, 4096] {
-                let got =
-                    compare_gaps(&bounds, &a[..], &b[..], buf, 3, task_bytes, &meter()).unwrap();
+                let got = compare_gaps(&bounds, &a[..], &b[..], buf, 3, task_bytes, &meter(), &[])
+                    .unwrap();
                 let bits: Vec<bool> = (0..gaps).map(|g| got.differs(g)).collect();
                 assert_eq!(bits, want, "task_bytes {task_bytes}, buf {buf}");
                 let false_got: Vec<usize> = (0..gaps).filter(|&g| got.false_anchor(g)).collect();
